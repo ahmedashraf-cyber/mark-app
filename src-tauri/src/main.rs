@@ -9,15 +9,24 @@ use std::net::TcpStream;
 fn launch_collection_app(exe_path: String) -> Result<String, String> {
     use std::process::Command;
 
-    if !std::path::Path::new(&exe_path).exists() {
-        return Err(format!("File not found: {}", exe_path));
+    // Clean the path — strip surrounding quotes and whitespace that may
+    // come from copy-paste, and normalize
+    let clean = exe_path.trim().trim_matches('"').trim_matches('\'').to_string();
+
+    let path = std::path::Path::new(&clean);
+    if !path.exists() {
+        // Return the exact path we tried so the user can verify it
+        return Err(format!("File not found at: [{}]", clean));
     }
 
     // Inject the WebView2 debugging-port env var so Chromium opens port 9222
-    Command::new(&exe_path)
-        .env("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", "--remote-debugging-port=9222")
-        .spawn()
-        .map_err(|e| format!("Failed to launch: {}", e))?;
+    // Set the working directory to the exe's folder so it finds its resources
+    let mut cmd = Command::new(&clean);
+    cmd.env("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", "--remote-debugging-port=9222");
+    if let Some(parent) = path.parent() {
+        cmd.current_dir(parent);
+    }
+    cmd.spawn().map_err(|e| format!("Failed to launch: {}", e))?;
 
     Ok("launched".to_string())
 }
