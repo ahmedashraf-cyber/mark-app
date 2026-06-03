@@ -6,6 +6,7 @@ import { useSync } from '../hooks/useSync'
 import { KEY_TO_EVENT, MISSING_EVENT_KEY, NAV_SHORTCUTS, NAV_SHIFT_SHORTCUTS } from '../data/shortcuts'
 import ErrorTagModal from '../components/ErrorTagModal'
 import ErrorTimeline from '../components/ErrorTimeline'
+import EventsSidebar from '../components/EventsSidebar'
 
 export default function ReviewPage({ session, onDone, onBack }) {
   const { profile } = useAuth()
@@ -20,7 +21,8 @@ export default function ReviewPage({ session, onDone, onBack }) {
 
   const [errors, setErrors]           = useState([])
   const [pendingTag, setPendingTag]   = useState(null) // { key, isMissing, videoTime }
-  const [syncStatus, setSyncStatus]   = useState('disconnected') // disconnected | connected
+  const [syncStatus, setSyncStatus]   = useState('disconnected')
+  const [activeKey, setActiveKey]     = useState(null) // last pressed shortcut key
 
   // Done modal
   const [showDoneModal, setShowDoneModal]     = useState(false)
@@ -57,11 +59,15 @@ export default function ReviewPage({ session, onDone, onBack }) {
       const upper = key.toUpperCase()
       if (upper === MISSING_EVENT_KEY) {
         e.preventDefault()
+        setActiveKey(upper)
+        setTimeout(() => setActiveKey(null), 600)
         setPendingTag({ key: upper, isMissing: true, videoTime: videoRef.current?.currentTime || 0 })
         return
       }
       if (KEY_TO_EVENT[upper]) {
         e.preventDefault()
+        setActiveKey(upper)
+        setTimeout(() => setActiveKey(null), 600)
         setPendingTag({ key: upper, isMissing: false, videoTime: videoRef.current?.currentTime || 0 })
         return
       }
@@ -189,7 +195,9 @@ export default function ReviewPage({ session, onDone, onBack }) {
         </div>
       </header>
 
-      {/* Main — Video */}
+      {/* Main — Video + Sidebars */}
+      <div style={{flex:1,display:'flex',overflow:'hidden'}}>
+        <EventsSidebar side="left" activeKey={activeKey} />
       <div style={{flex:1,position:'relative',background:'#000',overflow:'hidden'}}>
 
         {/* Video element */}
@@ -263,6 +271,10 @@ export default function ReviewPage({ session, onDone, onBack }) {
           </div>
         )}
       </div>
+
+      </div>{/* end video div */}
+        <EventsSidebar side="right" activeKey={activeKey} />
+      </div>{/* end main flex */}
 
       {/* Controls bar */}
       <div style={{
