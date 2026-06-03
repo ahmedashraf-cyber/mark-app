@@ -272,9 +272,9 @@ export default function ReviewPage({ session, onDone, onBack }) {
         )}
       </div>
 
-      </div>{/* end video div */}
+      </div>
         <EventsSidebar side="right" activeKey={activeKey} />
-      </div>{/* end main flex */}
+      </div>
 
       {/* Controls bar */}
       <div style={{
