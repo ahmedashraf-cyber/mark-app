@@ -8,23 +8,26 @@ fn send_key_to_collection_app(_exe_name: String, key_code: String) -> Result<Str
     {
         use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
         use windows::Win32::UI::WindowsAndMessaging::{
-            EnumWindows, GetWindowTextW,
-            PostMessageA, WM_KEYDOWN, WM_KEYUP,
+            EnumWindows, GetWindowTextW, GetForegroundWindow,
+            SetForegroundWindow, PostMessageA, WM_KEYDOWN, WM_KEYUP,
+            ShowWindow, SW_SHOW,
         };
         use windows::Win32::UI::Input::KeyboardAndMouse::{
-            VK_LEFT, VK_RIGHT, VK_SHIFT, VK_SPACE,
+            SendInput, INPUT, INPUT_KEYBOARD, KEYBDINPUT, KEYBD_EVENT_FLAGS,
+            KEYEVENTF_KEYUP, VK_LEFT, VK_RIGHT, VK_SHIFT, VK_SPACE, VK_MENU,
         };
         use windows::core::BOOL;
 
         let (vk, needs_shift) = match key_code.as_str() {
-            "RIGHT"       => (VK_RIGHT.0 as usize, false),
-            "LEFT"        => (VK_LEFT.0  as usize, false),
-            "SHIFT_RIGHT" => (VK_RIGHT.0 as usize, true),
-            "SHIFT_LEFT"  => (VK_LEFT.0  as usize, true),
-            "SPACE"       => (VK_SPACE.0 as usize, false),
+            "RIGHT"       => (VK_RIGHT.0, false),
+            "LEFT"        => (VK_LEFT.0,  false),
+            "SHIFT_RIGHT" => (VK_RIGHT.0, true),
+            "SHIFT_LEFT"  => (VK_LEFT.0,  true),
+            "SPACE"       => (VK_SPACE.0, false),
             _             => return Ok("unknown_key".to_string()),
         };
 
+        // Find collection app window by partial title
         static FOUND_HWND: std::sync::atomic::AtomicIsize =
             std::sync::atomic::AtomicIsize::new(0);
         FOUND_HWND.store(0, std::sync::atomic::Ordering::SeqCst);
@@ -36,10 +39,10 @@ fn send_key_to_collection_app(_exe_name: String, key_code: String) -> Result<Str
                 let title = String::from_utf16_lossy(&buf[..len as usize]);
                 if title.contains("Tag Once Collection App") {
                     FOUND_HWND.store(hwnd.0 as isize, std::sync::atomic::Ordering::SeqCst);
-                    return BOOL(0); // stop enumeration
+                    return BOOL(0);
                 }
             }
-            BOOL(1) // continue
+            BOOL(1)
         }
 
         unsafe { let _ = EnumWindows(Some(enum_proc), LPARAM(0)); }
@@ -49,16 +52,75 @@ fn send_key_to_collection_app(_exe_name: String, key_code: String) -> Result<Str
             return Ok("window_not_found".to_string());
         }
 
-        let hwnd = HWND(raw as *mut _);
-
+        let collection_hwnd = HWND(raw as *mut _);
+        
         unsafe {
-            if needs_shift {
-                let _ = PostMessageA(Some(hwnd), WM_KEYDOWN, WPARAM(VK_SHIFT.0 as usize), LPARAM(0));
-            }
-            let _ = PostMessageA(Some(hwnd), WM_KEYDOWN, WPARAM(vk), LPARAM(0));
-            let _ = PostMessageA(Some(hwnd), WM_KEYUP,   WPARAM(vk), LPARAM(0));
-            if needs_shift {
-                let _ = PostMessageA(Some(hwnd), WM_KEYUP, WPARAM(VK_SHIFT.0 as usize), LPARAM(0));
+            // Save current foreground window (MARK itself)
+            let mark_hwnd = GetForegroundWindow();
+
+            // Briefly bring collection app to foreground so SendInput works
+            // Use ALT key trick to allow SetForegroundWindow from another process
+            let alt_down = INPUT {
+                r#type: INPUT_KEYBOARD,
+                Anonymous: windows::Win32::UI::Input::KeyboardAndMouse::INPUT_0 {
+                    ki: KEYBDINPUT {
+                        wVk: VK_MENU,
+                        wScan: 0,
+                        dwFlags: KEYBD_EVENT_FLAGS(0),
+                        time: 0,
+                        dwExtraInfo: 0,
+                    }
+                }
+            };
+            let alt_up = INPUT {
+                r#type: INPUT_KEYBOARD,
+                Anonymous: windows::Win32::UI::Input::KeyboardAndMouse::INPUT_0 {
+                    ki: KEYBDINPUT {
+                        wVk: VK_MENU,
+                        wScan: 0,
+                        dwFlags: KEYEVENTF_KEYUP,
+                        time: 0,
+                        dwExtraInfo: 0,
+                    }
+                }
+            };
+            SendInput(&[alt_down, alt_up], std::mem::size_of::<INPUT>() as i32);
+
+            // Now focus collection app
+            SetForegroundWindow(collection_hwnd);
+
+            // Small delay for focus to take effect
+            std::thread::sleep(std::time::Duration::from_millis(30));
+
+            // Build key inputs
+            let mut inputs: Vec<INPUT> = Vec::new();
+
+            let make_key = |vk: u16, up: bool| -> INPUT {
+                INPUT {
+                    r#type: INPUT_KEYBOARD,
+                    Anonymous: windows::Win32::UI::Input::KeyboardAndMouse::INPUT_0 {
+                        ki: KEYBDINPUT {
+                            wVk: windows::Win32::UI::Input::KeyboardAndMouse::VIRTUAL_KEY(vk),
+                            wScan: 0,
+                            dwFlags: if up { KEYEVENTF_KEYUP } else { KEYBD_EVENT_FLAGS(0) },
+                            time: 0,
+                            dwExtraInfo: 0,
+                        }
+                    }
+                }
+            };
+
+            if needs_shift { inputs.push(make_key(VK_SHIFT.0, false)); }
+            inputs.push(make_key(vk, false));
+            inputs.push(make_key(vk, true));
+            if needs_shift { inputs.push(make_key(VK_SHIFT.0, true)); }
+
+            SendInput(&inputs, std::mem::size_of::<INPUT>() as i32);
+
+            // Return focus to MARK after brief delay
+            std::thread::sleep(std::time::Duration::from_millis(30));
+            if !mark_hwnd.is_invalid() {
+                SetForegroundWindow(mark_hwnd);
             }
         }
 
