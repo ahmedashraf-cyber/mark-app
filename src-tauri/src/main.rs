@@ -2,60 +2,34 @@
 
 use tauri::command;
 
-// Find the deepest Chrome_WidgetWin child of a window — that's the actual webview that handles keys
-#[cfg(target_os = "windows")]
-unsafe fn find_chrome_child(parent: windows::Win32::Foundation::HWND) -> windows::Win32::Foundation::HWND {
-    use windows::Win32::Foundation::{HWND, LPARAM};
-    use windows::Win32::UI::WindowsAndMessaging::{EnumChildWindows, GetClassNameW};
-    use windows::core::BOOL;
-
-    static CHROME_HWND: std::sync::atomic::AtomicIsize = std::sync::atomic::AtomicIsize::new(0);
-    CHROME_HWND.store(0, std::sync::atomic::Ordering::SeqCst);
-
-    unsafe extern "system" fn child_proc(hwnd: HWND, _: LPARAM) -> BOOL {
-        let mut buf = [0u16; 256];
-        let len = GetClassNameW(hwnd, &mut buf);
-        if len > 0 {
-            let name = String::from_utf16_lossy(&buf[..len as usize]);
-            if name.contains("Chrome_WidgetWin") || name.contains("Chrome_RenderWidgetHostHWND") {
-                CHROME_HWND.store(hwnd.0 as isize, std::sync::atomic::Ordering::SeqCst);
-                return BOOL(0); // stop — found it
-            }
-        }
-        BOOL(1)
-    }
-
-    let _ = EnumChildWindows(Some(parent), Some(child_proc), LPARAM(0));
-    let raw = CHROME_HWND.load(std::sync::atomic::Ordering::SeqCst);
-    HWND(raw as *mut _)
-}
-
 #[command]
 fn send_key_to_collection_app(_exe_name: String, key_code: String) -> Result<String, String> {
     #[cfg(target_os = "windows")]
     {
         use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
         use windows::Win32::UI::WindowsAndMessaging::{
-            EnumWindows, GetWindowTextW,
-            PostMessageA, WM_KEYDOWN, WM_KEYUP,
+            EnumWindows, GetWindowTextW, GetForegroundWindow,
+            SetForegroundWindow, PostMessageA, WM_KEYDOWN, WM_KEYUP,
+            ShowWindow, SW_SHOW,
         };
         use windows::Win32::UI::Input::KeyboardAndMouse::{
-            VK_LEFT, VK_RIGHT, VK_SHIFT, VK_SPACE,
+            SendInput, INPUT, INPUT_KEYBOARD, KEYBDINPUT, KEYBD_EVENT_FLAGS,
+            KEYEVENTF_KEYUP, VK_LEFT, VK_RIGHT, VK_SHIFT, VK_SPACE, VK_MENU,
         };
         use windows::core::BOOL;
 
-        // Map key to virtual key code and scan code
-        let (vk, scan, needs_shift): (u16, u16, bool) = match key_code.as_str() {
-            "RIGHT"       => (VK_RIGHT.0, 0x4D, false),
-            "LEFT"        => (VK_LEFT.0,  0x4B, false),
-            "SHIFT_RIGHT" => (VK_RIGHT.0, 0x4D, true),
-            "SHIFT_LEFT"  => (VK_LEFT.0,  0x4B, true),
-            "SPACE"       => (VK_SPACE.0, 0x39, false),
+        let (vk, needs_shift) = match key_code.as_str() {
+            "RIGHT"       => (VK_RIGHT.0, false),
+            "LEFT"        => (VK_LEFT.0,  false),
+            "SHIFT_RIGHT" => (VK_RIGHT.0, true),
+            "SHIFT_LEFT"  => (VK_LEFT.0,  true),
+            "SPACE"       => (VK_SPACE.0, false),
             _             => return Ok("unknown_key".to_string()),
         };
 
-        // Find collection app top-level window
-        static FOUND_HWND: std::sync::atomic::AtomicIsize = std::sync::atomic::AtomicIsize::new(0);
+        // Find collection app window by partial title
+        static FOUND_HWND: std::sync::atomic::AtomicIsize =
+            std::sync::atomic::AtomicIsize::new(0);
         FOUND_HWND.store(0, std::sync::atomic::Ordering::SeqCst);
 
         unsafe extern "system" fn enum_proc(hwnd: HWND, _: LPARAM) -> BOOL {
@@ -78,43 +52,75 @@ fn send_key_to_collection_app(_exe_name: String, key_code: String) -> Result<Str
             return Ok("window_not_found".to_string());
         }
 
-        let top_hwnd = HWND(raw as *mut _);
-
+        let collection_hwnd = HWND(raw as *mut _);
+        
         unsafe {
-            // Find the Chrome webview child — it processes key messages directly
-            let chrome_hwnd = find_chrome_child(top_hwnd);
-            // Use chrome child if found, otherwise fall back to top-level
-            let target = if !chrome_hwnd.is_invalid() && chrome_hwnd.0 != std::ptr::null_mut() {
-                chrome_hwnd
-            } else {
-                top_hwnd
-            };
+            // Save current foreground window (MARK itself)
+            let mark_hwnd = GetForegroundWindow();
 
-            // Build lParam for key messages:
-            // bits 0-15: repeat count (1)
-            // bits 16-23: scan code
-            // bit 24: extended key flag (1 for arrow keys)
-            let make_lparam = |scan: u16, extended: bool, up: bool| -> LPARAM {
-                let mut lp: u32 = 1; // repeat count
-                lp |= (scan as u32) << 16;
-                if extended { lp |= 1 << 24; }
-                if up {
-                    lp |= 1 << 30; // previous key state
-                    lp |= 1 << 31; // transition state
+            // Briefly bring collection app to foreground so SendInput works
+            // Use ALT key trick to allow SetForegroundWindow from another process
+            let alt_down = INPUT {
+                r#type: INPUT_KEYBOARD,
+                Anonymous: windows::Win32::UI::Input::KeyboardAndMouse::INPUT_0 {
+                    ki: KEYBDINPUT {
+                        wVk: VK_MENU,
+                        wScan: 0,
+                        dwFlags: KEYBD_EVENT_FLAGS(0),
+                        time: 0,
+                        dwExtraInfo: 0,
+                    }
                 }
-                LPARAM(lp as isize)
+            };
+            let alt_up = INPUT {
+                r#type: INPUT_KEYBOARD,
+                Anonymous: windows::Win32::UI::Input::KeyboardAndMouse::INPUT_0 {
+                    ki: KEYBDINPUT {
+                        wVk: VK_MENU,
+                        wScan: 0,
+                        dwFlags: KEYEVENTF_KEYUP,
+                        time: 0,
+                        dwExtraInfo: 0,
+                    }
+                }
+            };
+            SendInput(&[alt_down, alt_up], std::mem::size_of::<INPUT>() as i32);
+
+            // Now focus collection app
+            SetForegroundWindow(collection_hwnd);
+
+            // Small delay for focus to take effect
+            std::thread::sleep(std::time::Duration::from_millis(30));
+
+            // Build key inputs
+            let mut inputs: Vec<INPUT> = Vec::new();
+
+            let make_key = |vk: u16, up: bool| -> INPUT {
+                INPUT {
+                    r#type: INPUT_KEYBOARD,
+                    Anonymous: windows::Win32::UI::Input::KeyboardAndMouse::INPUT_0 {
+                        ki: KEYBDINPUT {
+                            wVk: windows::Win32::UI::Input::KeyboardAndMouse::VIRTUAL_KEY(vk),
+                            wScan: 0,
+                            dwFlags: if up { KEYEVENTF_KEYUP } else { KEYBD_EVENT_FLAGS(0) },
+                            time: 0,
+                            dwExtraInfo: 0,
+                        }
+                    }
+                }
             };
 
-            // Arrow keys are extended keys
-            let extended = matches!(key_code.as_str(), "RIGHT"|"LEFT"|"SHIFT_RIGHT"|"SHIFT_LEFT");
+            if needs_shift { inputs.push(make_key(VK_SHIFT.0, false)); }
+            inputs.push(make_key(vk, false));
+            inputs.push(make_key(vk, true));
+            if needs_shift { inputs.push(make_key(VK_SHIFT.0, true)); }
 
-            if needs_shift {
-                let _ = PostMessageA(Some(target), WM_KEYDOWN, WPARAM(VK_SHIFT.0 as usize), make_lparam(0x2A, false, false));
-            }
-            let _ = PostMessageA(Some(target), WM_KEYDOWN, WPARAM(vk as usize), make_lparam(scan, extended, false));
-            let _ = PostMessageA(Some(target), WM_KEYUP,   WPARAM(vk as usize), make_lparam(scan, extended, true));
-            if needs_shift {
-                let _ = PostMessageA(Some(target), WM_KEYUP, WPARAM(VK_SHIFT.0 as usize), make_lparam(0x2A, false, true));
+            SendInput(&inputs, std::mem::size_of::<INPUT>() as i32);
+
+            // Return focus to MARK after brief delay
+            std::thread::sleep(std::time::Duration::from_millis(30));
+            if !mark_hwnd.is_invalid() {
+                SetForegroundWindow(mark_hwnd);
             }
         }
 
