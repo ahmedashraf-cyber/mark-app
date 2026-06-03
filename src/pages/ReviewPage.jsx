@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { db } from '../firebase/config'
 import { collection, addDoc, updateDoc, doc, serverTimestamp, increment } from 'firebase/firestore'
 import { useAuth } from '../hooks/useAuth.jsx'
-import { useSync } from '../hooks/useSync'
+import { useSync, startSync } from '../hooks/useSync'
 import { KEY_TO_EVENT, MISSING_EVENT_KEY, NAV_SHORTCUTS, NAV_SHIFT_SHORTCUTS } from '../data/shortcuts'
 import ErrorTagModal from '../components/ErrorTagModal'
 import ErrorTimeline from '../components/ErrorTimeline'
@@ -29,6 +29,11 @@ export default function ReviewPage({ session, onDone, onBack }) {
   const [reviewedEvents, setReviewedEvents]   = useState('')
   const [submitting, setSubmitting]           = useState(false)
   const [submitted, setSubmitted]             = useState(false)
+
+  // Start sync hook on mount
+  useEffect(() => {
+    startSync((status) => setSyncStatus(status))
+  }, [])
 
   // Handle keyboard
   useEffect(() => {
