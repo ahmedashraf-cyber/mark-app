@@ -3,14 +3,6 @@ import { db } from '../firebase/config'
 import { collection, query, where, getDocs, doc, setDoc, getDoc, serverTimestamp } from 'firebase/firestore'
 import { useAuth } from '../hooks/useAuth.jsx'
 import MATCHES, { findMatch } from '../data/matches.js'
-import { checkCdpAvailable, launchCollectionApp } from '../hooks/useSync'
-
-// Common locations MARK will check for the collection app exe
-const COMMON_PATHS = [
-  'C:\\Users\\Public\\Desktop\\Statsbomb Tag Once collection app.exe',
-]
-const EXE_NAME = 'Statsbomb Tag Once collection app.exe'
-const STORAGE_KEY = 'mark_collection_app_path'
 
 const HALVES = [
   { id: '1H', label: '1st Half' },
@@ -28,56 +20,10 @@ export default function SessionSetupPage({ onSessionStart, lastResult }) {
   const [lockedBy, setLockedBy]           = useState('')
   const [loading, setLoading]             = useState(false)
   const [error, setError]                 = useState('')
-  const [cdpReady, setCdpReady]           = useState(false)
-  const [launching, setLaunching]         = useState(false)
-  const [savedPath, setSavedPath]         = useState(() => {
-    try { return localStorage.getItem(STORAGE_KEY) || '' } catch { return '' }
-  })
-  const [showPathInput, setShowPathInput] = useState(false)
-  const [pathInput, setPathInput]         = useState('')
 
   useEffect(() => {
     if (selectedMatch && selectedHalf) checkHalfLock()
   }, [selectedMatch, selectedHalf])
-
-  // Check if collection app CDP port is reachable — poll every 3s
-  useEffect(() => {
-    let active = true
-    async function check() {
-      const ok = await checkCdpAvailable()
-      if (active) setCdpReady(ok)
-    }
-    check()
-    const interval = setInterval(check, 3000)
-    return () => { active = false; clearInterval(interval) }
-  }, [])
-
-  async function handleLaunchCollectionApp() {
-    setLaunching(true); setError('')
-    const pathToUse = savedPath || pathInput
-    if (!pathToUse) {
-      setShowPathInput(true)
-      setLaunching(false)
-      return
-    }
-    try {
-      await launchCollectionApp(pathToUse)
-      // Save path for next time
-      try { localStorage.setItem(STORAGE_KEY, pathToUse) } catch {}
-      setSavedPath(pathToUse)
-      setShowPathInput(false)
-      // Give the app a moment to open the debug port, then re-check
-      setTimeout(async () => {
-        const ok = await checkCdpAvailable()
-        setCdpReady(ok)
-        setLaunching(false)
-      }, 2500)
-    } catch (e) {
-      setError('Could not launch: ' + e + '. Please set the correct path.')
-      setShowPathInput(true)
-      setLaunching(false)
-    }
-  }
 
   const filteredMatches = MATCHES.filter(m => {
     const q = matchSearch.toLowerCase()
@@ -187,35 +133,6 @@ export default function SessionSetupPage({ onSessionStart, lastResult }) {
           <span style={{fontSize:12,color:'var(--t-3)'}}>{lastResult.tagCount} errors / {lastResult.total} events reviewed</span>
         </div>
       )}
-
-      {/* Collection app sync status banner */}
-      <div style={{
-        background: cdpReady ? 'rgba(48,209,88,0.08)' : 'rgba(255,159,10,0.08)',
-        borderBottom: `1px solid ${cdpReady ? 'rgba(48,209,88,0.2)' : 'rgba(255,159,10,0.2)'}`,
-        padding: '10px 20px', display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap'
-      }}>
-        <span className={`status-dot ${cdpReady ? 'green' : 'gray'}`} />
-        <span style={{fontSize: 13, fontWeight: 600, color: cdpReady ? '#30D158' : '#FF9F0A'}}>
-          {cdpReady ? 'Collection app connected & ready to sync' : 'Collection app not connected'}
-        </span>
-        {!cdpReady && !showPathInput && (
-          <button className="btn-orange" style={{padding: '5px 14px', fontSize: 12, marginLeft: 'auto'}}
-            onClick={handleLaunchCollectionApp} disabled={launching}>
-            {launching ? 'Launching…' : 'Launch Collection App'}
-          </button>
-        )}
-        {showPathInput && (
-          <div style={{display: 'flex', gap: 8, alignItems: 'center', marginLeft: 'auto', flex: 1, minWidth: 300}}>
-            <input className="mark-input" style={{flex: 1, fontSize: 12, padding: '6px 10px'}}
-              placeholder="Full path to Statsbomb Tag Once collection app.exe"
-              value={pathInput} onChange={e => setPathInput(e.target.value)} />
-            <button className="btn-orange" style={{padding: '6px 14px', fontSize: 12}}
-              onClick={handleLaunchCollectionApp} disabled={launching || !pathInput}>
-              {launching ? '…' : 'Launch'}
-            </button>
-          </div>
-        )}
-      </div>
 
       <div style={{flex:1,overflow:'auto',padding:32,display:'flex',gap:24,maxWidth:1000,margin:'0 auto',width:'100%'}}>
         {/* Left — Match list */}
