@@ -3,18 +3,24 @@
 use tauri::command;
 
 #[command]
-fn send_key_to_collection_app(_exe_name: String, key_code: String) -> Result<String, String> {
+fn send_key_to_collection_app(
+    window: tauri::Window,  // Tauri injects this — gives us set_focus() which calls WebView2 MoveFocus
+    _exe_name: String,
+    key_code: String,
+) -> Result<String, String> {
     #[cfg(target_os = "windows")]
     {
         use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
         use windows::Win32::UI::WindowsAndMessaging::{
             EnumWindows, GetWindowTextW, GetForegroundWindow,
-            SetForegroundWindow, PostMessageA, WM_KEYDOWN, WM_KEYUP,
-            ShowWindow, SW_SHOW,
+            SetForegroundWindow,
+            // PostMessageA, WM_KEYDOWN, WM_KEYUP, // kept for future use
+            // ShowWindow, SW_SHOW,                 // kept for future use
         };
         use windows::Win32::UI::Input::KeyboardAndMouse::{
             SendInput, INPUT, INPUT_KEYBOARD, KEYBDINPUT, KEYBD_EVENT_FLAGS,
             KEYEVENTF_KEYUP, VK_LEFT, VK_RIGHT, VK_SHIFT, VK_SPACE, VK_MENU,
+            VIRTUAL_KEY,
         };
         use windows::core::BOOL;
 
@@ -53,54 +59,18 @@ fn send_key_to_collection_app(_exe_name: String, key_code: String) -> Result<Str
         }
 
         let collection_hwnd = HWND(raw as *mut _);
-        
+
         unsafe {
             // Save current foreground window (MARK itself)
             let mark_hwnd = GetForegroundWindow();
 
-            // Briefly bring collection app to foreground so SendInput works
-            // Use ALT key trick to allow SetForegroundWindow from another process
-            let alt_down = INPUT {
-                r#type: INPUT_KEYBOARD,
-                Anonymous: windows::Win32::UI::Input::KeyboardAndMouse::INPUT_0 {
-                    ki: KEYBDINPUT {
-                        wVk: VK_MENU,
-                        wScan: 0,
-                        dwFlags: KEYBD_EVENT_FLAGS(0),
-                        time: 0,
-                        dwExtraInfo: 0,
-                    }
-                }
-            };
-            let alt_up = INPUT {
-                r#type: INPUT_KEYBOARD,
-                Anonymous: windows::Win32::UI::Input::KeyboardAndMouse::INPUT_0 {
-                    ki: KEYBDINPUT {
-                        wVk: VK_MENU,
-                        wScan: 0,
-                        dwFlags: KEYEVENTF_KEYUP,
-                        time: 0,
-                        dwExtraInfo: 0,
-                    }
-                }
-            };
-            SendInput(&[alt_down, alt_up], std::mem::size_of::<INPUT>() as i32);
-
-            // Now focus collection app
-            SetForegroundWindow(collection_hwnd);
-
-            // Small delay for focus to take effect
-            std::thread::sleep(std::time::Duration::from_millis(30));
-
-            // Build key inputs
-            let mut inputs: Vec<INPUT> = Vec::new();
-
+            // Helper: build keyboard INPUT struct
             let make_key = |vk: u16, up: bool| -> INPUT {
                 INPUT {
                     r#type: INPUT_KEYBOARD,
                     Anonymous: windows::Win32::UI::Input::KeyboardAndMouse::INPUT_0 {
                         ki: KEYBDINPUT {
-                            wVk: windows::Win32::UI::Input::KeyboardAndMouse::VIRTUAL_KEY(vk),
+                            wVk: VIRTUAL_KEY(vk),
                             wScan: 0,
                             dwFlags: if up { KEYEVENTF_KEYUP } else { KEYBD_EVENT_FLAGS(0) },
                             time: 0,
@@ -110,19 +80,32 @@ fn send_key_to_collection_app(_exe_name: String, key_code: String) -> Result<Str
                 }
             };
 
+            // Step 1: ALT trick — unlocks SetForegroundWindow across processes
+            SendInput(
+                &[make_key(VK_MENU.0, false), make_key(VK_MENU.0, true)],
+                std::mem::size_of::<INPUT>() as i32,
+            );
+
+            // Step 2: Focus collection app
+            SetForegroundWindow(collection_hwnd);
+            std::thread::sleep(std::time::Duration::from_millis(30));
+
+            // Step 3: Send the navigation key via SendInput
+            let mut inputs: Vec<INPUT> = Vec::new();
             if needs_shift { inputs.push(make_key(VK_SHIFT.0, false)); }
             inputs.push(make_key(vk, false));
             inputs.push(make_key(vk, true));
             if needs_shift { inputs.push(make_key(VK_SHIFT.0, true)); }
-
             SendInput(&inputs, std::mem::size_of::<INPUT>() as i32);
 
-            // Return focus to MARK after brief delay
             std::thread::sleep(std::time::Duration::from_millis(30));
-            if !mark_hwnd.is_invalid() {
-                SetForegroundWindow(mark_hwnd);
-            }
+
+            // Step 4: Return focus using Tauri's set_focus() instead of raw Win32
+            // set_focus() internally calls WebView2 MoveFocus — wakes up Chromium keyboard listener
+            let _ = mark_hwnd; // mark_hwnd no longer needed — Tauri handles it
         }
+
+        window.set_focus().map_err(|e| e.to_string())?;
 
         Ok("sent".to_string())
     }
