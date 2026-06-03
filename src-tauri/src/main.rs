@@ -85,63 +85,71 @@ fn get_ws_debugger_url() -> Result<String, String> {
     Err("no webSocketDebuggerUrl found".to_string())
 }
 
-// ── Send a key to the collection app via CDP Input.dispatchKeyEvent ────────
+// ── Send a key to the collection app via CDP Runtime.evaluate ──────────────
+// Instead of Input.dispatchKeyEvent (which needs a focused element), we run
+// JavaScript inside the page that dispatches a synthetic KeyboardEvent on
+// both document and window — this triggers the collection app's global
+// arrow-key listener regardless of what (if anything) is focused.
 #[command]
 fn send_key_via_cdp(key_code: String) -> Result<String, String> {
     use tungstenite::Message;
 
-    // Map key_code → (windowsVirtualKeyCode, key name, code, shift)
-    let (vk, key_name, code, needs_shift): (i64, &str, &str, bool) = match key_code.as_str() {
-        "RIGHT"       => (39, "ArrowRight", "ArrowRight", false),
-        "LEFT"        => (37, "ArrowLeft",  "ArrowLeft",  false),
-        "SHIFT_RIGHT" => (39, "ArrowRight", "ArrowRight", true),
-        "SHIFT_LEFT"  => (37, "ArrowLeft",  "ArrowLeft",  true),
-        "SPACE"       => (32, " ",          "Space",      false),
+    // Map key_code → (key, code, keyCode, shiftKey)
+    let (key, code, key_code_num, shift): (&str, &str, i64, bool) = match key_code.as_str() {
+        "RIGHT"       => ("ArrowRight", "ArrowRight", 39, false),
+        "LEFT"        => ("ArrowLeft",  "ArrowLeft",  37, false),
+        "SHIFT_RIGHT" => ("ArrowRight", "ArrowRight", 39, true),
+        "SHIFT_LEFT"  => ("ArrowLeft",  "ArrowLeft",  37, true),
+        "SPACE"       => (" ",          "Space",      32, false),
         _             => return Err("unknown_key".to_string()),
     };
 
     let ws_url = get_ws_debugger_url()?;
-
     let (mut socket, _resp) = tungstenite::connect(&ws_url)
         .map_err(|e| format!("ws connect: {}", e))?;
 
-    // CDP modifiers bitmask: Shift = 8
-    let modifiers = if needs_shift { 8 } else { 0 };
+    // JavaScript that fires a full keydown+keyup on document, window, body, and
+    // any focused video element — covers every way the app might listen.
+    let js = format!(r#"
+        (function() {{
+            var opts = {{
+                key: "{key}",
+                code: "{code}",
+                keyCode: {key_code_num},
+                which: {key_code_num},
+                shiftKey: {shift},
+                bubbles: true,
+                cancelable: true
+            }};
+            var targets = [document, window, document.body, document.documentElement];
+            var v = document.querySelector('video');
+            if (v) targets.push(v);
+            var ae = document.activeElement;
+            if (ae) targets.push(ae);
+            targets.forEach(function(t) {{
+                if (!t) return;
+                try {{
+                    t.dispatchEvent(new KeyboardEvent('keydown', opts));
+                    t.dispatchEvent(new KeyboardEvent('keyup', opts));
+                }} catch(e) {{}}
+            }});
+            return "ok";
+        }})()
+    "#, key=key, code=code, key_code_num=key_code_num, shift=shift);
 
-    // keyDown
-    let down = serde_json::json!({
+    let cmd = serde_json::json!({
         "id": 1,
-        "method": "Input.dispatchKeyEvent",
+        "method": "Runtime.evaluate",
         "params": {
-            "type": "keyDown",
-            "windowsVirtualKeyCode": vk,
-            "nativeVirtualKeyCode": vk,
-            "key": key_name,
-            "code": code,
-            "modifiers": modifiers,
-            "text": if key_code == "SPACE" { " " } else { "" }
-        }
-    });
-    // keyUp
-    let up = serde_json::json!({
-        "id": 2,
-        "method": "Input.dispatchKeyEvent",
-        "params": {
-            "type": "keyUp",
-            "windowsVirtualKeyCode": vk,
-            "nativeVirtualKeyCode": vk,
-            "key": key_name,
-            "code": code,
-            "modifiers": modifiers
+            "expression": js,
+            "userGesture": true,
+            "awaitPromise": false
         }
     });
 
-    socket.send(Message::Text(down.to_string()))
-        .map_err(|e| format!("send down: {}", e))?;
-    socket.send(Message::Text(up.to_string()))
-        .map_err(|e| format!("send up: {}", e))?;
+    socket.send(Message::Text(cmd.to_string()))
+        .map_err(|e| format!("send eval: {}", e))?;
 
-    // Read responses briefly to ensure delivery, then close
     let _ = socket.read();
     let _ = socket.close(None);
 
