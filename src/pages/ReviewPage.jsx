@@ -2,7 +2,6 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { db } from '../firebase/config'
 import { collection, addDoc, updateDoc, doc, serverTimestamp, increment } from 'firebase/firestore'
 import { useAuth } from '../hooks/useAuth.jsx'
-import { useSync } from '../hooks/useSync'
 import { KEY_TO_EVENT, MISSING_EVENT_KEY, NAV_SHORTCUTS, NAV_SHIFT_SHORTCUTS } from '../data/shortcuts'
 import ErrorTagModal from '../components/ErrorTagModal'
 import ErrorTimeline from '../components/ErrorTimeline'
@@ -10,7 +9,6 @@ import EventsSidebar from '../components/EventsSidebar'
 
 export default function ReviewPage({ session, onDone, onBack }) {
   const { profile } = useAuth()
-  const { syncNavigation } = useSync((status) => setSyncStatus(status))
 
   const videoRef  = useRef(null)
   const fileInputRef = useRef(null)
@@ -30,31 +28,15 @@ export default function ReviewPage({ session, onDone, onBack }) {
   const [submitting, setSubmitting]           = useState(false)
   const [submitted, setSubmitted]             = useState(false)
 
-  // Handle keyboard
+  // Handle keyboard — ONLY error-tag keys + ESC here.
+  // Navigation (Left/Right/Space) is handled by the Rust global hook, which
+  // emits the 'mark://nav' event (see the navigation listener effect below).
   useEffect(() => {
     function handleKey(e) {
       // Block if modal open
       if (pendingTag || showDoneModal) return
 
       const key = e.key
-      const shift = e.shiftKey
-
-      // Navigation shortcuts
-      if (key === ' ') {
-        e.preventDefault()
-        togglePlay()
-        syncNavigation('playpause', false)
-        return
-      }
-      if (key === 'ArrowRight' || key === 'ArrowLeft') {
-        e.preventDefault()
-        const ms = shift ? 200 : 600
-        const dir = key === 'ArrowRight' ? 1 : -1
-        seekBy(dir * ms / 1000)
-        syncNavigation(key === 'ArrowRight' ? 'forward' : 'backward', shift)
-        return
-      }
-
       // Error tagging
       const upper = key.toUpperCase()
       if (upper === MISSING_EVENT_KEY) {
@@ -80,7 +62,49 @@ export default function ReviewPage({ session, onDone, onBack }) {
     }
     window.addEventListener('keydown', handleKey)
     return () => window.removeEventListener('keydown', handleKey)
-  }, [pendingTag, showDoneModal, syncNavigation])
+  }, [pendingTag, showDoneModal])
+
+  // Navigation via Rust global hook — focus-independent, no click ever needed.
+  // The hook emits 'mark://nav' on Left/Right/Space; we move MARK's video here
+  // with a programmatic DOM seek that works even if the webview keyboard slept.
+  useEffect(() => {
+    let unlistenNav = null
+    let unlistenStatus = null
+    let active = true
+    ;(async () => {
+      try {
+        const { listen } = await import('@tauri-apps/api/event')
+        unlistenNav = await listen('mark://nav', (evt) => {
+          const { action, shift } = evt.payload || {}
+          if (action === 'playpause') { togglePlay(); return }
+          const ms  = shift ? 200 : 600
+          const dir = action === 'forward' ? 1 : -1
+          seekBy(dir * ms / 1000)
+        })
+        unlistenStatus = await listen('mark://sync-status', (evt) => {
+          setSyncStatus(evt.payload === 'connected' ? 'connected' : 'disconnected')
+        })
+      } catch (_) { /* dev mode (browser) — no Tauri events */ }
+      if (!active) { if (unlistenNav) unlistenNav(); if (unlistenStatus) unlistenStatus() }
+    })()
+    return () => {
+      active = false
+      if (unlistenNav) unlistenNav()
+      if (unlistenStatus) unlistenStatus()
+    }
+  }, [])
+
+  // Suppress the global nav hook while a modal is open (the Done modal has a
+  // number input — arrows must do normal caret movement there, not seek video).
+  useEffect(() => {
+    const suppress = !!(pendingTag || showDoneModal)
+    ;(async () => {
+      try {
+        const { invoke } = await import('@tauri-apps/api/core')
+        await invoke('set_sync_suppress', { suppressed: suppress })
+      } catch (_) {}
+    })()
+  }, [pendingTag, showDoneModal])
 
   function togglePlay() {
     const v = videoRef.current
