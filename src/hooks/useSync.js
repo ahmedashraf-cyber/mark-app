@@ -28,8 +28,11 @@ export function useSync(onStatusChange) {
       const result = await invoke('send_key_via_cdp', {
         keyCode: keyMap[action] || '',
       })
+      // result contains diagnostic like "videos=1 | before=5.00 | after=5.60"
+      console.log('[CDP sync]', result)
       if (onStatusChange) {
-        onStatusChange(result === 'sent' ? 'connected' : 'disconnected')
+        // Connected if we got any result back (CDP responded)
+        onStatusChange(result ? 'connected' : 'disconnected')
       }
     } catch (e) {
       if (onStatusChange) onStatusChange('disconnected')

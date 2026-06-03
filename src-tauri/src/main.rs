@@ -85,22 +85,19 @@ fn get_ws_debugger_url() -> Result<String, String> {
     Err("no webSocketDebuggerUrl found".to_string())
 }
 
-// ── Send a key to the collection app via CDP Runtime.evaluate ──────────────
-// Instead of Input.dispatchKeyEvent (which needs a focused element), we run
-// JavaScript inside the page that dispatches a synthetic KeyboardEvent on
-// both document and window — this triggers the collection app's global
-// arrow-key listener regardless of what (if anything) is focused.
+// ── Send navigation to collection app via CDP Runtime.evaluate ─────────────
+// Returns the actual result from the page so we can diagnose what happened.
 #[command]
 fn send_key_via_cdp(key_code: String) -> Result<String, String> {
     use tungstenite::Message;
 
-    // Map key_code → (key, code, keyCode, shiftKey)
-    let (key, code, key_code_num, shift): (&str, &str, i64, bool) = match key_code.as_str() {
-        "RIGHT"       => ("ArrowRight", "ArrowRight", 39, false),
-        "LEFT"        => ("ArrowLeft",  "ArrowLeft",  37, false),
-        "SHIFT_RIGHT" => ("ArrowRight", "ArrowRight", 39, true),
-        "SHIFT_LEFT"  => ("ArrowLeft",  "ArrowLeft",  37, true),
-        "SPACE"       => (" ",          "Space",      32, false),
+    // Map to seconds delta + synthetic key info
+    let (delta, key, code, kc, shift): (f64, &str, &str, i64, bool) = match key_code.as_str() {
+        "RIGHT"       => ( 0.6, "ArrowRight", "ArrowRight", 39, false),
+        "LEFT"        => (-0.6, "ArrowLeft",  "ArrowLeft",  37, false),
+        "SHIFT_RIGHT" => ( 0.2, "ArrowRight", "ArrowRight", 39, true),
+        "SHIFT_LEFT"  => (-0.2, "ArrowLeft",  "ArrowLeft",  37, true),
+        "SPACE"       => ( 0.0, " ",          "Space",      32, false),
         _             => return Err("unknown_key".to_string()),
     };
 
@@ -108,52 +105,62 @@ fn send_key_via_cdp(key_code: String) -> Result<String, String> {
     let (mut socket, _resp) = tungstenite::connect(&ws_url)
         .map_err(|e| format!("ws connect: {}", e))?;
 
-    // JavaScript that fires a full keydown+keyup on document, window, body, and
-    // any focused video element — covers every way the app might listen.
+    // Strategy: try BOTH approaches in one JS call and report what we find.
+    // 1. Fire synthetic keyboard events (in case app uses key listeners)
+    // 2. Directly manipulate the <video> element (most reliable)
+    // Return a diagnostic string so we can see what's in the page.
     let js = format!(r#"
         (function() {{
-            var opts = {{
-                key: "{key}",
-                code: "{code}",
-                keyCode: {key_code_num},
-                which: {key_code_num},
-                shiftKey: {shift},
-                bubbles: true,
-                cancelable: true
-            }};
-            var targets = [document, window, document.body, document.documentElement];
-            var v = document.querySelector('video');
-            if (v) targets.push(v);
-            var ae = document.activeElement;
-            if (ae) targets.push(ae);
-            targets.forEach(function(t) {{
-                if (!t) return;
-                try {{
+            var report = [];
+            var opts = {{ key:"{key}", code:"{code}", keyCode:{kc}, which:{kc}, shiftKey:{shift}, bubbles:true, cancelable:true }};
+
+            // Approach 1: synthetic keyboard events
+            [document, window, document.body].forEach(function(t) {{
+                if (t) try {{
                     t.dispatchEvent(new KeyboardEvent('keydown', opts));
                     t.dispatchEvent(new KeyboardEvent('keyup', opts));
                 }} catch(e) {{}}
             }});
-            return "ok";
+
+            // Approach 2: direct video control
+            var vids = document.querySelectorAll('video');
+            report.push("videos=" + vids.length);
+            if (vids.length > 0) {{
+                var v = vids[0];
+                report.push("before=" + v.currentTime.toFixed(2));
+                if ({is_space}) {{
+                    if (v.paused) v.play(); else v.pause();
+                }} else {{
+                    v.currentTime = Math.max(0, v.currentTime + ({delta}));
+                }}
+                report.push("after=" + v.currentTime.toFixed(2));
+            }}
+            return report.join(" | ");
         }})()
-    "#, key=key, code=code, key_code_num=key_code_num, shift=shift);
+    "#, key=key, code=code, kc=kc, shift=shift, delta=delta,
+        is_space=(key_code=="SPACE"));
 
     let cmd = serde_json::json!({
         "id": 1,
         "method": "Runtime.evaluate",
-        "params": {
-            "expression": js,
-            "userGesture": true,
-            "awaitPromise": false
-        }
+        "params": { "expression": js, "userGesture": true, "returnByValue": true }
     });
 
     socket.send(Message::Text(cmd.to_string()))
         .map_err(|e| format!("send eval: {}", e))?;
 
-    let _ = socket.read();
+    // Read the response so we can return the diagnostic
+    let mut result = "sent".to_string();
+    if let Ok(Message::Text(txt)) = socket.read() {
+        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&txt) {
+            if let Some(val) = parsed.pointer("/result/result/value").and_then(|v| v.as_str()) {
+                result = val.to_string();
+            }
+        }
+    }
     let _ = socket.close(None);
 
-    Ok("sent".to_string())
+    Ok(result)
 }
 
 // ── Legacy Win32 command — kept for fallback/compatibility ─────────────────
