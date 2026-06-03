@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { AuthProvider, useAuth } from './hooks/useAuth'
+import { AuthProvider, useAuth } from './hooks/useAuth.jsx'
 import LoginPage from './pages/LoginPage'
 import SessionSetupPage from './pages/SessionSetupPage'
 import ReviewPage from './pages/ReviewPage'
