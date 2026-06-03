@@ -10,11 +10,11 @@ import EventsSidebar from '../components/EventsSidebar'
 
 export default function ReviewPage({ session, onDone, onBack }) {
   const { profile } = useAuth()
-  const { syncNavigation } = useSync((status) => setSyncStatus(status), focusRef)
-
   const videoRef  = useRef(null)
   const fileInputRef = useRef(null)
   const focusRef = useRef(null)  // hidden focusable element for keyboard focus restoration
+
+  const { syncNavigation } = useSync((status) => setSyncStatus(status), focusRef)
   const [videoLoaded, setVideoLoaded] = useState(false)
   const [playing, setPlaying]         = useState(false)
   const [currentTime, setCurrentTime] = useState(0)
