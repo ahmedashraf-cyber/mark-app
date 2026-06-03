@@ -10,7 +10,7 @@ import EventsSidebar from '../components/EventsSidebar'
 
 export default function ReviewPage({ session, onDone, onBack }) {
   const { profile } = useAuth()
-  const { syncNavigation } = useSync()
+  const { syncNavigation } = useSync((status) => setSyncStatus(status))
 
   const videoRef  = useRef(null)
   const fileInputRef = useRef(null)

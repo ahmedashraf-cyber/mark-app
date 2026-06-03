@@ -3,17 +3,17 @@
 use tauri::command;
 
 #[command]
-fn send_key_to_collection_app(exe_name: String, key_code: String) -> Result<String, String> {
+fn send_key_to_collection_app(_exe_name: String, key_code: String) -> Result<String, String> {
     #[cfg(target_os = "windows")]
     {
-        use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
+        use windows::Win32::Foundation::{HWND, LPARAM, WPARAM, BOOL};
         use windows::Win32::UI::WindowsAndMessaging::{
-            FindWindowA, PostMessageA, WM_KEYDOWN, WM_KEYUP,
+            EnumWindows, GetWindowTextW, IsWindowVisible,
+            PostMessageA, WM_KEYDOWN, WM_KEYUP,
         };
         use windows::Win32::UI::Input::KeyboardAndMouse::{
             VK_LEFT, VK_RIGHT, VK_SHIFT, VK_SPACE,
         };
-        use windows::core::PCSTR;
 
         let (vk, needs_shift) = match key_code.as_str() {
             "RIGHT"       => (VK_RIGHT.0 as usize, false),
@@ -24,13 +24,40 @@ fn send_key_to_collection_app(exe_name: String, key_code: String) -> Result<Stri
             _             => return Ok("unknown_key".to_string()),
         };
 
+        // Find window by partial title using EnumWindows
+        static FOUND_HWND: std::sync::atomic::AtomicIsize =
+            std::sync::atomic::AtomicIsize::new(0);
+        FOUND_HWND.store(0, std::sync::atomic::Ordering::SeqCst);
+
+        unsafe extern "system" fn enum_proc(hwnd: HWND, _: LPARAM) -> BOOL {
+            use windows::Win32::UI::WindowsAndMessaging::IsWindowVisible;
+            if !IsWindowVisible(hwnd).as_bool() {
+                return BOOL(1);
+            }
+            let mut buf = [0u16; 512];
+            let len = GetWindowTextW(hwnd, &mut buf);
+            if len > 0 {
+                let title = String::from_utf16_lossy(&buf[..len as usize]);
+                if title.contains("Tag Once Collection App") {
+                    FOUND_HWND.store(hwnd.0 as isize, std::sync::atomic::Ordering::SeqCst);
+                    return BOOL(0); // stop
+                }
+            }
+            BOOL(1) // continue
+        }
+
         unsafe {
-            let title = std::ffi::CString::new("Tag Once Collection App")
-                .map_err(|e| e.to_string())?;
+            let _ = EnumWindows(Some(enum_proc), LPARAM(0));
+        }
 
-            let hwnd: HWND = FindWindowA(PCSTR::null(), PCSTR::from_raw(title.as_ptr() as _))
-                .map_err(|_| "window_not_found".to_string())?;
+        let raw = FOUND_HWND.load(std::sync::atomic::Ordering::SeqCst);
+        if raw == 0 {
+            return Ok("window_not_found".to_string());
+        }
 
+        let hwnd = HWND(raw as *mut _);
+
+        unsafe {
             if needs_shift {
                 let _ = PostMessageA(Some(hwnd), WM_KEYDOWN, WPARAM(VK_SHIFT.0 as usize), LPARAM(0));
             }
@@ -46,7 +73,7 @@ fn send_key_to_collection_app(exe_name: String, key_code: String) -> Result<Stri
 
     #[cfg(not(target_os = "windows"))]
     {
-        println!("[MARK SYNC dev] {} -> {}", key_code, exe_name);
+        println!("[MARK SYNC dev] {} -> {}", _exe_name, key_code);
         Ok("dev_noop".to_string())
     }
 }
