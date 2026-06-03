@@ -1,4 +1,4 @@
-import { useCallback, useRef } from 'react'
+import { useCallback } from 'react'
 
 const COLLECTION_APP_EXE = 'Statsbomb Tag Once collection app.exe'
 
@@ -14,7 +14,7 @@ async function getTauri() {
   }
 }
 
-export function useSync(onStatusChange) {
+export function useSync(onStatusChange, focusRef) {
   const syncNavigation = useCallback(async (action, shiftHeld) => {
     const invoke = await getTauri()
     if (!invoke) return
@@ -29,24 +29,25 @@ export function useSync(onStatusChange) {
         exeName: COLLECTION_APP_EXE,
         keyCode: keyMap[action] || '',
       })
+
       // Restore keyboard focus from inside Chromium after focus steal
-      // Running inside the webview — Chromium trusts this completely
+      // focusRef points to a hidden div with tabIndex=0 — always focusable
       try {
-        window.focus()
-        document.body.focus()
-        if (document.activeElement && document.activeElement !== document.body) {
-          document.activeElement.blur()
+        if (focusRef && focusRef.current) {
+          focusRef.current.focus()
+        } else {
+          window.focus()
+          document.body.focus()
         }
-        document.body.focus()
       } catch(_) {}
-      // Update connection status based on result
+
       if (onStatusChange) {
         onStatusChange(result === 'sent' ? 'connected' : 'disconnected')
       }
     } catch (e) {
       if (onStatusChange) onStatusChange('disconnected')
     }
-  }, [onStatusChange])
+  }, [onStatusChange, focusRef])
 
   return { syncNavigation }
 }
