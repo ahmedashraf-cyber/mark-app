@@ -2,33 +2,35 @@
 
 use tauri::command;
 
-#[cfg(target_os = "windows")]
-mod hook {
-    use std::sync::atomic::{AtomicIsize, AtomicBool};
-    pub static COLLECTION_HWND: AtomicIsize = AtomicIsize::new(0);
-    pub static HOOK_HANDLE:     AtomicIsize = AtomicIsize::new(0);
-    pub static HOOK_ACTIVE:     AtomicBool  = AtomicBool::new(false);
-}
-
 #[command]
-fn start_sync(_exe_name: String) -> Result<String, String> {
+fn send_key_to_collection_app(_exe_name: String, key_code: String) -> Result<String, String> {
     #[cfg(target_os = "windows")]
     {
-        use std::sync::atomic::Ordering;
-        use windows::Win32::Foundation::{HWND, LPARAM, WPARAM, HINSTANCE};
+        use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
         use windows::Win32::UI::WindowsAndMessaging::{
             EnumWindows, GetWindowTextW, GetForegroundWindow,
-            SetWindowsHookExW, CallNextHookEx,
-            WH_KEYBOARD_LL, KBDLLHOOKSTRUCT,
-            PostMessageA, WM_KEYDOWN,
-            GetMessageW, MSG, HHOOK,
+            SetForegroundWindow, PostMessageA, WM_KEYDOWN, WM_KEYUP,
+            ShowWindow, SW_SHOW,
         };
-        use windows::Win32::UI::Input::KeyboardAndMouse::{VK_LEFT, VK_RIGHT, VK_SPACE};
-        use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+        use windows::Win32::UI::Input::KeyboardAndMouse::{
+            SendInput, INPUT, INPUT_KEYBOARD, KEYBDINPUT, KEYBD_EVENT_FLAGS,
+            KEYEVENTF_KEYUP, VK_LEFT, VK_RIGHT, VK_SHIFT, VK_SPACE, VK_MENU,
+        };
         use windows::core::BOOL;
 
-        // Step 1: Find collection app window
-        hook::COLLECTION_HWND.store(0, Ordering::SeqCst);
+        let (vk, needs_shift) = match key_code.as_str() {
+            "RIGHT"       => (VK_RIGHT.0, false),
+            "LEFT"        => (VK_LEFT.0,  false),
+            "SHIFT_RIGHT" => (VK_RIGHT.0, true),
+            "SHIFT_LEFT"  => (VK_LEFT.0,  true),
+            "SPACE"       => (VK_SPACE.0, false),
+            _             => return Ok("unknown_key".to_string()),
+        };
+
+        // Find collection app window by partial title
+        static FOUND_HWND: std::sync::atomic::AtomicIsize =
+            std::sync::atomic::AtomicIsize::new(0);
+        FOUND_HWND.store(0, std::sync::atomic::Ordering::SeqCst);
 
         unsafe extern "system" fn enum_proc(hwnd: HWND, _: LPARAM) -> BOOL {
             let mut buf = [0u16; 512];
@@ -36,7 +38,7 @@ fn start_sync(_exe_name: String) -> Result<String, String> {
             if len > 0 {
                 let title = String::from_utf16_lossy(&buf[..len as usize]);
                 if title.contains("Tag Once Collection App") {
-                    hook::COLLECTION_HWND.store(hwnd.0 as isize, std::sync::atomic::Ordering::SeqCst);
+                    FOUND_HWND.store(hwnd.0 as isize, std::sync::atomic::Ordering::SeqCst);
                     return BOOL(0);
                 }
             }
@@ -45,104 +47,96 @@ fn start_sync(_exe_name: String) -> Result<String, String> {
 
         unsafe { let _ = EnumWindows(Some(enum_proc), LPARAM(0)); }
 
-        let col_raw = hook::COLLECTION_HWND.load(Ordering::SeqCst);
-        if col_raw == 0 {
-            return Ok("collection_not_found".to_string());
+        let raw = FOUND_HWND.load(std::sync::atomic::Ordering::SeqCst);
+        if raw == 0 {
+            return Ok("window_not_found".to_string());
         }
 
-        // Step 2: Install hook once
-        if !hook::HOOK_ACTIVE.load(Ordering::SeqCst) {
+        let collection_hwnd = HWND(raw as *mut _);
+        
+        unsafe {
+            // Save current foreground window (MARK itself)
+            let mark_hwnd = GetForegroundWindow();
 
-            unsafe extern "system" fn keyboard_hook(
-                code: i32,
-                wparam: WPARAM,
-                lparam: LPARAM,
-            ) -> windows::Win32::Foundation::LRESULT {
-                use std::sync::atomic::Ordering;
+            // Briefly bring collection app to foreground so SendInput works
+            // Use ALT key trick to allow SetForegroundWindow from another process
+            let alt_down = INPUT {
+                r#type: INPUT_KEYBOARD,
+                Anonymous: windows::Win32::UI::Input::KeyboardAndMouse::INPUT_0 {
+                    ki: KEYBDINPUT {
+                        wVk: VK_MENU,
+                        wScan: 0,
+                        dwFlags: KEYBD_EVENT_FLAGS(0),
+                        time: 0,
+                        dwExtraInfo: 0,
+                    }
+                }
+            };
+            let alt_up = INPUT {
+                r#type: INPUT_KEYBOARD,
+                Anonymous: windows::Win32::UI::Input::KeyboardAndMouse::INPUT_0 {
+                    ki: KEYBDINPUT {
+                        wVk: VK_MENU,
+                        wScan: 0,
+                        dwFlags: KEYEVENTF_KEYUP,
+                        time: 0,
+                        dwExtraInfo: 0,
+                    }
+                }
+            };
+            SendInput(&[alt_down, alt_up], std::mem::size_of::<INPUT>() as i32);
 
-                if code >= 0 && wparam.0 as u32 == WM_KEYDOWN {
-                    let kb = &*(lparam.0 as *const KBDLLHOOKSTRUCT);
-                    let vk = kb.vkCode as u16;
-                    let is_nav = vk == VK_LEFT.0 || vk == VK_RIGHT.0 || vk == VK_SPACE.0;
+            // Now focus collection app
+            SetForegroundWindow(collection_hwnd);
 
-                    if is_nav {
-                        let fg = GetForegroundWindow();
-                        let mut buf = [0u16; 256];
-                        let len = GetWindowTextW(fg, &mut buf);
-                        let title = if len > 0 {
-                            String::from_utf16_lossy(&buf[..len as usize])
-                        } else {
-                            String::new()
-                        };
+            // Small delay for focus to take effect
+            std::thread::sleep(std::time::Duration::from_millis(30));
 
-                        if title.contains("MARK") {
-                            let col_raw = hook::COLLECTION_HWND.load(Ordering::SeqCst);
-                            if col_raw != 0 {
-                                let col_hwnd = HWND(col_raw as *mut _);
-                                let _ = PostMessageA(
-                                    Some(col_hwnd),
-                                    WM_KEYDOWN,
-                                    WPARAM(vk as usize),
-                                    LPARAM(0),
-                                );
-                            }
+            // Build key inputs
+            let mut inputs: Vec<INPUT> = Vec::new();
+
+            let make_key = |vk: u16, up: bool| -> INPUT {
+                INPUT {
+                    r#type: INPUT_KEYBOARD,
+                    Anonymous: windows::Win32::UI::Input::KeyboardAndMouse::INPUT_0 {
+                        ki: KEYBDINPUT {
+                            wVk: windows::Win32::UI::Input::KeyboardAndMouse::VIRTUAL_KEY(vk),
+                            wScan: 0,
+                            dwFlags: if up { KEYEVENTF_KEYUP } else { KEYBD_EVENT_FLAGS(0) },
+                            time: 0,
+                            dwExtraInfo: 0,
                         }
                     }
                 }
+            };
 
-                // Pass key through — MARK still receives it normally
-                CallNextHookEx(
-                    Some(HHOOK(hook::HOOK_HANDLE.load(Ordering::SeqCst) as *mut _)),
-                    code, wparam, lparam,
-                )
+            if needs_shift { inputs.push(make_key(VK_SHIFT.0, false)); }
+            inputs.push(make_key(vk, false));
+            inputs.push(make_key(vk, true));
+            if needs_shift { inputs.push(make_key(VK_SHIFT.0, true)); }
+
+            SendInput(&inputs, std::mem::size_of::<INPUT>() as i32);
+
+            // Return focus to MARK after brief delay
+            std::thread::sleep(std::time::Duration::from_millis(30));
+            if !mark_hwnd.is_invalid() {
+                SetForegroundWindow(mark_hwnd);
             }
-
-            unsafe {
-                let hmod = GetModuleHandleW(windows::core::PCWSTR::null())
-                    .map_err(|e| e.to_string())?;
-                // Cast HMODULE to HINSTANCE — same underlying type in Win32
-                let hinstance = HINSTANCE(hmod.0);
-                let hhook = SetWindowsHookExW(
-                    WH_KEYBOARD_LL,
-                    Some(keyboard_hook),
-                    Some(hinstance),
-                    0,
-                ).map_err(|e| e.to_string())?;
-                hook::HOOK_HANDLE.store(hhook.0 as isize, Ordering::SeqCst);
-                hook::HOOK_ACTIVE.store(true, Ordering::SeqCst);
-            }
-
-            // Message loop thread — required for WH_KEYBOARD_LL to fire
-            std::thread::spawn(|| {
-                unsafe {
-                    let mut msg = MSG::default();
-                    while GetMessageW(&mut msg, None, 0, 0).as_bool() {}
-                }
-            });
         }
 
-        Ok("hook_started".to_string())
+        Ok("sent".to_string())
     }
 
     #[cfg(not(target_os = "windows"))]
     {
-        println!("[SYNC dev] start_sync called");
+        println!("[MARK SYNC dev] {} -> {}", _exe_name, key_code);
         Ok("dev_noop".to_string())
     }
 }
 
-// Kept for JS compatibility — hook now handles forwarding
-#[command]
-fn send_key_to_collection_app(_exe_name: String, _key_code: String) -> Result<String, String> {
-    Ok("hook_handles_this".to_string())
-}
-
 fn main() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![
-            start_sync,
-            send_key_to_collection_app,
-        ])
+        .invoke_handler(tauri::generate_handler![send_key_to_collection_app])
         .run(tauri::generate_context!())
         .expect("error while running MARK");
 }
