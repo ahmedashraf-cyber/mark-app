@@ -154,13 +154,40 @@ fn send_key_to_collection_app(
             std::thread::sleep(std::time::Duration::from_millis(30));
 
             // ── STEP 4: Return focus to MARK ──────────────────────────────────────
-            // Chromium is already awake from Step 1 — keyboard works immediately
             if !mark_hwnd.is_invalid() {
                 SendInput(
                     &[make_key(VK_MENU.0, false), make_key(VK_MENU.0, true)],
                     std::mem::size_of::<INPUT>() as i32,
                 );
                 SetForegroundWindow(mark_hwnd);
+                std::thread::sleep(std::time::Duration::from_millis(20));
+
+                // ── STEP 5: Fake click AFTER focus returns ─────────────────────────
+                // Chromium goes to sleep every time focus leaves — wake it here,
+                // after focus is back, so it's awake for the NEXT keypress
+                let mut mark_rect2 = RECT::default();
+                if GetWindowRect(mark_hwnd, &mut mark_rect2).is_ok() {
+                    let screen_w = GetSystemMetrics(SM_CXSCREEN) as f64;
+                    let screen_h = GetSystemMetrics(SM_CYSCREEN) as f64;
+                    let target_x = (mark_rect2.left + mark_rect2.right) / 2;
+                    let target_y = mark_rect2.top + (((mark_rect2.bottom - mark_rect2.top) as f64) * 0.85) as i32;
+                    let norm_x = ((target_x as f64 / screen_w) * 65535.0) as i32;
+                    let norm_y = ((target_y as f64 / screen_h) * 65535.0) as i32;
+
+                    let mk_click = |down: bool| -> INPUT {
+                        INPUT {
+                            r#type: INPUT_MOUSE,
+                            Anonymous: windows::Win32::UI::Input::KeyboardAndMouse::INPUT_0 {
+                                mi: MOUSEINPUT {
+                                    dx: norm_x, dy: norm_y, mouseData: 0,
+                                    dwFlags: MOUSEEVENTF_ABSOLUTE | if down { MOUSEEVENTF_LEFTDOWN } else { MOUSEEVENTF_LEFTUP },
+                                    time: 0, dwExtraInfo: 0,
+                                }
+                            }
+                        }
+                    };
+                    SendInput(&[mk_click(true), mk_click(false)], std::mem::size_of::<INPUT>() as i32);
+                }
             }
         }
 
