@@ -30,14 +30,9 @@ export function useSync(onStatusChange) {
         keyCode: keyMap[action] || '',
       })
       // Restore keyboard focus from inside Chromium after focus steal
-      // Running inside the webview — Chromium trusts this completely
       try {
         window.focus()
-        document.body.focus()
-        if (document.activeElement && document.activeElement !== document.body) {
-          document.activeElement.blur()
-        }
-        document.body.focus()
+        document.documentElement.focus()
       } catch(_) {}
       // Update connection status based on result
       if (onStatusChange) {
