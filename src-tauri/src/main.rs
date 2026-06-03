@@ -4,22 +4,26 @@ use tauri::command;
 
 #[command]
 fn send_key_to_collection_app(
-    window: tauri::Window,  // Tauri injects this — gives us set_focus() which calls WebView2 MoveFocus
     _exe_name: String,
     key_code: String,
 ) -> Result<String, String> {
     #[cfg(target_os = "windows")]
     {
-        use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
+        use windows::Win32::Foundation::{HWND, LPARAM, WPARAM, RECT};
         use windows::Win32::UI::WindowsAndMessaging::{
             EnumWindows, GetWindowTextW, GetForegroundWindow,
             SetForegroundWindow,
+            GetWindowRect,
+            GetSystemMetrics, SM_CXSCREEN, SM_CYSCREEN,
             // PostMessageA, WM_KEYDOWN, WM_KEYUP, // kept for future use
             // ShowWindow, SW_SHOW,                 // kept for future use
         };
         use windows::Win32::UI::Input::KeyboardAndMouse::{
-            SendInput, INPUT, INPUT_KEYBOARD, KEYBDINPUT, KEYBD_EVENT_FLAGS,
-            KEYEVENTF_KEYUP, VK_LEFT, VK_RIGHT, VK_SHIFT, VK_SPACE, VK_MENU,
+            SendInput, INPUT, INPUT_KEYBOARD, INPUT_MOUSE,
+            KEYBDINPUT, MOUSEINPUT, KEYBD_EVENT_FLAGS,
+            KEYEVENTF_KEYUP,
+            MOUSEEVENTF_ABSOLUTE, MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP,
+            VK_LEFT, VK_RIGHT, VK_SHIFT, VK_SPACE, VK_MENU,
             VIRTUAL_KEY,
         };
         use windows::core::BOOL;
@@ -61,10 +65,10 @@ fn send_key_to_collection_app(
         let collection_hwnd = HWND(raw as *mut _);
 
         unsafe {
-            // Save current foreground window (MARK itself)
+            // Get MARK's current window handle and bounds
             let mark_hwnd = GetForegroundWindow();
 
-            // Helper: build keyboard INPUT struct
+            // Helper: build keyboard INPUT
             let make_key = |vk: u16, up: bool| -> INPUT {
                 INPUT {
                     r#type: INPUT_KEYBOARD,
@@ -80,17 +84,66 @@ fn send_key_to_collection_app(
                 }
             };
 
-            // Step 1: ALT trick — unlocks SetForegroundWindow across processes
+            // ── STEP 1: Fake mouse click inside MARK ──────────────────────────────
+            // SendInput mouse click at center-bottom of MARK window.
+            // This wakes up Chromium's keyboard listener BEFORE we switch focus.
+            // Uses MOUSEEVENTF_ABSOLUTE which requires normalized coords (0-65535).
+            // GetWindowRect gives screen coordinates — we convert to normalized.
+            let mut mark_rect = RECT::default();
+            let got_rect = GetWindowRect(mark_hwnd, &mut mark_rect).is_ok();
+
+            if got_rect {
+                let screen_w = GetSystemMetrics(SM_CXSCREEN) as f64;
+                let screen_h = GetSystemMetrics(SM_CYSCREEN) as f64;
+
+                // Target: center-X, 85% down the window (bottom safe area)
+                let target_x = (mark_rect.left + mark_rect.right) / 2;
+                let target_y = mark_rect.top + (((mark_rect.bottom - mark_rect.top) as f64) * 0.85) as i32;
+
+                // Normalize to 0-65535 range required by MOUSEEVENTF_ABSOLUTE
+                let norm_x = ((target_x as f64 / screen_w) * 65535.0) as i32;
+                let norm_y = ((target_y as f64 / screen_h) * 65535.0) as i32;
+
+                let click_down = INPUT {
+                    r#type: INPUT_MOUSE,
+                    Anonymous: windows::Win32::UI::Input::KeyboardAndMouse::INPUT_0 {
+                        mi: MOUSEINPUT {
+                            dx: norm_x,
+                            dy: norm_y,
+                            mouseData: 0,
+                            dwFlags: MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_LEFTDOWN,
+                            time: 0,
+                            dwExtraInfo: 0,
+                        }
+                    }
+                };
+                let click_up = INPUT {
+                    r#type: INPUT_MOUSE,
+                    Anonymous: windows::Win32::UI::Input::KeyboardAndMouse::INPUT_0 {
+                        mi: MOUSEINPUT {
+                            dx: norm_x,
+                            dy: norm_y,
+                            mouseData: 0,
+                            dwFlags: MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_LEFTUP,
+                            time: 0,
+                            dwExtraInfo: 0,
+                        }
+                    }
+                };
+
+                // Fire fake click inside MARK — Chromium wakes up keyboard listener
+                SendInput(&[click_down, click_up], std::mem::size_of::<INPUT>() as i32);
+            }
+
+            // ── STEP 2: ALT trick + focus collection app ──────────────────────────
             SendInput(
                 &[make_key(VK_MENU.0, false), make_key(VK_MENU.0, true)],
                 std::mem::size_of::<INPUT>() as i32,
             );
-
-            // Step 2: Focus collection app
             SetForegroundWindow(collection_hwnd);
             std::thread::sleep(std::time::Duration::from_millis(30));
 
-            // Step 3: Send the navigation key via SendInput
+            // ── STEP 3: Send the navigation key to collection app ─────────────────
             let mut inputs: Vec<INPUT> = Vec::new();
             if needs_shift { inputs.push(make_key(VK_SHIFT.0, false)); }
             inputs.push(make_key(vk, false));
@@ -100,12 +153,16 @@ fn send_key_to_collection_app(
 
             std::thread::sleep(std::time::Duration::from_millis(30));
 
-            // Step 4: Return focus using Tauri's set_focus() instead of raw Win32
-            // set_focus() internally calls WebView2 MoveFocus — wakes up Chromium keyboard listener
-            let _ = mark_hwnd; // mark_hwnd no longer needed — Tauri handles it
+            // ── STEP 4: Return focus to MARK ──────────────────────────────────────
+            // Chromium is already awake from Step 1 — keyboard works immediately
+            if !mark_hwnd.is_invalid() {
+                SendInput(
+                    &[make_key(VK_MENU.0, false), make_key(VK_MENU.0, true)],
+                    std::mem::size_of::<INPUT>() as i32,
+                );
+                SetForegroundWindow(mark_hwnd);
+            }
         }
-
-        window.set_focus().map_err(|e| e.to_string())?;
 
         Ok("sent".to_string())
     }
