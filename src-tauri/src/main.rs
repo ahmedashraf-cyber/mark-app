@@ -8,8 +8,9 @@ fn send_key_to_collection_app(exe_name: String, key_code: String) -> Result<Stri
     {
         use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
         use windows::Win32::UI::WindowsAndMessaging::{
-            FindWindowA, PostMessageA,
-            WM_KEYDOWN, WM_KEYUP,
+            FindWindowA, PostMessageA, WM_KEYDOWN, WM_KEYUP,
+        };
+        use windows::Win32::UI::Input::KeyboardAndMouse::{
             VK_LEFT, VK_RIGHT, VK_SHIFT, VK_SPACE,
         };
         use windows::core::PCSTR;
@@ -24,27 +25,23 @@ fn send_key_to_collection_app(exe_name: String, key_code: String) -> Result<Stri
         };
 
         unsafe {
-            // Find the window by partial title
             let title = std::ffi::CString::new("Tag Once Collection App")
                 .map_err(|e| e.to_string())?;
 
-            let hwnd: HWND = FindWindowA(PCSTR::null(), PCSTR::from_raw(title.as_ptr() as _));
-
-            if hwnd.is_invalid() {
-                return Ok("window_not_found".to_string());
-            }
+            let hwnd: HWND = FindWindowA(PCSTR::null(), PCSTR::from_raw(title.as_ptr() as _))
+                .map_err(|_| "window_not_found".to_string())?;
 
             if needs_shift {
-                let _ = PostMessageA(hwnd, WM_KEYDOWN, WPARAM(VK_SHIFT.0 as usize), LPARAM(0));
+                let _ = PostMessageA(Some(hwnd), WM_KEYDOWN, WPARAM(VK_SHIFT.0 as usize), LPARAM(0));
             }
-            let _ = PostMessageA(hwnd, WM_KEYDOWN, WPARAM(vk), LPARAM(0));
-            let _ = PostMessageA(hwnd, WM_KEYUP,   WPARAM(vk), LPARAM(0));
+            let _ = PostMessageA(Some(hwnd), WM_KEYDOWN, WPARAM(vk), LPARAM(0));
+            let _ = PostMessageA(Some(hwnd), WM_KEYUP,   WPARAM(vk), LPARAM(0));
             if needs_shift {
-                let _ = PostMessageA(hwnd, WM_KEYUP, WPARAM(VK_SHIFT.0 as usize), LPARAM(0));
+                let _ = PostMessageA(Some(hwnd), WM_KEYUP, WPARAM(VK_SHIFT.0 as usize), LPARAM(0));
             }
-
-            Ok("sent".to_string())
         }
+
+        Ok("sent".to_string())
     }
 
     #[cfg(not(target_os = "windows"))]
