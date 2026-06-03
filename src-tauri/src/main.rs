@@ -9,7 +9,7 @@ fn send_key_to_collection_app(_exe_name: String, key_code: String) -> Result<Str
         use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
         use windows::Win32::UI::WindowsAndMessaging::{
             EnumWindows, GetWindowTextW, GetForegroundWindow,
-            SetForegroundWindow, WM_KEYDOWN, WM_KEYUP,
+            SetForegroundWindow,
             EnumChildWindows, GetClassNameW,
         };
         use windows::Win32::UI::Input::KeyboardAndMouse::{
@@ -82,7 +82,7 @@ fn send_key_to_collection_app(_exe_name: String, key_code: String) -> Result<Str
 
             // Find MARK's webview child for focus restoration
             if !mark_hwnd.is_invalid() {
-                let _ = EnumChildWindows(mark_hwnd, Some(enum_child_proc), LPARAM(0));
+                let _ = EnumChildWindows(Some(mark_hwnd), Some(enum_child_proc), LPARAM(0));
             }
 
             // Helper to build INPUT struct
