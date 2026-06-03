@@ -1,209 +1,159 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use tauri::command;
+use std::io::{Read, Write};
+use std::net::TcpStream;
 
+// ── Launch the collection app with CDP debugging port enabled ──────────────
 #[command]
-fn send_key_to_collection_app(
-    _exe_name: String,
-    key_code: String,
-) -> Result<String, String> {
-    #[cfg(target_os = "windows")]
-    {
-        use windows::Win32::Foundation::{HWND, LPARAM, WPARAM, RECT};
-        use windows::Win32::UI::WindowsAndMessaging::{
-            EnumWindows, GetWindowTextW, GetForegroundWindow,
-            SetForegroundWindow,
-            GetWindowRect,
-            GetSystemMetrics, SM_CXSCREEN, SM_CYSCREEN,
-            // PostMessageA, WM_KEYDOWN, WM_KEYUP, // kept for future use
-            // ShowWindow, SW_SHOW,                 // kept for future use
-        };
-        use windows::Win32::UI::Input::KeyboardAndMouse::{
-            SendInput, INPUT, INPUT_KEYBOARD, INPUT_MOUSE,
-            KEYBDINPUT, MOUSEINPUT, KEYBD_EVENT_FLAGS,
-            KEYEVENTF_KEYUP,
-            MOUSEEVENTF_ABSOLUTE, MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP,
-            VK_LEFT, VK_RIGHT, VK_SHIFT, VK_SPACE, VK_MENU,
-            VIRTUAL_KEY,
-        };
-        use windows::core::BOOL;
+fn launch_collection_app(exe_path: String) -> Result<String, String> {
+    use std::process::Command;
 
-        let (vk, needs_shift) = match key_code.as_str() {
-            "RIGHT"       => (VK_RIGHT.0, false),
-            "LEFT"        => (VK_LEFT.0,  false),
-            "SHIFT_RIGHT" => (VK_RIGHT.0, true),
-            "SHIFT_LEFT"  => (VK_LEFT.0,  true),
-            "SPACE"       => (VK_SPACE.0, false),
-            _             => return Ok("unknown_key".to_string()),
-        };
-
-        // Find collection app window by partial title
-        static FOUND_HWND: std::sync::atomic::AtomicIsize =
-            std::sync::atomic::AtomicIsize::new(0);
-        FOUND_HWND.store(0, std::sync::atomic::Ordering::SeqCst);
-
-        unsafe extern "system" fn enum_proc(hwnd: HWND, _: LPARAM) -> BOOL {
-            let mut buf = [0u16; 512];
-            let len = GetWindowTextW(hwnd, &mut buf);
-            if len > 0 {
-                let title = String::from_utf16_lossy(&buf[..len as usize]);
-                if title.contains("Tag Once Collection App") {
-                    FOUND_HWND.store(hwnd.0 as isize, std::sync::atomic::Ordering::SeqCst);
-                    return BOOL(0);
-                }
-            }
-            BOOL(1)
-        }
-
-        unsafe { let _ = EnumWindows(Some(enum_proc), LPARAM(0)); }
-
-        let raw = FOUND_HWND.load(std::sync::atomic::Ordering::SeqCst);
-        if raw == 0 {
-            return Ok("window_not_found".to_string());
-        }
-
-        let collection_hwnd = HWND(raw as *mut _);
-
-        unsafe {
-            // Get MARK's current window handle and bounds
-            let mark_hwnd = GetForegroundWindow();
-
-            // Helper: build keyboard INPUT
-            let make_key = |vk: u16, up: bool| -> INPUT {
-                INPUT {
-                    r#type: INPUT_KEYBOARD,
-                    Anonymous: windows::Win32::UI::Input::KeyboardAndMouse::INPUT_0 {
-                        ki: KEYBDINPUT {
-                            wVk: VIRTUAL_KEY(vk),
-                            wScan: 0,
-                            dwFlags: if up { KEYEVENTF_KEYUP } else { KEYBD_EVENT_FLAGS(0) },
-                            time: 0,
-                            dwExtraInfo: 0,
-                        }
-                    }
-                }
-            };
-
-            // ── STEP 1: Fake mouse click inside MARK ──────────────────────────────
-            // SendInput mouse click at center-bottom of MARK window.
-            // This wakes up Chromium's keyboard listener BEFORE we switch focus.
-            // Uses MOUSEEVENTF_ABSOLUTE which requires normalized coords (0-65535).
-            // GetWindowRect gives screen coordinates — we convert to normalized.
-            let mut mark_rect = RECT::default();
-            let got_rect = GetWindowRect(mark_hwnd, &mut mark_rect).is_ok();
-
-            if got_rect {
-                let screen_w = GetSystemMetrics(SM_CXSCREEN) as f64;
-                let screen_h = GetSystemMetrics(SM_CYSCREEN) as f64;
-
-                // Target: center-X, 85% down the window (bottom safe area)
-                let target_x = (mark_rect.left + mark_rect.right) / 2;
-                let target_y = mark_rect.top + (((mark_rect.bottom - mark_rect.top) as f64) * 0.85) as i32;
-
-                // Normalize to 0-65535 range required by MOUSEEVENTF_ABSOLUTE
-                let norm_x = ((target_x as f64 / screen_w) * 65535.0) as i32;
-                let norm_y = ((target_y as f64 / screen_h) * 65535.0) as i32;
-
-                let click_down = INPUT {
-                    r#type: INPUT_MOUSE,
-                    Anonymous: windows::Win32::UI::Input::KeyboardAndMouse::INPUT_0 {
-                        mi: MOUSEINPUT {
-                            dx: norm_x,
-                            dy: norm_y,
-                            mouseData: 0,
-                            dwFlags: MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_LEFTDOWN,
-                            time: 0,
-                            dwExtraInfo: 0,
-                        }
-                    }
-                };
-                let click_up = INPUT {
-                    r#type: INPUT_MOUSE,
-                    Anonymous: windows::Win32::UI::Input::KeyboardAndMouse::INPUT_0 {
-                        mi: MOUSEINPUT {
-                            dx: norm_x,
-                            dy: norm_y,
-                            mouseData: 0,
-                            dwFlags: MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_LEFTUP,
-                            time: 0,
-                            dwExtraInfo: 0,
-                        }
-                    }
-                };
-
-                // Fire fake click inside MARK — Chromium wakes up keyboard listener
-                SendInput(&[click_down, click_up], std::mem::size_of::<INPUT>() as i32);
-            }
-
-            // ── STEP 2: ALT trick + focus collection app ──────────────────────────
-            SendInput(
-                &[make_key(VK_MENU.0, false), make_key(VK_MENU.0, true)],
-                std::mem::size_of::<INPUT>() as i32,
-            );
-            SetForegroundWindow(collection_hwnd);
-            std::thread::sleep(std::time::Duration::from_millis(30));
-
-            // ── STEP 3: Send the navigation key to collection app ─────────────────
-            let mut inputs: Vec<INPUT> = Vec::new();
-            if needs_shift { inputs.push(make_key(VK_SHIFT.0, false)); }
-            inputs.push(make_key(vk, false));
-            inputs.push(make_key(vk, true));
-            if needs_shift { inputs.push(make_key(VK_SHIFT.0, true)); }
-            SendInput(&inputs, std::mem::size_of::<INPUT>() as i32);
-
-            std::thread::sleep(std::time::Duration::from_millis(30));
-
-            // ── STEP 4: Return focus to MARK ──────────────────────────────────────
-            if !mark_hwnd.is_invalid() {
-                SendInput(
-                    &[make_key(VK_MENU.0, false), make_key(VK_MENU.0, true)],
-                    std::mem::size_of::<INPUT>() as i32,
-                );
-                SetForegroundWindow(mark_hwnd);
-                std::thread::sleep(std::time::Duration::from_millis(20));
-
-                // ── STEP 5: Fake click AFTER focus returns ─────────────────────────
-                // Chromium goes to sleep every time focus leaves — wake it here,
-                // after focus is back, so it's awake for the NEXT keypress
-                let mut mark_rect2 = RECT::default();
-                if GetWindowRect(mark_hwnd, &mut mark_rect2).is_ok() {
-                    let screen_w = GetSystemMetrics(SM_CXSCREEN) as f64;
-                    let screen_h = GetSystemMetrics(SM_CYSCREEN) as f64;
-                    let target_x = (mark_rect2.left + mark_rect2.right) / 2;
-                    let target_y = mark_rect2.top + (((mark_rect2.bottom - mark_rect2.top) as f64) * 0.85) as i32;
-                    let norm_x = ((target_x as f64 / screen_w) * 65535.0) as i32;
-                    let norm_y = ((target_y as f64 / screen_h) * 65535.0) as i32;
-
-                    let mk_click = |down: bool| -> INPUT {
-                        INPUT {
-                            r#type: INPUT_MOUSE,
-                            Anonymous: windows::Win32::UI::Input::KeyboardAndMouse::INPUT_0 {
-                                mi: MOUSEINPUT {
-                                    dx: norm_x, dy: norm_y, mouseData: 0,
-                                    dwFlags: MOUSEEVENTF_ABSOLUTE | if down { MOUSEEVENTF_LEFTDOWN } else { MOUSEEVENTF_LEFTUP },
-                                    time: 0, dwExtraInfo: 0,
-                                }
-                            }
-                        }
-                    };
-                    SendInput(&[mk_click(true), mk_click(false)], std::mem::size_of::<INPUT>() as i32);
-                }
-            }
-        }
-
-        Ok("sent".to_string())
+    if !std::path::Path::new(&exe_path).exists() {
+        return Err(format!("File not found: {}", exe_path));
     }
 
-    #[cfg(not(target_os = "windows"))]
-    {
-        println!("[MARK SYNC dev] {} -> {}", _exe_name, key_code);
-        Ok("dev_noop".to_string())
+    // Inject the WebView2 debugging-port env var so Chromium opens port 9222
+    Command::new(&exe_path)
+        .env("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", "--remote-debugging-port=9222")
+        .spawn()
+        .map_err(|e| format!("Failed to launch: {}", e))?;
+
+    Ok("launched".to_string())
+}
+
+// ── Check if the CDP debug port is reachable ───────────────────────────────
+#[command]
+fn check_cdp_available() -> Result<bool, String> {
+    match get_ws_debugger_url() {
+        Ok(_) => Ok(true),
+        Err(_) => Ok(false),
     }
+}
+
+// ── HTTP GET 127.0.0.1:9222/json → extract webSocketDebuggerUrl ────────────
+fn get_ws_debugger_url() -> Result<String, String> {
+    let mut stream = TcpStream::connect("127.0.0.1:9222")
+        .map_err(|e| format!("connect failed: {}", e))?;
+    stream
+        .set_read_timeout(Some(std::time::Duration::from_millis(1500)))
+        .ok();
+
+    let req = "GET /json HTTP/1.1\r\nHost: 127.0.0.1:9222\r\nConnection: close\r\n\r\n";
+    stream.write_all(req.as_bytes()).map_err(|e| e.to_string())?;
+
+    let mut response = String::new();
+    stream.read_to_string(&mut response).map_err(|e| e.to_string())?;
+
+    // Find the body (after \r\n\r\n)
+    let body = response
+        .split("\r\n\r\n")
+        .nth(1)
+        .ok_or("no body in response")?;
+
+    // Parse JSON array, find first "page" type with a webSocketDebuggerUrl
+    let parsed: serde_json::Value =
+        serde_json::from_str(body).map_err(|e| format!("json parse: {}", e))?;
+
+    if let Some(arr) = parsed.as_array() {
+        // Prefer a "page" type target
+        for item in arr {
+            let typ = item.get("type").and_then(|t| t.as_str()).unwrap_or("");
+            if typ == "page" {
+                if let Some(url) = item.get("webSocketDebuggerUrl").and_then(|u| u.as_str()) {
+                    return Ok(url.to_string());
+                }
+            }
+        }
+        // Fallback: first item with any webSocketDebuggerUrl
+        for item in arr {
+            if let Some(url) = item.get("webSocketDebuggerUrl").and_then(|u| u.as_str()) {
+                return Ok(url.to_string());
+            }
+        }
+    }
+
+    Err("no webSocketDebuggerUrl found".to_string())
+}
+
+// ── Send a key to the collection app via CDP Input.dispatchKeyEvent ────────
+#[command]
+fn send_key_via_cdp(key_code: String) -> Result<String, String> {
+    use tungstenite::Message;
+
+    // Map key_code → (windowsVirtualKeyCode, key name, code, shift)
+    let (vk, key_name, code, needs_shift): (i64, &str, &str, bool) = match key_code.as_str() {
+        "RIGHT"       => (39, "ArrowRight", "ArrowRight", false),
+        "LEFT"        => (37, "ArrowLeft",  "ArrowLeft",  false),
+        "SHIFT_RIGHT" => (39, "ArrowRight", "ArrowRight", true),
+        "SHIFT_LEFT"  => (37, "ArrowLeft",  "ArrowLeft",  true),
+        "SPACE"       => (32, " ",          "Space",      false),
+        _             => return Err("unknown_key".to_string()),
+    };
+
+    let ws_url = get_ws_debugger_url()?;
+
+    let (mut socket, _resp) = tungstenite::connect(&ws_url)
+        .map_err(|e| format!("ws connect: {}", e))?;
+
+    // CDP modifiers bitmask: Shift = 8
+    let modifiers = if needs_shift { 8 } else { 0 };
+
+    // keyDown
+    let down = serde_json::json!({
+        "id": 1,
+        "method": "Input.dispatchKeyEvent",
+        "params": {
+            "type": "keyDown",
+            "windowsVirtualKeyCode": vk,
+            "nativeVirtualKeyCode": vk,
+            "key": key_name,
+            "code": code,
+            "modifiers": modifiers,
+            "text": if key_code == "SPACE" { " " } else { "" }
+        }
+    });
+    // keyUp
+    let up = serde_json::json!({
+        "id": 2,
+        "method": "Input.dispatchKeyEvent",
+        "params": {
+            "type": "keyUp",
+            "windowsVirtualKeyCode": vk,
+            "nativeVirtualKeyCode": vk,
+            "key": key_name,
+            "code": code,
+            "modifiers": modifiers
+        }
+    });
+
+    socket.send(Message::Text(down.to_string()))
+        .map_err(|e| format!("send down: {}", e))?;
+    socket.send(Message::Text(up.to_string()))
+        .map_err(|e| format!("send up: {}", e))?;
+
+    // Read responses briefly to ensure delivery, then close
+    let _ = socket.read();
+    let _ = socket.close(None);
+
+    Ok("sent".to_string())
+}
+
+// ── Legacy Win32 command — kept for fallback/compatibility ─────────────────
+#[command]
+fn send_key_to_collection_app(_exe_name: String, _key_code: String) -> Result<String, String> {
+    // Superseded by send_key_via_cdp — kept so older JS calls don't error
+    Ok("use_cdp_instead".to_string())
 }
 
 fn main() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![send_key_to_collection_app])
+        .invoke_handler(tauri::generate_handler![
+            launch_collection_app,
+            check_cdp_available,
+            send_key_via_cdp,
+            send_key_to_collection_app,
+        ])
         .run(tauri::generate_context!())
         .expect("error while running MARK");
 }

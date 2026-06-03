@@ -30,18 +30,6 @@ export default function ReviewPage({ session, onDone, onBack }) {
   const [submitting, setSubmitting]           = useState(false)
   const [submitted, setSubmitted]             = useState(false)
 
-  // Keep keyboard focus alive — re-assert on every window focus event
-  useEffect(() => {
-    function onWindowFocus() {
-      setTimeout(() => {
-        try { document.documentElement.focus() } catch(_) {}
-      }, 10)
-    }
-    window.addEventListener('focus', onWindowFocus)
-    setTimeout(() => { try { document.documentElement.focus() } catch(_) {} }, 100)
-    return () => window.removeEventListener('focus', onWindowFocus)
-  }, [])
-
   // Handle keyboard
   useEffect(() => {
     function handleKey(e) {
