@@ -10,11 +10,10 @@ import EventsSidebar from '../components/EventsSidebar'
 
 export default function ReviewPage({ session, onDone, onBack }) {
   const { profile } = useAuth()
+  const { syncNavigation } = useSync((status) => setSyncStatus(status))
+
   const videoRef  = useRef(null)
   const fileInputRef = useRef(null)
-  const focusRef = useRef(null)  // hidden focusable element for keyboard focus restoration
-
-  const { syncNavigation } = useSync((status) => setSyncStatus(status), focusRef)
   const [videoLoaded, setVideoLoaded] = useState(false)
   const [playing, setPlaying]         = useState(false)
   const [currentTime, setCurrentTime] = useState(0)
@@ -161,8 +160,6 @@ export default function ReviewPage({ session, onDone, onBack }) {
 
   return (
     <div style={{height:'100vh',display:'flex',flexDirection:'column',background:'var(--bg)',overflow:'hidden'}}>
-      {/* Hidden focusable element — used to restore keyboard focus after sync */}
-      <div ref={focusRef} tabIndex={0} style={{position:'fixed',width:1,height:1,opacity:0,pointerEvents:'none'}} aria-hidden="true" />
 
       {/* Topbar */}
       <header style={{
