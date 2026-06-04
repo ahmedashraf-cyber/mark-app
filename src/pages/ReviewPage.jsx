@@ -34,9 +34,13 @@ export default function ReviewPage({ session, onDone, onBack }) {
   const [submitted, setSubmitted]             = useState(false)
 
   // Claim keyboard focus when the page mounts.
-  // WebView2 in Tauri 2 does not grab focus automatically, so keydown
-  // events on `window` are silent until something inside the webview is focused.
+  // Two layers needed on Tauri 2 / Windows:
+  // 1. OS level — WebView2 control must have Windows focus (Tauri window API)
+  // 2. DOM level — a focusable element must be focused so keydown fires on window
   useEffect(() => {
+    import('@tauri-apps/api/window')
+      .then(({ getCurrentWindow }) => getCurrentWindow().setFocus())
+      .catch(() => {})
     rootRef.current?.focus()
   }, [])
 
@@ -122,8 +126,12 @@ export default function ReviewPage({ session, onDone, onBack }) {
   function togglePlay() {
     const v = videoRef.current
     if (!v) return
-    if (v.paused) { v.play(); setPlaying(true) }
-    else { v.pause(); setPlaying(false) }
+    if (v.paused) {
+      v.play().then(() => setPlaying(true)).catch(err => console.error('[MARK] play() failed:', err))
+    } else {
+      v.pause()
+      setPlaying(false)
+    }
   }
 
   function seekBy(seconds) {
