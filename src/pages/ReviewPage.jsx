@@ -93,6 +93,7 @@ export default function ReviewPage({ session, onDone, onBack }) {
     const v = videoRef.current
     if (!v) return
     v.currentTime = Math.max(0, Math.min(v.duration || 0, v.currentTime + seconds))
+    setCurrentTime(v.currentTime)
   }
 
   function seekTo(seconds) {
@@ -154,8 +155,11 @@ export default function ReviewPage({ session, onDone, onBack }) {
   }
 
   const formatTime = (s) => {
-    const m = Math.floor(s / 60), sec = Math.floor(s % 60)
-    return `${m}:${sec.toString().padStart(2,'0')}`
+    if (!isFinite(s) || isNaN(s)) return '-:--.---'
+    const m   = Math.floor(s / 60)
+    const sec = Math.floor(s % 60)
+    const ms  = Math.floor((s % 1) * 1000)
+    return `${m}:${sec.toString().padStart(2,'0')}.${ms.toString().padStart(3,'0')}`
   }
 
   return (
