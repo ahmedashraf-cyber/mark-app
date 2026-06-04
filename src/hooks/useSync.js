@@ -1,42 +1,22 @@
-import { useCallback, useRef } from 'react'
+import { useCallback } from 'react'
+import { db } from '../firebase/config'
+import { doc, updateDoc } from 'firebase/firestore'
 
-const COLLECTION_APP_EXE = 'Statsbomb Tag Once collection app.exe'
-
-let tauriInvoke = null
-async function getTauri() {
-  if (tauriInvoke) return tauriInvoke
-  try {
-    const { invoke } = await import('@tauri-apps/api/core')
-    tauriInvoke = invoke
-    return invoke
-  } catch {
-    return null
-  }
-}
-
-export function useSync(onStatusChange) {
+// Sync now flows through Firestore: MARK writes a navCommand to the session doc;
+// the bridge script injected into the collection app listens and moves its video.
+// No focus stealing → no click problem.
+export function useSync(onStatusChange, sessionId) {
   const syncNavigation = useCallback(async (action, shiftHeld) => {
-    const invoke = await getTauri()
-    if (!invoke) return
-
-    const keyMap = {
-      forward:   shiftHeld ? 'SHIFT_RIGHT' : 'RIGHT',
-      backward:  shiftHeld ? 'SHIFT_LEFT'  : 'LEFT',
-      playpause: 'SPACE',
-    }
+    if (!sessionId) return
     try {
-      const result = await invoke('send_key_to_collection_app', {
-        exeName: COLLECTION_APP_EXE,
-        keyCode: keyMap[action] || '',
+      await updateDoc(doc(db, 'mark_sessions', sessionId), {
+        navCommand: { action, shift: shiftHeld, ts: Date.now() },
       })
-      // Update connection status based on result
-      if (onStatusChange) {
-        onStatusChange(result === 'sent' ? 'connected' : 'disconnected')
-      }
+      if (onStatusChange) onStatusChange('connected')
     } catch (e) {
       if (onStatusChange) onStatusChange('disconnected')
     }
-  }, [onStatusChange])
+  }, [onStatusChange, sessionId])
 
   return { syncNavigation }
 }

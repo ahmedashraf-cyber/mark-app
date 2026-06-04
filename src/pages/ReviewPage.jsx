@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
+import { invoke } from '@tauri-apps/api/core'
 import { db } from '../firebase/config'
 import { collection, addDoc, updateDoc, doc, serverTimestamp, increment } from 'firebase/firestore'
 import { useAuth } from '../hooks/useAuth.jsx'
@@ -10,7 +11,7 @@ import EventsSidebar from '../components/EventsSidebar'
 
 export default function ReviewPage({ session, onDone, onBack }) {
   const { profile } = useAuth()
-  const { syncNavigation } = useSync((status) => setSyncStatus(status))
+  const { syncNavigation } = useSync((status) => setSyncStatus(status), session.sessionId)
 
   const videoRef  = useRef(null)
   const fileInputRef = useRef(null)
@@ -24,6 +25,7 @@ export default function ReviewPage({ session, onDone, onBack }) {
   const [errors, setErrors]           = useState([])
   const [pendingTag, setPendingTag]   = useState(null) // { key, isMissing, videoTime }
   const [syncStatus, setSyncStatus]   = useState('disconnected')
+  const [injecting, setInjecting]     = useState(false)
   const [activeKey, setActiveKey]     = useState(null) // last pressed shortcut key
 
   // Done modal
@@ -206,6 +208,23 @@ export default function ReviewPage({ session, onDone, onBack }) {
             Collection app {syncStatus === 'connected' ? 'synced' : 'not detected'}
           </div>
           <div className="tag-pill">{errors.length} errors tagged</div>
+          <button
+            className="btn-ghost"
+            style={{padding:'7px 14px',fontSize:12}}
+            disabled={injecting}
+            onClick={async () => {
+              setInjecting(true)
+              try {
+                await invoke('inject_bridge_script', { sessionId: session.sessionId })
+              } catch (e) {
+                console.error('[MARK] inject failed:', e)
+              } finally {
+                setInjecting(false)
+              }
+            }}
+          >
+            {injecting ? 'Injecting…' : '⚡ Inject Bridge'}
+          </button>
           <button className="btn-orange" style={{padding:'7px 18px',fontSize:13}} onClick={() => setShowDoneModal(true)}>
             Done ✓
           </button>
