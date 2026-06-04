@@ -1,6 +1,6 @@
 [package]
 name = "mark-app"
-version = "1.6.0"
+version = "1.7.0"
 description = "MARK — Review App for Hudl Egypt"
 authors = ["Ahmed Ashraf"]
 edition = "2021"
@@ -18,5 +18,5 @@ windows = { version = "0.61", features = [
   "Win32_Foundation",
   "Win32_UI_WindowsAndMessaging",
   "Win32_UI_Input_KeyboardAndMouse",
-  "Win32_System_Threading",
+  "Win32_System_LibraryLoader",
 ] }
