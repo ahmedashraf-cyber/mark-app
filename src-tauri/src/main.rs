@@ -6,16 +6,17 @@ use tauri::command;
 fn send_key_to_collection_app(_exe_name: String, key_code: String) -> Result<String, String> {
     #[cfg(target_os = "windows")]
     {
-        use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
+        use windows::Win32::Foundation::{HWND, LPARAM};
         use windows::Win32::UI::WindowsAndMessaging::{
             EnumWindows, GetWindowTextW, GetForegroundWindow,
-            SetForegroundWindow, PostMessageA, WM_KEYDOWN, WM_KEYUP,
-            ShowWindow, SW_SHOW,
+            SetForegroundWindow, GetWindowThreadProcessId,
         };
         use windows::Win32::UI::Input::KeyboardAndMouse::{
             SendInput, INPUT, INPUT_KEYBOARD, KEYBDINPUT, KEYBD_EVENT_FLAGS,
             KEYEVENTF_KEYUP, VK_LEFT, VK_RIGHT, VK_SHIFT, VK_SPACE, VK_MENU,
+            VIRTUAL_KEY,
         };
+        use windows::Win32::System::Threading::AttachThreadInput;
         use windows::core::BOOL;
 
         let (vk, needs_shift) = match key_code.as_str() {
@@ -53,54 +54,20 @@ fn send_key_to_collection_app(_exe_name: String, key_code: String) -> Result<Str
         }
 
         let collection_hwnd = HWND(raw as *mut _);
-        
+
         unsafe {
-            // Save current foreground window (MARK itself)
             let mark_hwnd = GetForegroundWindow();
 
-            // Briefly bring collection app to foreground so SendInput works
-            // Use ALT key trick to allow SetForegroundWindow from another process
-            let alt_down = INPUT {
-                r#type: INPUT_KEYBOARD,
-                Anonymous: windows::Win32::UI::Input::KeyboardAndMouse::INPUT_0 {
-                    ki: KEYBDINPUT {
-                        wVk: VK_MENU,
-                        wScan: 0,
-                        dwFlags: KEYBD_EVENT_FLAGS(0),
-                        time: 0,
-                        dwExtraInfo: 0,
-                    }
-                }
-            };
-            let alt_up = INPUT {
-                r#type: INPUT_KEYBOARD,
-                Anonymous: windows::Win32::UI::Input::KeyboardAndMouse::INPUT_0 {
-                    ki: KEYBDINPUT {
-                        wVk: VK_MENU,
-                        wScan: 0,
-                        dwFlags: KEYEVENTF_KEYUP,
-                        time: 0,
-                        dwExtraInfo: 0,
-                    }
-                }
-            };
-            SendInput(&[alt_down, alt_up], std::mem::size_of::<INPUT>() as i32);
-
-            // Now focus collection app
-            SetForegroundWindow(collection_hwnd);
-
-            // Small delay for focus to take effect
-            std::thread::sleep(std::time::Duration::from_millis(30));
-
-            // Build key inputs
-            let mut inputs: Vec<INPUT> = Vec::new();
+            // Get thread IDs for both windows
+            let mark_thread = GetWindowThreadProcessId(mark_hwnd, None);
+            let collection_thread = GetWindowThreadProcessId(collection_hwnd, None);
 
             let make_key = |vk: u16, up: bool| -> INPUT {
                 INPUT {
                     r#type: INPUT_KEYBOARD,
                     Anonymous: windows::Win32::UI::Input::KeyboardAndMouse::INPUT_0 {
                         ki: KEYBDINPUT {
-                            wVk: windows::Win32::UI::Input::KeyboardAndMouse::VIRTUAL_KEY(vk),
+                            wVk: VIRTUAL_KEY(vk),
                             wScan: 0,
                             dwFlags: if up { KEYEVENTF_KEYUP } else { KEYBD_EVENT_FLAGS(0) },
                             time: 0,
@@ -110,17 +77,44 @@ fn send_key_to_collection_app(_exe_name: String, key_code: String) -> Result<Str
                 }
             };
 
+            // ── ATTACH input queues — merges MARK + collection keyboard state ──
+            // With queues merged, focus transfers are "deep" and Windows treats
+            // both apps as one input context. This is what lets the webview keep
+            // its keyboard state after we return focus.
+            let attached = mark_thread != 0
+                && collection_thread != 0
+                && mark_thread != collection_thread
+                && AttachThreadInput(mark_thread, collection_thread, true).as_bool();
+
+            // ALT trick still helps satisfy foreground-rights
+            SendInput(
+                &[make_key(VK_MENU.0, false), make_key(VK_MENU.0, true)],
+                std::mem::size_of::<INPUT>() as i32,
+            );
+
+            // Focus collection app — works deeply now that queues are attached
+            SetForegroundWindow(collection_hwnd);
+            std::thread::sleep(std::time::Duration::from_millis(20));
+
+            // Send the navigation key
+            let mut inputs: Vec<INPUT> = Vec::new();
             if needs_shift { inputs.push(make_key(VK_SHIFT.0, false)); }
             inputs.push(make_key(vk, false));
             inputs.push(make_key(vk, true));
             if needs_shift { inputs.push(make_key(VK_SHIFT.0, true)); }
-
             SendInput(&inputs, std::mem::size_of::<INPUT>() as i32);
 
-            // Return focus to MARK after brief delay
-            std::thread::sleep(std::time::Duration::from_millis(30));
+            std::thread::sleep(std::time::Duration::from_millis(20));
+
+            // Return focus to MARK — because queues are attached, the webview
+            // keyboard state is restored without needing a physical click
             if !mark_hwnd.is_invalid() {
                 SetForegroundWindow(mark_hwnd);
+            }
+
+            // ── DETACH input queues — CRITICAL to prevent freeze ──
+            if attached {
+                let _ = AttachThreadInput(mark_thread, collection_thread, false);
             }
         }
 
