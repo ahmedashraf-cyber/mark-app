@@ -3,6 +3,7 @@ import { db } from '../firebase/config'
 import { collection, query, where, getDocs, doc, setDoc, getDoc, serverTimestamp } from 'firebase/firestore'
 import { useAuth } from '../hooks/useAuth.jsx'
 import MATCHES, { findMatch } from '../data/matches.js'
+import { CURRENT_VERSION } from '../hooks/useUpdateCheck'
 
 const HALVES = [
   { id: '1H', label: '1st Half' },
@@ -119,6 +120,7 @@ export default function SessionSetupPage({ onSessionStart, lastResult }) {
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M12 2L3 7l9 5 9-5-9-5z" fill="white"/><path d="M3 12l9 5 9-5" stroke="white" strokeWidth="2" strokeLinecap="round"/></svg>
           </div>
           <span style={{fontFamily:'Inter',fontWeight:800,fontSize:16,color:'var(--t-1)'}}>MARK</span>
+          <span style={{fontSize:11,color:'var(--t-3)',fontWeight:600,marginLeft:2}}>Review App · v{CURRENT_VERSION}</span>
         </div>
         <div style={{display:'flex',alignItems:'center',gap:12}}>
           <span style={{fontSize:12,color:'var(--t-3)'}}>{profile?.email}</span>
