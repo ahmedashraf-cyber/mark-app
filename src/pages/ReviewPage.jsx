@@ -1,4 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
+import { listen } from '@tauri-apps/api/event'
+import { invoke } from '@tauri-apps/api/core'
 import { db } from '../firebase/config'
 import { collection, addDoc, updateDoc, doc, serverTimestamp, increment } from 'firebase/firestore'
 import { useAuth } from '../hooks/useAuth.jsx'
@@ -81,6 +83,33 @@ export default function ReviewPage({ session, onDone, onBack }) {
     window.addEventListener('keydown', handleKey)
     return () => window.removeEventListener('keydown', handleKey)
   }, [pendingTag, showDoneModal, syncNavigation])
+
+  // Global hook events: Rust emits mark://nav when it swallows an arrow/space
+  // and handles the Collection App itself. We only move MARK's video here.
+  useEffect(() => {
+    let unlisten
+    listen('mark://nav', (e) => {
+      const { action, shift } = e.payload
+      if (action === 'playpause') { togglePlay(); return }
+      const ms = shift ? 200 : 600
+      const dir = action === 'forward' ? 1 : -1
+      seekBy(dir * ms / 1000)
+    })
+      .then(fn => { unlisten = fn })
+      .catch(() => {}) // silently ignore on non-Tauri / non-Windows dev
+    return () => { unlisten?.() }
+  }, []) // togglePlay/seekBy only reference stable videoRef and state setters
+
+  // Sync status dot: updated by the worker thread after each Collection App attempt.
+  useEffect(() => {
+    let unlisten
+    listen('mark://sync-status', (e) => {
+      setSyncStatus(e.payload.connected ? 'connected' : 'disconnected')
+    })
+      .then(fn => { unlisten = fn })
+      .catch(() => {})
+    return () => { unlisten?.() }
+  }, [])
 
   function togglePlay() {
     const v = videoRef.current
@@ -293,6 +322,8 @@ export default function ReviewPage({ session, onDone, onBack }) {
                   placeholder="e.g. 40"
                   value={reviewedEvents}
                   onChange={e => setReviewedEvents(e.target.value)}
+                  onFocus={() => invoke('set_input_focused', { focused: true }).catch(() => {})}
+                  onBlur={() => invoke('set_input_focused', { focused: false }).catch(() => {})}
                   autoFocus
                   style={{marginBottom:20}}
                 />
