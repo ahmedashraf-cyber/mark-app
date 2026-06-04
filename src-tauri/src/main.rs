@@ -148,9 +148,18 @@ fn inject_bridge_windows(session_id: &str) -> Result<String, String> {
         );
         sleep(400);
         SendInput(&[vk(VK_RETURN.0, false), vk(VK_RETURN.0, true)], sz);
+        sleep(500); // let the script run & the bridge panel mount
+
+        // 6. Close DevTools — Alt+Ctrl+I again toggles it shut.
+        // Collection app is still focused here, so the keystroke reaches it.
+        SendInput(
+            &[vk(VK_MENU.0, false), vk(VK_CONTROL.0, false), vk(0x49, false),
+              vk(0x49, true), vk(VK_CONTROL.0, true), vk(VK_MENU.0, true)],
+            sz,
+        );
         sleep(300);
 
-        // 6. Return focus to MARK
+        // 7. Return focus to MARK
         if !mark_hwnd.is_invalid() {
             SendInput(&[vk(VK_MENU.0, false), vk(VK_MENU.0, true)], sz);
             let _ = SetForegroundWindow(mark_hwnd);
