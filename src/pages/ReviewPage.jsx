@@ -16,6 +16,7 @@ export default function ReviewPage({ session, onDone, onBack }) {
 
   const videoRef  = useRef(null)
   const fileInputRef = useRef(null)
+  const rootRef = useRef(null)
   const [videoLoaded, setVideoLoaded] = useState(false)
   const [playing, setPlaying]         = useState(false)
   const [currentTime, setCurrentTime] = useState(0)
@@ -31,6 +32,13 @@ export default function ReviewPage({ session, onDone, onBack }) {
   const [reviewedEvents, setReviewedEvents]   = useState('')
   const [submitting, setSubmitting]           = useState(false)
   const [submitted, setSubmitted]             = useState(false)
+
+  // Claim keyboard focus when the page mounts.
+  // WebView2 in Tauri 2 does not grab focus automatically, so keydown
+  // events on `window` are silent until something inside the webview is focused.
+  useEffect(() => {
+    rootRef.current?.focus()
+  }, [])
 
   // Handle keyboard
   useEffect(() => {
@@ -183,12 +191,18 @@ export default function ReviewPage({ session, onDone, onBack }) {
   }
 
   const formatTime = (s) => {
+    if (!isFinite(s) || isNaN(s)) return '-:--'
     const m = Math.floor(s / 60), sec = Math.floor(s % 60)
     return `${m}:${sec.toString().padStart(2,'0')}`
   }
 
   return (
-    <div style={{height:'100vh',display:'flex',flexDirection:'column',background:'var(--bg)',overflow:'hidden'}}>
+    <div
+      ref={rootRef}
+      tabIndex={-1}
+      onBlur={e => { if (!e.currentTarget.contains(e.relatedTarget)) rootRef.current?.focus() }}
+      style={{height:'100vh',display:'flex',flexDirection:'column',background:'var(--bg)',overflow:'hidden',outline:'none'}}
+    >
 
       {/* Topbar */}
       <header style={{
