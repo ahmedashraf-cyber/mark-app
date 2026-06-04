@@ -14,7 +14,9 @@ export default function ReviewPage({ session, onDone, onBack }) {
 
   const videoRef  = useRef(null)
   const fileInputRef = useRef(null)
+  const rootRef   = useRef(null)
   const [videoLoaded, setVideoLoaded] = useState(false)
+  const [reviewStarted, setReviewStarted] = useState(false)
   const [playing, setPlaying]         = useState(false)
   const [currentTime, setCurrentTime] = useState(0)
   const [duration, setDuration]       = useState(0)
@@ -33,6 +35,8 @@ export default function ReviewPage({ session, onDone, onBack }) {
   // Handle keyboard
   useEffect(() => {
     function handleKey(e) {
+      // Block until the reviewer has clicked "Start Reviewing"
+      if (!reviewStarted) return
       // Block if modal open
       if (pendingTag || showDoneModal) return
 
@@ -80,7 +84,7 @@ export default function ReviewPage({ session, onDone, onBack }) {
     }
     window.addEventListener('keydown', handleKey)
     return () => window.removeEventListener('keydown', handleKey)
-  }, [pendingTag, showDoneModal, syncNavigation])
+  }, [pendingTag, showDoneModal, syncNavigation, reviewStarted])
 
   function togglePlay() {
     const v = videoRef.current
@@ -108,6 +112,18 @@ export default function ReviewPage({ session, onDone, onBack }) {
     const url = URL.createObjectURL(file)
     const v = videoRef.current
     if (v) { v.src = url; v.load(); setVideoLoaded(true) }
+  }
+
+  // Called by the "Start Reviewing" button. This is a REAL user click, so it
+  // properly wakes the webview's keyboard — after this, arrow keys register
+  // immediately without any further clicks for the whole session.
+  function startReview() {
+    setReviewStarted(true)
+    // Grab focus on both layers so keys flow right away
+    try { rootRef.current?.focus() } catch(_) {}
+    import('@tauri-apps/api/window')
+      .then(({ getCurrentWindow }) => getCurrentWindow().setFocus())
+      .catch(() => {})
   }
 
   async function handleTagConfirm(tagData) {
@@ -163,7 +179,11 @@ export default function ReviewPage({ session, onDone, onBack }) {
   }
 
   return (
-    <div style={{height:'100vh',display:'flex',flexDirection:'column',background:'var(--bg)',overflow:'hidden'}}>
+    <div
+      ref={rootRef}
+      tabIndex={-1}
+      style={{height:'100vh',display:'flex',flexDirection:'column',background:'var(--bg)',overflow:'hidden',outline:'none'}}
+    >
 
       {/* Topbar */}
       <header style={{
@@ -231,6 +251,37 @@ export default function ReviewPage({ session, onDone, onBack }) {
               <div style={{textAlign:'center'}}>
                 <div style={{fontSize:14,fontWeight:600,color:'var(--t-2)'}}>Drop video file here</div>
                 <div style={{fontSize:12,color:'var(--t-3)',marginTop:4}}>or click to browse</div>
+              </div>
+            </div>
+          )}
+
+          {/* Start Reviewing gate — video is loaded but review not yet started.
+              The button click is a real user interaction that wakes the keyboard,
+              so arrow keys sync immediately for the rest of the session. */}
+          {videoLoaded && !reviewStarted && (
+            <div style={{
+              position:'absolute', inset:0, zIndex:50,
+              display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', gap:20,
+              background:'rgba(10,10,12,0.92)', backdropFilter:'blur(4px)',
+            }}>
+              <div style={{width:64,height:64,borderRadius:18,background:'var(--p2)',display:'flex',alignItems:'center',justifyContent:'center'}}>
+                <svg width="30" height="30" viewBox="0 0 24 24" fill="none">
+                  <path d="M5 3l14 9-14 9V3z" fill="white"/>
+                </svg>
+              </div>
+              <div style={{textAlign:'center'}}>
+                <div style={{fontFamily:'Inter',fontWeight:800,fontSize:20,color:'var(--t-1)'}}>Ready to Review</div>
+                <div style={{fontSize:13,color:'var(--t-3)',marginTop:6,maxWidth:340,lineHeight:1.5}}>
+                  Make sure the collection app is open, then click below to begin. Keyboard controls activate when you start.
+                </div>
+              </div>
+              <button className="btn-orange" style={{padding:'14px 40px',fontSize:16,fontWeight:700}} onClick={startReview}>
+                Start Reviewing →
+              </button>
+              <div style={{fontSize:11,color:'var(--t-3)',display:'flex',gap:16,marginTop:4}}>
+                <span><span className="mono" style={{color:'var(--p2)'}}>← →</span> seek 400ms</span>
+                <span><span className="mono" style={{color:'var(--p2)'}}>Shift+← →</span> seek 40ms</span>
+                <span><span className="mono" style={{color:'var(--p2)'}}>Space</span> play/pause</span>
               </div>
             </div>
           )}
