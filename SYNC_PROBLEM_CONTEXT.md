@@ -1,184 +1,166 @@
-# MARK ↔ Collection App Sync — Full Technical Context
+# MARK ↔ Collection App Sync — SOLVED ✅ (Full History & Architecture)
 
-> Living document. Tracks the keyboard-sync problem between MARK and the Tag Once
-> Collection App, every approach tried, decisions made, and current status.
-> Last updated alongside MARK v1.3.0.
-
----
-
-## 1. The Project
-
-**MARK** is a Windows desktop review app:
-- Tauri 2 = Rust backend + React 19 frontend running inside a Chromium **WebView2**
-- Companion to **FIELD** (web-based training-ops platform for Hudl Egypt)
-- Reviewers watch match video and tag errors in data-collection work
-
-**The Collection App** ("Statsbomb Tag Once collection app"):
-- Separate Windows desktop app built with **Wails** (Go backend + Chromium **WebView2** frontend)
-- Closed source — we cannot modify it
-- Window title: `Tag Once Collection App / 2.0.0-tornado-2026.5.2-tag-once / staging`
-- DevTools (F12) disabled
-- Arrow keys move its video regardless of where you click on the page (global page shortcut)
-
-Both apps run side by side on the reviewer's machine.
+> **STATUS: SOLVED in v2.1.0.** After ~20 failed approaches across multiple sessions,
+> the one-click problem was eliminated by abandoning Windows-focus input entirely and
+> routing sync through **Firestore** into a **bridge script injected into the collection
+> app**. This document records the complete journey, every decision, why each approach
+> failed, and the final working architecture — so the win is never lost and the dead
+> ends are never re-tried.
 
 ---
 
-## 2. The Goal
+## 1. THE PROBLEM (what we fought for days)
 
-When a reviewer presses an arrow key in MARK:
-- MARK's own video moves forward/backward (always worked)
-- **The Collection App's video should move the same amount at the same time** ← the sync
+**MARK** (Tauri 2 = Rust + WebView2, our app) needed to sync video navigation with the
+**Collection App** ("Statsbomb Tag Once collection app" — Electron, closed source, not ours).
+When a reviewer pressed arrow keys in MARK, BOTH videos should seek together:
+- Arrow = 400ms, Shift+Arrow = 40ms, Space = play/pause (matching the collection app)
 
-The dream: press arrow → both videos move → no mouse interaction → MARK keyboard stays fully responsive.
+The original method (SendInput keystrokes + focus-steal) **worked** — both videos moved —
+**BUT** after each focus-steal, MARK's own WebView2 keyboard went to sleep and required a
+**physical mouse click** to wake. This "one-click-after-every-sync" was the core bug.
 
----
+### The three immovable walls (why it was so hard)
+1. The collection app only accepts input when **focused** (its design)
+2. Chromium **sleeps its keyboard listener** on programmatic focus return (Chromium's design)
+3. Only **real hardware input** wakes it; injected input is rejected via `LLMHF_INJECTED` (Chromium security)
 
-## 3. Current State (v1.3.0)
-
-- Sync **functions** — pressing an arrow in MARK does move the Collection App's video
-- Green dot shows "Collection app synced"
-- **Remaining friction:** after each sync, MARK's Chromium webview loses internal keyboard
-  focus, so the reviewer must click once inside MARK before the next arrow key registers
-
----
-
-## 4. The Core Technical Barrier
-
-**Chromium maintains its own internal keyboard-focus state, separate from Windows OS focus.**
-
-The working sync method (`SendInput`) briefly switches OS focus to the Collection App to
-deliver the keystroke, then switches back to MARK. When focus returns to MARK:
-- Windows says "MARK is the foreground window" — true at OS level
-- Chromium inside MARK says "no real user interaction happened, I'm staying asleep"
-- Next keypress reaches the OS window but Chromium ignores it until a **real physical mouse
-  click** wakes it
-
-Widely-documented, essentially-unsolved problem across Tauri, Electron, WebView2, Flutter.
-Confirmed via Tauri issues #5464, #208, #13919, MicrosoftEdge/WebView2Feedback, and many
-Stack Overflow threads. `SendInput`-injected input carries the `LLMHF_INJECTED` flag which
-Chromium detects and treats as untrusted.
+None were controllable from our side. The collection app is closed-source Electron with the
+remote debugging port **disabled at build time** (confirmed by testing — see §3).
 
 ---
 
-## 5. Every Approach Tried
+## 2. THE WINNING ARCHITECTURE (v2.1.0) ✅
 
-| #  | Approach | Result | Why it failed |
-|----|----------|--------|---------------|
-| 1  | PostMessage WM_KEYDOWN to Collection top-level | FAIL | Chromium ignores PostMessage'd keys |
-| 2  | PostMessage to Chrome_WidgetWin_1 child | FAIL | Wrong child window |
-| 3  | WM_SETFOCUS to MARK Chrome child | FAIL | Chromium ignores focus msgs not from real user |
-| 4  | WM_LBUTTONDOWN/UP fake click via PostMessage | FAIL | Rejected by input-integrity check |
-| 5  | Global WH_KEYBOARD_LL hook forwarding keys | FAIL | Collection App (Chromium) ignored forwarded keys |
-| 6  | PostMessage to Chrome_RenderWidgetHostHWND deep child | FAIL | Documented unreliable by Chromium team |
-| 7  | Tauri window.set_focus() instead of raw Win32 | FAIL | Doesn't fully trigger WebView2 MoveFocus here |
-| 8  | **SendInput keyboard + ALT-trick + SetForegroundWindow** | **WORKS, needs click** | Current working baseline |
-| 9  | SendInput fake mouse click BEFORE focus switch | FAIL | Chromium detects LLMHF_INJECTED, ignores |
-| 10 | SendInput fake mouse click AFTER focus returns | FAIL | Same injected-flag rejection |
-| 11 | JS window.focus() + document.body.focus() after invoke | PARTIAL | Worked for exactly 2 presses; body not persistently focusable |
-| 12 | JS hidden tabIndex=0 div as focus target | FAIL | Black-screen crash (hook-order bug), then no improvement |
-| 13 | JS window focus-event listener + documentElement.focus() | FAIL | No improvement |
-| 14 | CDP Input.dispatchKeyEvent | FAIL | CDP connects, but key needs a focused element in page |
-| 15 | CDP Runtime.evaluate synthetic KeyboardEvent | FAIL | Synthetic events are isTrusted:false; app ignores |
-| 16 | CDP Runtime.evaluate direct video.currentTime += | FAIL | Not a standard HTML5 video, or wrong CDP page target |
+The breakthrough: **stop sending input to the collection app at all.** Instead:
 
----
-
-## 6. The CDP Chapter (major detour)
-
-A developer consultation pointed to the **Chrome DevTools Protocol (CDP) backdoor** —
-theoretically perfect because it injects directly into Chromium's V8 engine, bypassing all
-Windows focus mechanics.
-
-**Decisions made for CDP:**
-- Changed workflow so **MARK launches the Collection App** (Rust `std::process::Command`)
-  with env var `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9222`,
-  opening a debug port without modifying the Collection App
-- Built one-time path-setup UI (browse to exe, save to localStorage)
-- Connected from Rust via `tungstenite` WebSocket to `127.0.0.1:9222/json`
-
-**What we learned:**
-- Launch + debug-port injection WORKED (green "connected" banner)
-- None of the three CDP methods moved the Collection App's video
-- Conclusion: the Collection App's video player either isn't a standard HTML5 `<video>`
-  element, validates `event.isTrusted`, or the CDP page target was wrong
-
-Reverted CDP entirely back to the working SendInput version.
-
-### Path-resolution sub-issue (during CDP)
-- `.lnk` shortcut path failed (shortcuts can't carry env vars)
-- Real `.exe` path still failed initially
-- Fix attempted: strip quotes/whitespace, set working dir, surface exact received path in error
-- Became moot once CDP was abandoned
-
----
-
-## 7. Current Barriers
-
-1. **Fundamental wall:** Chromium won't re-activate its keyboard listener after a programmatic
-   focus return — only a real physical mouse click does. Every out-of-process trick is blocked
-   by Chromium's input-trust model.
-2. **CDP blocked too:** even injecting directly into the engine didn't drive the Collection
-   App's video — suggests the video isn't controllable via standard DOM/keyboard events.
-3. **No source access:** can't modify the Collection App (Wails, closed source), so no
-   cooperative API/IPC endpoint.
-
----
-
-## 8. The One Untested Option
-
-**`AttachThreadInput`** — the only cross-process focus technique not yet tried. Temporarily
-merges MARK's and the Collection App's input thread queues so Windows treats focus transfer
-as legitimate and "deep" (potentially reaching the WebView2 controller).
-**Critical risk:** must detach immediately or one app hanging freezes the other.
-
-```rust
-let mark_thread = GetWindowThreadProcessId(mark_hwnd, None);
-let collection_thread = GetWindowThreadProcessId(collection_hwnd, None);
-AttachThreadInput(mark_thread, collection_thread, true);   // merge
-SetForegroundWindow(collection_hwnd);
-// sleep + SendInput(arrow) ...
-SetForegroundWindow(mark_hwnd);
-AttachThreadInput(mark_thread, collection_thread, false);  // detach — CRITICAL
+```
+Reviewer presses arrow in MARK
+        ↓
+MARK writes a navCommand to Firestore:  mark_sessions/{sessionId}.navCommand = {action, shift, ts}
+        ↓
+A "bridge script" running INSIDE the collection app listens via onSnapshot
+        ↓
+Bridge script moves the collection app's video directly:  video.currentTime += 0.4
 ```
 
+Because the bridge runs **inside** the collection app, it controls the video natively
+(`document.querySelector('video').currentTime += step`) — **no focus steal, no keystrokes,
+no click.** MARK never touches the collection app's focus. Problem dissolved.
+
+### How the bridge gets in (the "Inject Bridge" button)
+The collection app's DevTools console is the only channel to run JS inside it, and it's
+human-only (no debug port). To automate the paste, MARK's Rust backend (`inject_bridge_script`):
+1. Focuses the collection app (ALT-tap + SetForegroundWindow)
+2. Sends **Alt+Ctrl+I** to open DevTools, **Ctrl+Shift+J** to focus the console
+3. Types **"allow pasting"** using **Unicode character injection** (`KEYEVENTF_UNICODE`,
+   char-by-char) — the KEY TRICK: Chromium treats Unicode-injected chars as *typed*, not
+   pasted, satisfying the self-XSS guard that normally blocks pasting
+4. Puts the bridge script (with `__SESSION_ID__` replaced) on the clipboard
+5. Sends **Ctrl+V** then **Enter** to paste and run it
+6. Returns focus to MARK
+
+The reviewer clicks **⚡ Inject Bridge** once per session, signs into the bridge panel with
+their FIELD account (Firebase caches this, so subsequent sessions skip login), and the green
+"Connected" panel appears. From then on, arrows in MARK sync both videos with zero clicks.
+
+### Files involved
+- `src-tauri/src/bridge_script.js` — the injected script (Firebase compat CDN + floating panel
+  + auth + `onSnapshot` listener on `mark_sessions/{sid}.navCommand` → moves video)
+- `src-tauri/src/main.rs` — `inject_bridge_script` command (the Unicode-typing + clipboard + paste dance)
+- `src/hooks/useSync.js` — writes `navCommand` to Firestore (no more Rust SendInput sync)
+- `src/pages/ReviewPage.jsx` — ⚡ Inject Bridge button + passes `session.sessionId` to useSync
+- `src-tauri/Cargo.toml` — added `Win32_System_DataExchange` + `Win32_System_Memory` (clipboard)
+
+### Tagging note
+Error tagging, timeline, and quality score remain in **MARK's own window** (writing to
+Firebase → FIELD), unchanged. Only the *video sync* moved to the bridge. This was a
+deliberate decision — sync was the only broken part; tagging always worked.
+
 ---
 
-## 9. Current Working Baseline (to revert to if needed)
+## 3. EVERYTHING TRIED BEFORE THE WIN (do NOT re-attempt — all failed)
 
-Commit message: `revert: back to working SendInput sync (works, needs one click) — bump to v1.3.0`
+### Input / focus approaches (all failed — the "click" survived all of them):
+1. PostMessage WM_KEYDOWN to collection top-level → ignored
+2. PostMessage to `Chrome_WidgetWin_1` child → wrong target
+3. WM_SETFOCUS to MARK's Chrome child → ignored (not from real user)
+4. WM_LBUTTONDOWN/UP fake click via PostMessage → rejected
+5. Global WH_KEYBOARD_LL hook forwarding keys → collection ignored PostMessage keys
+6. PostMessage to `Chrome_RenderWidgetHostHWND` deep child → unreliable, failed
+7. Tauri `window.set_focus()` → didn't fix
+8. **SendInput keyboard + ALT-trick + SetForegroundWindow → WORKED but needed the click (old baseline)**
+9. SendInput fake mouse click before focus switch → rejected (injected)
+10. SendInput fake mouse click after focus return → rejected (injected)
+11. JS `window.focus()` + `document.body.focus()` → worked for exactly 2 presses then died
+12. JS hidden `tabIndex=0` div focus target → black screen (hook-order bug), then no help
+13. JS `window` focus-event listener + `documentElement.focus()` → no help
+14. Global WH_KEYBOARD_LL hook → Tauri event for MARK video + worker thread for collection
+    (v1.4.0 & v1.8.0, with capability permissions + rootRef focus anchor) → no detection/green/playpause in practice
+15. AttachThreadInput (merge input queues) → broke sync entirely (v1.6.0)
+16. "Start Reviewing" button to make the click intentional (v2.0.0) → click still needed after first sync
 
-Rust `send_key_to_collection_app(exe_name, key_code)` in `src-tauri/src/main.rs`:
-1. EnumWindows partial-title match on `"Tag Once Collection App"` → collection HWND
-2. GetForegroundWindow() → save MARK HWND
-3. SendInput ALT down+up (unlocks cross-process SetForegroundWindow)
-4. SetForegroundWindow(collection), sleep 30ms
-5. SendInput arrow key (+ Shift if needed), sleep 30ms
-6. SetForegroundWindow(mark)
+### CDP / debug-port approaches (all failed — port disabled in build):
+17. Launch collection with `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port` → wrong mechanism (Electron, not WebView2)
+18. CDP `Input.dispatchKeyEvent` → port refused
+19. CDP `Runtime.evaluate` synthetic KeyboardEvent → port refused / isTrusted issues
+20. CDP `Runtime.evaluate` direct `video.currentTime +=` → port refused
 
-windows crate 0.61, features: Win32_Foundation, Win32_UI_WindowsAndMessaging,
-Win32_UI_Input_KeyboardAndMouse, Win32_System_LibraryLoader.
+### On-machine launch-flag tests (all confirmed the port is disabled at build):
+- `...exe --remote-debugging-port=9222` → `127.0.0.1:9222/json` → ERR_CONNECTION_REFUSED
+- `...exe --remote-debugging-port=9222 --remote-allow-origins=*` → refused
+- `...exe --auto-open-devtools-for-tabs` → app opened to login page, DevTools did NOT auto-open → launch flags ignored
+- All tested with every collection-app instance killed first (ruled out single-instance lock eating the flag)
 
-Key crate gotchas learned:
-- BOOL from `windows::core`, not Win32::Foundation
-- VK_* from Win32_UI_Input_KeyboardAndMouse, not WindowsAndMessaging
-- KBDLLHOOKSTRUCT from Win32_UI_WindowsAndMessaging
-- PostMessageA / EnumChildWindows take Option<HWND> (wrap with Some())
-- FindWindowA returns Result<HWND> (needs .map_err()?)
-- SetWindowsHookExW takes Option<HINSTANCE> (cast HMODULE.0)
-- CallNextHookEx takes Option<HHOOK>
-- MOUSEINPUT / MOUSEEVENTF_* live in KeyboardAndMouse module
+### Researched & ruled out:
+- `electron-inject` and all world injection tools → all require the disabled debug port
+- `--inspect` / `--inspect-brk` (main process) → launch-flag, ignored by this build
+- `webContents.debugger` API → must be called from inside the app's own code
+- `second-instance` arg forwarding → app must have code to handle it; can't inject
+- Modifying `app.asar` on disk → user forbade modifying the collection app (+ possible integrity fuses)
+- UI Automation (accessibility API) → only drives visible accessible controls; video has no visible buttons/scrubber
+- Contacting the collection app dev team → user ruled out
+- Rebuilding MARK in Electron → changes none of the 3 walls (all on collection app's side)
 
 ---
 
-## 10. Honest Assessment
+## 4. KEY DISCOVERIES THAT MADE THE WIN POSSIBLE
 
-The one-click requirement may be the practical ceiling for syncing two independent Chromium
-apps without the target app's cooperation. The friction is minor — reviewers click once when
-starting, then work normally. v1.3.0 is fully usable.
+1. **The collection app's video is a standard HTML5 `<video>`** — confirmed in its DevTools:
+   `document.querySelectorAll('video').length` → `1`, and `video.currentTime += 0.4` MOVES it.
+2. **JS inside the collection app controls the video with zero clicks** — proven by pasting a
+   test panel into DevTools (panel appeared, video moved, only Firebase write blocked by auth).
+3. **The "allow pasting" self-XSS guard** can be bypassed by typing those words via
+   **Unicode key injection** (chars are seen as typed, not pasted) — this enabled automation.
+4. **Firestore as the sync transport** removes the need for any cross-process input — the
+   collection app pulls commands from Firebase instead of MARK pushing keystrokes to it.
 
-Realistic paths forward, in order of promise:
-1. **AttachThreadInput** — untested, designed for exactly this problem
-2. **Ask the Collection App's developers** to add a small CDP-friendly hook or a localhost
-   command endpoint — would make CDP work instantly
-3. **Accept the one-click** as a known limitation
+---
+
+## 5. STILL-VALID CONSTRAINTS (carry forward)
+- Do NOT contact / depend on the collection app dev team
+- Do NOT modify the collection app's installed files (app.asar etc.)
+- Collection app requires login each launch — cannot be auto-relaunched
+- Never hardcode/share credentials
+
+---
+
+## 6. OPEN / FUTURE
+- The ⚡ Inject Bridge auto-injection relies on timed SendInput steps (DevTools open, type, paste).
+  It worked, but is timing-sensitive across machines; if a reviewer's machine is slow, the sleeps
+  in `inject_bridge_windows` may need tuning. A manual paste of `bridge_script.js` is the fallback.
+- Antivirus on locked-down corporate machines may flag the auto-DevTools-typing behavior; watch for it.
+- Possible future: move full tagging UI into the bridge panel (decided AGAINST for now — tagging
+  in MARK's window works fine and was never the problem).
+
+---
+
+## 7. WINDOWS CRATE 0.61 GOTCHAS (saved us repeatedly)
+- BOOL from `windows::core`; VK_* from KeyboardAndMouse; KBDLLHOOKSTRUCT from WindowsAndMessaging
+- PostMessageA/EnumChildWindows take `Option<HWND>`; FindWindowA returns `Result<HWND>`
+- SetWindowsHookExW takes `Option<HINSTANCE>`; CallNextHookEx takes `Option<HHOOK>`
+- dwExtraInfo is usize; vkCode is u32
+- Clipboard: GlobalAlloc returns HGLOBAL; SetClipboardData takes `(u32, Option<HANDLE>)` returns Result;
+  CF_UNICODETEXT = 13; needs `Win32_System_DataExchange` + `Win32_System_Memory` features
+- KEYEVENTF_UNICODE for typed-char injection (wVk=0, wScan=codeunit)
+- Tauri v2: custom #[command] fns are auto-allowed; listen() needs core:event:*; setFocus needs core:window:allow-set-focus
