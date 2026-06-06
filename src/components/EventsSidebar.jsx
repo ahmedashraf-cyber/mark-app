@@ -1,33 +1,28 @@
 // Shows tornado event shortcuts on left and right sides during review
-// Same layout concept as the collection app sidebars
 
-import { TORNADO_EVENTS, MISSING_EVENT_KEY } from '../data/shortcuts'
+import { MISSING_EVENT_KEY } from '../data/shortcuts'
 
-// Split events into left (offense-ish) and right (defense-ish) columns
-// Based on the tornado app sidebar grouping
 const LEFT_EVENTS = [
-  { key: 'S', label: 'Half Start',    id: 'half_start' },
-  { key: 'E', label: 'Pass',          id: 'pass' },
-  { key: 'Q', label: 'Pass (Flight)', id: 'pass_flight' },
-  { key: 'D', label: 'Dribble',       id: 'dribble' },
-  { key: 'T', label: 'Miscontrol',    id: 'miscontrol' },
-  { key: 'W', label: 'Reception',     id: 'reception' },
-  { key: 'Z', label: 'Shot',          id: 'shot' },
-  { key: 'X', label: 'Foul',          id: 'foul_committed' },
-  { key: 'O', label: 'Out',           id: 'out' },
-  { key: 'C', label: 'Shield',        id: 'shield' },
+  { key: 'E', label: 'Pass',             id: 'pass' },
+  { key: 'S', label: 'Shot',             id: 'shot' },
+  { key: 'T', label: 'Miscontrol',       id: 'miscontrol' },
+  { key: 'W', label: 'Reception',        id: 'reception' },
+  { key: 'X', label: 'Foul Committed',   id: 'foul_committed' },
+  { key: 'O', label: 'Out',              id: 'out' },
+  { key: 'C', label: 'Shield',           id: 'shield' },
+  { key: 'H', label: 'Hold Up Duel',     id: 'hold_up_duel' },
+  { key: 'Y', label: 'Positioning Duel', id: 'positioning_duel' },
 ]
 
 const RIGHT_EVENTS = [
-  { key: 'B', label: 'Block',         id: 'block' },
-  { key: 'R', label: 'Ball Recovery', id: 'ball_recovery' },
-  { key: 'F', label: 'Clearance',     id: 'clearance' },
-  { key: 'G', label: 'Goal Keeper',   id: 'goal_keeper' },
-  { key: 'A', label: 'Tackle',        id: 'tackle' },
-  { key: 'V', label: 'Interception',  id: 'interception' },
+  { key: 'B', label: 'Block',            id: 'block' },
+  { key: 'R', label: 'Ball Recovery',    id: 'ball_recovery' },
+  { key: 'F', label: 'Clearance',        id: 'clearance' },
+  { key: 'G', label: 'Goal Keeper',      id: 'goal_keeper' },
+  { key: 'V', label: 'Interception',     id: 'interception' },
 ]
 
-const MISSING = { key: 'Y', label: 'Missing Event', id: 'missing_event' }
+const MISSING = { key: MISSING_EVENT_KEY, label: 'Missing Event' }
 
 function EventRow({ ev, active }) {
   return (
@@ -100,7 +95,7 @@ export default function EventsSidebar({ side, activeKey }) {
           <EventRow key={ev.key} ev={ev} active={activeUpper === ev.key} />
         ))}
 
-        {/* Missing event — only on left */}
+        {/* Missing event — only on left sidebar */}
         {side === 'left' && (
           <>
             <div style={{height: 1, background: 'rgba(232,89,12,0.3)', margin: '4px 0'}}/>
