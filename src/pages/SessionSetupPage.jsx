@@ -130,9 +130,36 @@ export default function SessionSetupPage({ onSessionStart, lastResult }) {
 
       {/* Last result banner */}
       {lastResult && (
-        <div style={{background:'rgba(48,209,88,0.1)',borderBottom:'1px solid rgba(48,209,88,0.2)',padding:'10px 20px',display:'flex',alignItems:'center',gap:12}}>
+        <div style={{background:'rgba(48,209,88,0.1)',borderBottom:'1px solid rgba(48,209,88,0.2)',padding:'10px 20px',display:'flex',alignItems:'center',gap:12,flexWrap:'wrap'}}>
           <span style={{fontSize:13,color:'#30D158',fontWeight:700}}>✅ Session complete — Quality Score: {lastResult.quality}%</span>
           <span style={{fontSize:12,color:'var(--t-3)'}}>{lastResult.tagCount} errors / {lastResult.total} events reviewed</span>
+          {lastResult.filePath && (
+            <button
+              onClick={async () => {
+                try {
+                  const { open } = await import('@tauri-apps/plugin-shell')
+                  await open(lastResult.filePath)
+                } catch(e) {
+                  console.error('[MARK] Cannot open file:', e)
+                }
+              }}
+              style={{
+                marginLeft: 'auto',
+                display: 'flex', alignItems: 'center', gap: 6,
+                padding: '5px 12px', borderRadius: 7, cursor: 'pointer',
+                border: '1px solid rgba(48,209,88,0.4)',
+                background: 'rgba(48,209,88,0.12)',
+                color: '#30D158', fontSize: 12, fontWeight: 600,
+                transition: 'all .1s',
+              }}
+            >
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none">
+                <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
+                <polyline points="14 2 14 8 20 8" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
+              </svg>
+              Open Report (.xlsx)
+            </button>
+          )}
         </div>
       )}
 

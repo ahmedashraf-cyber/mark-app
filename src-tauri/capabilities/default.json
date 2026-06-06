@@ -8,6 +8,10 @@
     "core:window:allow-close",
     "core:window:allow-minimize",
     "core:window:allow-maximize",
-    "core:window:allow-set-focus"
+    "core:window:allow-set-focus",
+    "fs:allow-write-text-file",
+    "fs:allow-write-binary-file",
+    "fs:allow-download-dir",
+    "shell:allow-open"
   ]
 }

@@ -9,6 +9,7 @@ import TagPanel from '../components/TagPanel'
 import TaggedEventsList from '../components/TaggedEventsList'
 import ErrorTimeline from '../components/ErrorTimeline'
 import EventsSidebar from '../components/EventsSidebar'
+import { exportSessionToXlsx } from '../utils/exportSession'
 
 export default function ReviewPage({ session, onDone, onBack, bridgeSyncStatus, onBridgeSyncStatus }) {
   const { profile } = useAuth()
@@ -287,8 +288,17 @@ export default function ReviewPage({ session, onDone, onBack, bridgeSyncStatus, 
         qualityScore: quality,
         completedAt: serverTimestamp(),
       })
+
+      // Export to .xlsx and get the saved file path
+      let filePath = null
+      try {
+        filePath = await exportSessionToXlsx({ session, tags, quality, tagCount, total })
+      } catch (exportErr) {
+        console.error('[MARK] Export failed:', exportErr)
+      }
+
       setSubmitted(true)
-      setTimeout(() => onDone({ quality, tagCount, total }), 1500)
+      setTimeout(() => onDone({ quality, tagCount, total, filePath }), 1500)
     } catch (e) {
       setSubmitting(false)
     }

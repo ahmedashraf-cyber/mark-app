@@ -1,6 +1,6 @@
 {
   "name": "mark-app",
-  "version": "2.6.3",
+  "version": "2.6.4",
   "description": "MARK — Review App for Hudl Egypt",
   "scripts": {
     "dev": "vite",
@@ -9,9 +9,12 @@
     "tauri": "tauri"
   },
   "dependencies": {
+    "@tauri-apps/plugin-fs": "^2.5.1",
+    "@tauri-apps/plugin-shell": "^2.3.5",
     "firebase": "^11.7.3",
     "react": "^19.1.0",
-    "react-dom": "^19.1.0"
+    "react-dom": "^19.1.0",
+    "xlsx": "^0.18.5"
   },
   "devDependencies": {
     "@babel/parser": "^7.29.7",

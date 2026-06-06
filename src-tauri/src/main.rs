@@ -333,6 +333,8 @@ fn main() {
     });
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_fs::init())
+        .plugin(tauri_plugin_shell::init())
         .manage(VideoState { path: video_path, port: port_holder })
         .invoke_handler(tauri::generate_handler![
             send_key_to_collection_app,
