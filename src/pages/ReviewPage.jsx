@@ -14,9 +14,13 @@ export default function ReviewPage({ session, onDone, onBack }) {
   const { profile } = useAuth()
   const { syncNavigation } = useSync((status) => setSyncStatus(status))
 
-  const videoRef  = useRef(null)
-  const fileInputRef = useRef(null)
-  const rootRef = useRef(null)
+  const videoRef       = useRef(null)
+  const fileInputRef   = useRef(null)
+  const rootRef        = useRef(null)
+  // Stays true from drag-start until onSeeked fires, preventing onTimeUpdate
+  // from overwriting currentTime with a stale pre-seek value during the gap
+  // between pointer-up and actual seek completion.
+  const isDraggingRef  = useRef(false)
   const [videoLoaded, setVideoLoaded] = useState(false)
   const [playing, setPlaying]         = useState(false)
   const [currentTime, setCurrentTime] = useState(0)
@@ -143,7 +147,11 @@ export default function ReviewPage({ session, onDone, onBack }) {
   function seekTo(seconds) {
     const v = videoRef.current
     if (!v) return
-    v.currentTime = Math.max(0, Math.min(v.duration || 0, seconds))
+    const t = Math.max(0, Math.min(v.duration || 0, seconds))
+    v.currentTime = t
+    // Update state immediately so the UI reflects the seek target at once,
+    // rather than waiting for onTimeUpdate (which may fire with a stale value).
+    setCurrentTime(t)
   }
 
   function handleVideoFile(e) {
@@ -249,7 +257,18 @@ export default function ReviewPage({ session, onDone, onBack }) {
           <video
             ref={videoRef}
             style={{width:'100%',height:'100%',objectFit:'contain'}}
-            onTimeUpdate={() => setCurrentTime(videoRef.current?.currentTime || 0)}
+            onTimeUpdate={() => {
+              // Skip while scrubber is being dragged — the seek hasn't
+              // completed yet and the video's currentTime still reflects
+              // the pre-drag position. Letting it through would snap the
+              // ball back. onSeeked below clears this gate.
+              if (isDraggingRef.current) return
+              setCurrentTime(videoRef.current?.currentTime || 0)
+            }}
+            onSeeked={() => {
+              isDraggingRef.current = false
+              setCurrentTime(videoRef.current?.currentTime || 0)
+            }}
             onLoadedMetadata={() => setDuration(videoRef.current?.duration || 0)}
             onPlay={() => setPlaying(true)}
             onPause={() => setPlaying(false)}
@@ -291,7 +310,13 @@ export default function ReviewPage({ session, onDone, onBack }) {
 
       {/* Controls bar */}
       <div style={{flexShrink:0,background:'var(--bg-2)',borderTop:'1px solid var(--b-1)',padding:'8px 16px 12px'}}>
-        <ErrorTimeline errors={errors} videoDuration={duration} currentTime={currentTime} onSeek={seekTo} />
+        <ErrorTimeline
+          errors={errors}
+          videoDuration={duration}
+          currentTime={currentTime}
+          onSeek={seekTo}
+          onDragStart={() => { isDraggingRef.current = true }}
+        />
         <div style={{display:'flex',justifyContent:'space-between',marginTop:6}}>
           <span className="mono" style={{fontSize:11,color:'var(--t-3)'}}>{formatTime(currentTime)}</span>
           <span className="mono" style={{fontSize:11,color:'var(--t-3)'}}>{formatTime(duration)}</span>
