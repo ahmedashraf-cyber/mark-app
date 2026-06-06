@@ -93,13 +93,17 @@ async fn start_video_server(video_path: Arc<Mutex<Option<String>>>) -> u16 {
             }
         }
 
-        // No Range header — return full file, signal range support
+        // No Range header — respond with 206 + full Content-Range so WebView2
+        // knows the total size from the first request and can compute duration.
+        // Also handle HEAD requests (browser probes for duration this way).
+        let end = file_size.saturating_sub(1);
         let mut buf = vec![0u8; file_size as usize];
         if file.read_exact(&mut buf).is_ok() {
             Response::builder()
-                .status(StatusCode::OK)
+                .status(StatusCode::PARTIAL_CONTENT)
                 .header("Content-Type", mime)
                 .header("Content-Length", file_size.to_string())
+                .header("Content-Range", format!("bytes 0-{}/{}", end, file_size))
                 .header("Accept-Ranges", "bytes")
                 .header("Access-Control-Allow-Origin", "*")
                 .header("Access-Control-Expose-Headers", "Content-Range, Accept-Ranges, Content-Length, Content-Type")
@@ -118,7 +122,7 @@ async fn start_video_server(video_path: Arc<Mutex<Option<String>>>) -> u16 {
     };
 
     let app = Router::new()
-        .route("/video", get(serve_video))
+        .route("/video", get(serve_video).head(serve_video))
         .with_state(video_path);
 
     let addr = format!("127.0.0.1:{}", port);
