@@ -57,7 +57,7 @@ export default function ErrorTimeline({
   onSeekRef.current     = onSeek
   onSyncSeekRef.current = onSyncSeek
 
-  const duration   = durationRef.current
+  const duration   = videoDuration || 0  // use raw prop for display — ball always shows
   const isDragging = dragPct !== null
 
   const progressPct = isDragging
