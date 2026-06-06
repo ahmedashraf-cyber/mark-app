@@ -47,33 +47,3 @@ export const NAV_SHIFT_SHORTCUTS = {
 export const KEY_TO_EVENT = Object.fromEntries(
   TORNADO_EVENTS.map(e => [e.key.toUpperCase(), e])
 )
-
-
-// ── Video navigation shortcuts (matches collection app exactly) ───────────────
-//   ↑            Play / Pause
-//   →            Fast Forward  400ms
-//   ←            Fast Backward 400ms
-//   Shift + →    Slow Forward   40ms
-//   Shift + ←    Slow Backward  40ms
-//   0            Reset speed to 1x
-//   + / =        Increase speed +0.25 (max 2x)
-//   - / _        Decrease speed -0.25 (min 0.25x)
-
-export const SPEED_MIN  = 0.25
-export const SPEED_MAX  = 2.00
-export const SPEED_STEP = 0.25
-
-export const NAV_SHORTCUTS = {
-  ArrowUp:    { action: 'playpause', ms: 0   },
-  ArrowRight: { action: 'forward',   ms: 400 },
-  ArrowLeft:  { action: 'backward',  ms: 400 },
-}
-export const NAV_SHIFT_SHORTCUTS = {
-  ArrowRight: { action: 'forward',   ms: 40 },
-  ArrowLeft:  { action: 'backward',  ms: 40 },
-}
-
-// Map key to event for fast lookup
-export const KEY_TO_EVENT = Object.fromEntries(
-  TORNADO_EVENTS.map(e => [e.key.toUpperCase(), e])
-)
