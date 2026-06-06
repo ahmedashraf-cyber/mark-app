@@ -36,10 +36,10 @@ export async function exportSessionToXlsx({ session, tags, quality, tagCount, to
     const ts      = tag.videoTimeSec || 0
     const start   = Math.max(0, ts - 5)
 
-    // Deep link: file:///path/to/video.mp4#t=START,END
-    // Opens video at 5s before the event in default video player
+    // Plain file:/// path — Excel blocks #t= fragments as security risk
+    // Timestamp is shown in cell text so reviewer can seek manually
     const videoLink = videoPath
-      ? `file:///${videoPath.replace(/\\/g, '/')}#t=${start.toFixed(3)},${(ts + 5).toFixed(3)}`
+      ? `file:///${videoPath.replace(/\\/g, '/')}`
       : ''
 
     return [
@@ -92,13 +92,15 @@ export async function exportSessionToXlsx({ session, tags, quality, tagCount, to
   // Make video link column cells actual hyperlinks
   if (videoPath) {
     const linkColIdx = headers.length - 1
+    const sortedTags = [...tags].sort((a, b) => (a.videoTimeSec || 0) - (b.videoTimeSec || 0))
     trimmedRows.forEach((row, rowIdx) => {
       const link = row[linkColIdx]
       if (!link) return
       const cellRef = XLSX.utils.encode_cell({ r: rowIdx + 2, c: linkColIdx })
+      const tagTs = sortedTags[rowIdx]?.videoTimeSec || 0
       if (ws[cellRef]) {
-        ws[cellRef].l = { Target: link, Tooltip: 'Open video at this timestamp' }
-        ws[cellRef].v = 'Open Video ▶'
+        ws[cellRef].l = { Target: link, Tooltip: 'Click to open video file' }
+        ws[cellRef].v = `▶ Open Video  (seek to ${fmtTime(tagTs)})`
         ws[cellRef].s = { font: { color: { rgb: '0A84FF' }, underline: true } }
       }
     })
