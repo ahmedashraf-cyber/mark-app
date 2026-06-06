@@ -137,8 +137,8 @@ export default function SessionSetupPage({ onSessionStart, lastResult }) {
             <button
               onClick={async () => {
                 try {
-                  const { open } = await import('@tauri-apps/plugin-shell')
-                  await open(lastResult.filePath)
+                  const { invoke } = await import('@tauri-apps/api/core')
+                  await invoke('open_file', { path: lastResult.filePath })
                 } catch(e) {
                   console.error('[MARK] Cannot open file:', e)
                 }

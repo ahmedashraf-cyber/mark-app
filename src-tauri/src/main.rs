@@ -309,7 +309,18 @@ fn inject_bridge_windows(session_id: &str) -> Result<String, String> {
     Ok("injected".to_string())
 }
 
-// ─── Legacy command ───────────────────────────────────────────────────────────
+// ─── Open a file using the system default application ────────────────────────
+#[command]
+fn open_file(path: String) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("explorer")
+            .arg(&path)
+            .spawn()
+            .map_err(|e| format!("Failed to open file: {}", e))?;
+    }
+    Ok(())
+}
 #[command]
 fn send_key_to_collection_app(_exe_name: String, _key_code: String) -> Result<String, String> {
     Ok("noop".to_string())
@@ -334,13 +345,13 @@ fn main() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_fs::init())
-        .plugin(tauri_plugin_shell::init())
         .manage(VideoState { path: video_path, port: port_holder })
         .invoke_handler(tauri::generate_handler![
             send_key_to_collection_app,
             inject_bridge_script,
             pick_video_file,
             get_video_url,
+            open_file,
         ])
         .run(tauri::generate_context!())
         .expect("error while running MARK");
