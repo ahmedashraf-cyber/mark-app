@@ -471,8 +471,11 @@ export default function ReviewPage({ session, onDone, onBack, bridgeSyncStatus, 
       {/* Tagged Events List */}
       <TaggedEventsList
         tags={tags}
-        onSeek={seekToAndSync}
+        videoDuration={duration}
+        currentTime={currentTime}
+        matchName={session.matchName}
         onEdit={tag => setEditTag(tag)}
+        onDelete={handleTagDelete}
       />
 
       {/* Tag Panel — slides up when event key pressed */}

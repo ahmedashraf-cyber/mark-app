@@ -1,156 +1,310 @@
-import { EXTRAS } from './TagPanel'
+import { useState, useEffect, useRef, useMemo } from 'react'
+import { EXTRAS, GK_EXTRAS, GK_WRONG_EXTRAS } from './TagPanel'
 
+// ── Helpers ───────────────────────────────────────────────────────────────────
 const fmt = (s) => {
-  if (!isFinite(s) || isNaN(s)) return '0:00.000'
+  if (!isFinite(s) || isNaN(s)) return '0:00'
   const m   = Math.floor(s / 60)
   const sec = Math.floor(s % 60)
-  const ms  = Math.floor((s % 1) * 1000)
-  return `${m}:${sec.toString().padStart(2,'0')}.${ms.toString().padStart(3,'0')}`
+  return `${m}:${sec.toString().padStart(2,'0')}`
 }
 
-const TEAM_STYLE = {
-  home: { color: '#0A84FF', bg: 'rgba(10,132,255,0.15)', label: 'Home' },
-  away: { color: '#FF453A', bg: 'rgba(255,69,58,0.15)',  label: 'Away' },
+// Get label for any extra id (general, GK, or GK wrong)
+function getExtraLabel(id) {
+  const all = [
+    ...EXTRAS,
+    ...GK_EXTRAS,
+    ...(Object.values(GK_WRONG_EXTRAS || {}).flat()),
+  ]
+  return all.find(e => e.id === id)?.label || id
 }
 
-export default function TaggedEventsList({ tags, onSeek, onEdit }) {
-  if (!tags || tags.length === 0) return (
-    <div style={{
-      padding: '14px 20px',
-      fontSize: 12, color: 'var(--t-3)', textAlign: 'center',
-      borderTop: '1px solid var(--b-1)',
-      fontStyle: 'italic',
-    }}>
-      No events tagged yet — press an event key to start
-    </div>
-  )
+// Dot color — each extra category gets a distinct color from our palette
+const DOT_COLORS = [
+  '#E8590C', // orange — primary
+  '#0A84FF', // blue
+  '#30D158', // green
+  '#FFD60A', // yellow
+  '#FF453A', // red
+  '#BF5AF2', // purple
+  '#FF9F0A', // amber
+  '#64D2FF', // cyan
+]
+function getDotColor(index) {
+  return DOT_COLORS[index % DOT_COLORS.length]
+}
+
+// ── Detail Panel (slides down from top bar) ───────────────────────────────────
+function DetailPanel({ tag, onEdit, onDelete, onClose }) {
+  const extras = tag.extras || []
+
+  useEffect(() => {
+    function onKey(e) { if (e.key === 'Escape') onClose() }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onClose])
 
   return (
     <div style={{
-      borderTop: '1px solid var(--b-1)',
-      maxHeight: 200,
-      overflowY: 'auto',
-      background: 'var(--bg)',
+      position: 'absolute', top: 0, left: 0, right: 0, zIndex: 200,
+      background: 'rgba(10,10,18,0.97)', backdropFilter: 'blur(8px)',
+      borderBottom: '1px solid var(--b-1)',
+      padding: '10px 16px',
+      display: 'flex', alignItems: 'center', gap: 12,
+      animation: 'slideDown .15s ease',
     }}>
-      {/* Header */}
-      <div style={{
-        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-        padding: '7px 16px', borderBottom: '1px solid var(--b-1)',
-        background: 'var(--bg-2)', position: 'sticky', top: 0, zIndex: 2,
+      {/* Event badge */}
+      <span style={{
+        fontFamily: 'JetBrains Mono, monospace', fontSize: 11, fontWeight: 700,
+        background: tag.isMissing ? '#BF5AF2' : 'var(--p2)', color: '#fff',
+        borderRadius: 5, padding: '2px 7px', flexShrink: 0,
       }}>
-        <span style={{ fontSize: 10, fontWeight: 700, color: 'var(--t-3)', letterSpacing: 1 }}>
-          TAGGED EVENTS
-        </span>
-        <span style={{
-          fontSize: 10, fontWeight: 700,
-          color: 'var(--p2)', fontFamily: 'JetBrains Mono, monospace',
-        }}>
-          {tags.length} {tags.length === 1 ? 'event' : 'events'}
-        </span>
+        {tag.triggeredKey || '•'}
+      </span>
+      <span style={{ fontFamily: 'Inter', fontWeight: 700, fontSize: 13, color: 'var(--t-1)', flexShrink: 0 }}>
+        {tag.triggeredEventLabel}
+      </span>
+
+      {/* Extras as pills */}
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, flex: 1, minWidth: 0 }}>
+        {extras.map((eid, i) => (
+          <span key={eid} style={{
+            fontSize: 10, fontWeight: 600,
+            color: getDotColor(i),
+            background: `${getDotColor(i)}18`,
+            border: `1px solid ${getDotColor(i)}44`,
+            borderRadius: 4, padding: '2px 7px', whiteSpace: 'nowrap',
+          }}>
+            {getExtraLabel(eid)}
+          </span>
+        ))}
+        {extras.length === 0 && (
+          <span style={{ fontSize: 11, color: 'var(--t-3)', fontStyle: 'italic' }}>No extras</span>
+        )}
       </div>
 
-      {/* Cards */}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 0 }}>
-        {[...tags].sort((a, b) => (a.videoTimeSec || 0) - (b.videoTimeSec || 0)).map((tag, i) => {
-          const team = TEAM_STYLE[tag.team]
-          const extraLabels = (tag.extras || [])
-            .map(eid => EXTRAS.find(e => e.id === eid)?.label)
-            .filter(Boolean)
+      {/* Actions */}
+      <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
+        <button onClick={() => onEdit(tag)} style={{
+          padding: '4px 12px', borderRadius: 6, cursor: 'pointer',
+          border: '1px solid var(--b-2)', background: 'var(--bg-3)',
+          color: 'var(--t-2)', fontSize: 11, fontWeight: 600,
+          transition: 'all .1s',
+        }}>Edit</button>
+        <button onClick={() => onDelete(tag)} style={{
+          padding: '4px 12px', borderRadius: 6, cursor: 'pointer',
+          border: '1px solid rgba(255,69,58,0.4)', background: 'rgba(255,69,58,0.08)',
+          color: '#FF453A', fontSize: 11, fontWeight: 600,
+          transition: 'all .1s',
+        }}>Delete</button>
+        <button onClick={onClose} style={{
+          padding: '4px 8px', borderRadius: 6, cursor: 'pointer',
+          border: '1px solid var(--b-2)', background: 'transparent',
+          color: 'var(--t-3)', fontSize: 11,
+        }}>✕</button>
+      </div>
+    </div>
+  )
+}
+
+// ── Timeline Row ──────────────────────────────────────────────────────────────
+function TimelineRow({ label, tags, videoDuration, currentTime, selectedId, onCardClick }) {
+  const rowRef = useRef(null)
+
+  // Auto-scroll to card closest to currentTime
+  useEffect(() => {
+    if (!rowRef.current || tags.length === 0 || !videoDuration) return
+    const closest = tags.reduce((prev, curr) =>
+      Math.abs(curr.videoTimeSec - currentTime) < Math.abs(prev.videoTimeSec - currentTime) ? curr : prev
+    )
+    const pct = closest.videoTimeSec / videoDuration
+    const row = rowRef.current
+    const targetX = pct * row.scrollWidth - row.clientWidth / 2
+    row.scrollTo({ left: Math.max(0, targetX), behavior: 'smooth' })
+  }, [currentTime, videoDuration])
+
+  return (
+    <div style={{
+      display: 'flex', alignItems: 'center',
+      borderBottom: '1px solid var(--b-1)',
+      minHeight: 56,
+    }}>
+      {/* Team label */}
+      <div style={{
+        width: 110, flexShrink: 0,
+        padding: '0 12px',
+        fontSize: 11, fontWeight: 700, color: 'var(--t-2)',
+        fontFamily: 'DM Sans, sans-serif',
+        borderRight: '1px solid var(--b-1)',
+        whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+      }}>
+        {label}
+      </div>
+
+      {/* Scrollable timeline */}
+      <div
+        ref={rowRef}
+        style={{
+          flex: 1, position: 'relative',
+          overflowX: 'auto', overflowY: 'visible',
+          height: 56,
+          scrollbarWidth: 'none',
+        }}
+      >
+        {/* The line */}
+        <div style={{
+          position: 'absolute',
+          left: 0, right: 0,
+          top: '65%',
+          height: 1,
+          background: 'var(--b-2)',
+          minWidth: '100%',
+        }}/>
+
+        {/* Cards */}
+        {tags.map(tag => {
+          const pct = videoDuration > 0 ? (tag.videoTimeSec / videoDuration) * 100 : 0
+          const extras = tag.extras || []
+          const isSelected = tag.id === selectedId
 
           return (
             <div
-              key={tag.id || i}
+              key={tag.id}
+              onClick={() => onCardClick(tag)}
               style={{
-                display: 'flex', alignItems: 'center', gap: 10,
-                padding: '8px 16px',
-                borderBottom: '1px solid var(--b-1)',
-                transition: 'background .1s',
+                position: 'absolute',
+                left: `${pct}%`,
+                top: '50%',
+                transform: 'translate(-50%, -50%)',
+                display: 'flex', flexDirection: 'column', alignItems: 'center',
+                cursor: 'pointer',
+                zIndex: isSelected ? 10 : 5,
               }}
-              onMouseEnter={e => e.currentTarget.style.background = 'var(--bg-2)'}
-              onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
             >
-              {/* Timestamp — clickable */}
-              <button
-                onClick={() => onSeek?.(tag.videoTimeSec || 0)}
-                title="Seek to this event"
-                style={{
-                  fontFamily: 'JetBrains Mono, monospace', fontSize: 11, fontWeight: 700,
-                  color: 'var(--p2)', background: 'rgba(232,89,12,0.1)',
-                  border: '1px solid rgba(232,89,12,0.25)', borderRadius: 6,
-                  padding: '2px 7px', cursor: 'pointer', flexShrink: 0,
-                  transition: 'background .1s',
-                }}
-                onMouseEnter={e => e.currentTarget.style.background = 'rgba(232,89,12,0.2)'}
-                onMouseLeave={e => e.currentTarget.style.background = 'rgba(232,89,12,0.1)'}
-              >
-                {fmt(tag.videoTimeSec)}
-              </button>
-
-              {/* Event key badge */}
-              <span style={{
-                fontFamily: 'JetBrains Mono, monospace', fontSize: 10, fontWeight: 700,
-                background: tag.isMissing ? '#BF5AF2' : 'var(--p2)',
-                color: '#fff', borderRadius: 5, padding: '1px 6px', flexShrink: 0,
-              }}>
-                {tag.triggeredKey}
-              </span>
-
-              {/* Event name */}
-              <span style={{
-                fontSize: 12, fontWeight: 600, color: 'var(--t-1)',
-                flexShrink: 0,
-              }}>
-                {tag.triggeredEventLabel}
-              </span>
-
-              {/* Team badge */}
-              {team && (
-                <span style={{
-                  fontSize: 10, fontWeight: 700,
-                  color: team.color, background: team.bg,
-                  border: `1px solid ${team.color}44`,
-                  borderRadius: 5, padding: '1px 7px', flexShrink: 0,
+              {/* Dots above card */}
+              {extras.length > 0 && (
+                <div style={{
+                  display: 'flex', gap: 2, marginBottom: 3,
+                  position: 'absolute', top: -14,
+                  left: '50%', transform: 'translateX(-50%)',
                 }}>
-                  {team.label}
-                </span>
+                  {extras.map((eid, i) => (
+                    <div key={eid} style={{
+                      width: 5, height: 5, borderRadius: '50%',
+                      background: getDotColor(i),
+                      boxShadow: `0 0 3px ${getDotColor(i)}88`,
+                    }}/>
+                  ))}
+                </div>
               )}
 
-              {/* Extras pills */}
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, flex: 1, minWidth: 0 }}>
-                {extraLabels.map((label, j) => (
-                  <span key={j} style={{
-                    fontSize: 10, color: 'var(--t-2)',
-                    background: 'var(--bg-3)', border: '1px solid var(--b-2)',
-                    borderRadius: 4, padding: '1px 6px', whiteSpace: 'nowrap',
-                  }}>
-                    {label}
-                  </span>
-                ))}
+              {/* Card */}
+              <div style={{
+                padding: '3px 8px',
+                borderRadius: 5,
+                border: isSelected
+                  ? '1.5px solid var(--p2)'
+                  : '1.5px solid var(--b-2)',
+                background: isSelected
+                  ? 'var(--p2)'
+                  : 'var(--bg-2)',
+                color: isSelected ? '#fff' : 'var(--t-1)',
+                fontSize: 11, fontWeight: isSelected ? 700 : 500,
+                fontFamily: 'DM Sans, sans-serif',
+                whiteSpace: 'nowrap',
+                boxShadow: isSelected ? '0 0 8px rgba(232,89,12,0.5)' : 'none',
+                transition: 'all .12s',
+              }}>
+                {tag.triggeredEventLabel}
               </div>
-
-              {/* Edit button */}
-              <button
-                onClick={() => onEdit?.(tag)}
-                title="Edit this event"
-                style={{
-                  flexShrink: 0, width: 26, height: 26,
-                  borderRadius: 6, border: '1px solid var(--b-2)',
-                  background: 'var(--bg-3)', color: 'var(--t-3)',
-                  cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  transition: 'all .1s',
-                }}
-                onMouseEnter={e => { e.currentTarget.style.background = 'var(--b-1)'; e.currentTarget.style.color = 'var(--t-1)' }}
-                onMouseLeave={e => { e.currentTarget.style.background = 'var(--bg-3)'; e.currentTarget.style.color = 'var(--t-3)' }}
-              >
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none">
-                  <path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
-                  <path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
-                </svg>
-              </button>
             </div>
           )
         })}
       </div>
+    </div>
+  )
+}
+
+// ── Main Component ────────────────────────────────────────────────────────────
+export default function TaggedEventsList({
+  tags, videoDuration, currentTime, matchName,
+  onEdit, onDelete,
+}) {
+  const [selectedTag, setSelectedTag] = useState(null)
+
+  // Parse team names from matchName — split on ' vs '
+  const [homeTeam, awayTeam] = useMemo(() => {
+    if (!matchName) return ['Home', 'Away']
+    const parts = matchName.split(' vs ')
+    return [parts[0]?.trim() || 'Home', parts[1]?.trim() || 'Away']
+  }, [matchName])
+
+  const homeTags = (tags || []).filter(t => t.team === 'home')
+  const awayTags = (tags || []).filter(t => t.team === 'away')
+
+  function handleCardClick(tag) {
+    setSelectedTag(prev => prev?.id === tag.id ? null : tag)
+  }
+
+  function handleEdit(tag) {
+    setSelectedTag(null)
+    onEdit(tag)
+  }
+
+  function handleDelete(tag) {
+    setSelectedTag(null)
+    onDelete(tag)
+  }
+
+  return (
+    <div style={{
+      background: 'var(--bg)',
+      borderTop: '1px solid var(--b-1)',
+      position: 'relative',
+      overflow: 'hidden',
+    }}>
+      {/* Detail panel — slides down when card selected */}
+      {selectedTag && (
+        <DetailPanel
+          tag={selectedTag}
+          onEdit={handleEdit}
+          onDelete={handleDelete}
+          onClose={() => setSelectedTag(null)}
+        />
+      )}
+
+      {/* Home row */}
+      <TimelineRow
+        label={homeTeam}
+        tags={homeTags}
+        videoDuration={videoDuration}
+        currentTime={currentTime}
+        selectedId={selectedTag?.id}
+        onCardClick={handleCardClick}
+      />
+
+      {/* Away row */}
+      <TimelineRow
+        label={awayTeam}
+        tags={awayTags}
+        videoDuration={videoDuration}
+        currentTime={currentTime}
+        selectedId={selectedTag?.id}
+        onCardClick={handleCardClick}
+      />
+
+      {/* Empty state */}
+      {tags.length === 0 && (
+        <div style={{
+          position: 'absolute', inset: 0,
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          pointerEvents: 'none',
+        }}>
+          <span style={{ fontSize: 11, color: 'var(--t-3)', fontStyle: 'italic' }}>
+            No events tagged yet
+          </span>
+        </div>
+      )}
     </div>
   )
 }

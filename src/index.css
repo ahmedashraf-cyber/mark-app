@@ -54,6 +54,11 @@ code, .mono { font-family: 'JetBrains Mono', monospace; }
 .fade-in  { animation: fadeIn  0.2s ease both; }
 .slide-up { animation: slideUp 0.25s ease both; }
 
+@keyframes slideDown {
+  from { opacity: 0; transform: translateY(-8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
 /* Card */
 .card {
   background: var(--bg-2);
