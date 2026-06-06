@@ -26,13 +26,22 @@ function fmtTime(s) {
   return `${m}:${sec.toString().padStart(2,'0')}.${ms.toString().padStart(3,'0')}`
 }
 
-export async function exportSessionToXlsx({ session, tags, quality, tagCount, total }) {
+export async function exportSessionToXlsx({ session, tags, quality, tagCount, total, videoPath }) {
   const { home, away } = parseTeams(session.matchName)
 
   // ── Data rows ────────────────────────────────────────────────────────────────
   const rows = tags.map(tag => {
     const extras  = (tag.extras || []).map(extraLabel)
     const team    = tag.team === 'home' ? home : tag.team === 'away' ? away : (tag.team || '')
+    const ts      = tag.videoTimeSec || 0
+    const start   = Math.max(0, ts - 5)
+
+    // Deep link: file:///path/to/video.mp4#t=START,END
+    // Opens video at 5s before the event in default video player
+    const videoLink = videoPath
+      ? `file:///${videoPath.replace(/\\/g, '/')}#t=${start.toFixed(3)},${(ts + 5).toFixed(3)}`
+      : ''
+
     return [
       session.matchId || session.sessionId,
       session.matchName || '',
@@ -41,22 +50,23 @@ export async function exportSessionToXlsx({ session, tags, quality, tagCount, to
       extras[0] || '', extras[1] || '', extras[2] || '',
       extras[3] || '', extras[4] || '',
       team,
+      videoLink,
     ]
   })
 
   // ── Determine which Extra columns have data ───────────────────────────────
   const maxExtras = Math.max(0, ...rows.map(r => r.filter(Boolean).slice(4, 9).length))
-  const extraCount = Math.min(5, maxExtras) // only include columns that have data
+  const extraCount = Math.min(5, maxExtras)
 
-  // Rebuild headers and rows with only needed Extra columns
-  const baseHeaders = ['Match ID', 'Match Name', 'Event', 'Timestamp']
+  const baseHeaders  = ['Match ID', 'Match Name', 'Event', 'Timestamp']
   const extraHeaders = Array.from({ length: extraCount }, (_, i) => `Extra ${i + 1}`)
-  const headers = [...baseHeaders, ...extraHeaders, 'Team']
+  const headers      = [...baseHeaders, ...extraHeaders, 'Team', 'Open at Timestamp']
 
   const trimmedRows = rows.map(r => [
-    r[0], r[1], r[2], r[3],           // base cols
-    ...r.slice(4, 4 + extraCount),     // only used extra cols
-    r[9],                               // team
+    r[0], r[1], r[2], r[3],
+    ...r.slice(4, 4 + extraCount),
+    r[9],
+    r[10], // video link
   ])
 
   const qualityRow = [`Quality Score: ${quality}%  |  ${tagCount} errors / ${total} events reviewed`]
@@ -69,16 +79,30 @@ export async function exportSessionToXlsx({ session, tags, quality, tagCount, to
   // Merge quality row across all columns dynamically
   ws['!merges'] = [{ s: { r: 0, c: 0 }, e: { r: 0, c: colCount - 1 } }]
 
-  // Column widths — base + extras + team
-  const baseCols = [{ wch: 24 }, { wch: 28 }, { wch: 20 }, { wch: 14 }]
+  const baseCols  = [{ wch: 24 }, { wch: 28 }, { wch: 20 }, { wch: 14 }]
   const extraCols = Array.from({ length: extraCount }, () => ({ wch: 18 }))
-  ws['!cols'] = [...baseCols, ...extraCols, { wch: 16 }]
+  ws['!cols'] = [...baseCols, ...extraCols, { wch: 16 }, { wch: 28 }]
 
   // Bold: quality row + headers
   const boldCells = ['A1', ...headers.map((_, i) => XLSX.utils.encode_cell({ r: 1, c: i }))]
   boldCells.forEach(ref => {
     if (ws[ref]) ws[ref].s = { font: { bold: true } }
   })
+
+  // Make video link column cells actual hyperlinks
+  if (videoPath) {
+    const linkColIdx = headers.length - 1
+    trimmedRows.forEach((row, rowIdx) => {
+      const link = row[linkColIdx]
+      if (!link) return
+      const cellRef = XLSX.utils.encode_cell({ r: rowIdx + 2, c: linkColIdx })
+      if (ws[cellRef]) {
+        ws[cellRef].l = { Target: link, Tooltip: 'Open video at this timestamp' }
+        ws[cellRef].v = 'Open Video ▶'
+        ws[cellRef].s = { font: { color: { rgb: '0A84FF' }, underline: true } }
+      }
+    })
+  }
 
   // ── Workbook ─────────────────────────────────────────────────────────────────
   const wb    = XLSX.utils.book_new()

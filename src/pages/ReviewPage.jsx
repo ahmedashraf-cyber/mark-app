@@ -21,6 +21,7 @@ export default function ReviewPage({ session, onDone, onBack, bridgeSyncStatus, 
   // so the video's lagging position cannot snap the ball back after a seek
   const isDraggingRef = useRef(false)
   const [videoLoaded,   setVideoLoaded]   = useState(false)
+  const [videoPath,     setVideoPath]     = useState(null)
   const [reviewStarted, setReviewStarted] = useState(false)
   const [playing,  setPlaying]  = useState(false)
   const [muted,    setMuted]    = useState(false)
@@ -185,6 +186,7 @@ export default function ReviewPage({ session, onDone, onBack, bridgeSyncStatus, 
       if (!path) return
       const url = await invoke('get_video_url', { path })
       console.log('[MARK] loading video via HTTP server:', url)
+      setVideoPath(path)
       const v = videoRef.current
       if (v) { v.src = url; v.load(); setVideoLoaded(true) }
     } catch (e) {
@@ -292,7 +294,7 @@ export default function ReviewPage({ session, onDone, onBack, bridgeSyncStatus, 
       // Export to .xlsx and get the saved file path
       let filePath = null
       try {
-        filePath = await exportSessionToXlsx({ session, tags, quality, tagCount, total })
+        filePath = await exportSessionToXlsx({ session, tags, quality, tagCount, total, videoPath })
       } catch (exportErr) {
         console.error('[MARK] Export failed:', exportErr)
       }
@@ -402,6 +404,7 @@ export default function ReviewPage({ session, onDone, onBack, bridgeSyncStatus, 
                 if (file?.path) {
                   try {
                     const url = await invoke('get_video_url', { path: file.path })
+                    setVideoPath(file.path)
                     const v = videoRef.current
                     if (v) { v.src = url; v.load(); setVideoLoaded(true) }
                   } catch(_) { handleVideoFile() }
