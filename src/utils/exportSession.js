@@ -44,24 +44,37 @@ export async function exportSessionToXlsx({ session, tags, quality, tagCount, to
     ]
   })
 
-  const headers = ['Match ID','Match Name','Event','Timestamp','Extra 1','Extra 2','Extra 3','Extra 4','Extra 5','Team']
+  // ── Determine which Extra columns have data ───────────────────────────────
+  const maxExtras = Math.max(0, ...rows.map(r => r.filter(Boolean).slice(4, 9).length))
+  const extraCount = Math.min(5, maxExtras) // only include columns that have data
+
+  // Rebuild headers and rows with only needed Extra columns
+  const baseHeaders = ['Match ID', 'Match Name', 'Event', 'Timestamp']
+  const extraHeaders = Array.from({ length: extraCount }, (_, i) => `Extra ${i + 1}`)
+  const headers = [...baseHeaders, ...extraHeaders, 'Team']
+
+  const trimmedRows = rows.map(r => [
+    r[0], r[1], r[2], r[3],           // base cols
+    ...r.slice(4, 4 + extraCount),     // only used extra cols
+    r[9],                               // team
+  ])
+
   const qualityRow = [`Quality Score: ${quality}%  |  ${tagCount} errors / ${total} events reviewed`]
+  const colCount = headers.length
 
   // ── Worksheet ────────────────────────────────────────────────────────────────
-  const wsData = [qualityRow, headers, ...rows]
+  const wsData = [qualityRow, headers, ...trimmedRows]
   const ws = XLSX.utils.aoa_to_sheet(wsData)
 
-  // Merge quality row across all 10 columns
-  ws['!merges'] = [{ s: { r: 0, c: 0 }, e: { r: 0, c: 9 } }]
+  // Merge quality row across all columns dynamically
+  ws['!merges'] = [{ s: { r: 0, c: 0 }, e: { r: 0, c: colCount - 1 } }]
 
-  // Column widths
-  ws['!cols'] = [
-    { wch: 24 }, { wch: 28 }, { wch: 20 }, { wch: 14 },
-    { wch: 18 }, { wch: 18 }, { wch: 18 }, { wch: 18 }, { wch: 18 },
-    { wch: 16 },
-  ]
+  // Column widths — base + extras + team
+  const baseCols = [{ wch: 24 }, { wch: 28 }, { wch: 20 }, { wch: 14 }]
+  const extraCols = Array.from({ length: extraCount }, () => ({ wch: 18 }))
+  ws['!cols'] = [...baseCols, ...extraCols, { wch: 16 }]
 
-  // Bold: quality row + headers row
+  // Bold: quality row + headers
   const boldCells = ['A1', ...headers.map((_, i) => XLSX.utils.encode_cell({ r: 1, c: i }))]
   boldCells.forEach(ref => {
     if (ws[ref]) ws[ref].s = { font: { bold: true } }
