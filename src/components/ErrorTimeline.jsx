@@ -2,6 +2,10 @@ import { useState, useRef } from 'react'
 
 export default function ErrorTimeline({ errors, videoDuration, onSeek, currentTime, onDragStart }) {
   const trackRef = useRef(null)
+  // W3C spec: pointer capture is implicitly released BEFORE pointerup fires,
+  // so hasPointerCapture() always returns false inside handlePointerUp.
+  // We use our own ref to track drag state instead.
+  const isDraggingRef = useRef(false)
 
   // dragPct is the scrubber position (0–1) while the user is dragging.
   // It is ONLY used for the visual position — the video is not touched until
@@ -31,6 +35,7 @@ export default function ErrorTimeline({ errors, videoDuration, onSeek, currentTi
   function handlePointerDown(e) {
     e.preventDefault()
     trackRef.current.setPointerCapture(e.pointerId)
+    isDraggingRef.current = true
     // Tell parent to freeze onTimeUpdate so the video's lagging position
     // cannot overwrite currentTime state while we are dragging.
     onDragStart?.()
@@ -38,22 +43,27 @@ export default function ErrorTimeline({ errors, videoDuration, onSeek, currentTi
   }
 
   function handlePointerMove(e) {
-    if (!trackRef.current?.hasPointerCapture(e.pointerId)) return
+    if (!isDraggingRef.current) return
     // Visual-only update — no video seek during drag.
     // This avoids stacked rapid seeks that confuse WebView2.
     setDragPct(pctFromPointer(e))
   }
 
   function handlePointerUp(e) {
-    if (!trackRef.current?.hasPointerCapture(e.pointerId)) return
+    if (!isDraggingRef.current) return
+    isDraggingRef.current = false
     const pct = pctFromPointer(e)
-    trackRef.current.releasePointerCapture(e.pointerId)
 
     // Seek first, then clear dragPct.
     // React 19 batches both setCurrentTime(t) (from onSeek inside the parent)
     // and setDragPct(null) into one render, so the ball lands at the correct
     // final position with no intermediate snap-back frame.
     onSeek?.(pct * videoDuration)
+    setDragPct(null)
+  }
+
+  function handlePointerCancel() {
+    isDraggingRef.current = false
     setDragPct(null)
   }
 
@@ -70,6 +80,7 @@ export default function ErrorTimeline({ errors, videoDuration, onSeek, currentTi
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
       onPointerUp={handlePointerUp}
+      onPointerCancel={handlePointerCancel}
     >
 
       {/* Track */}

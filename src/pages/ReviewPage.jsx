@@ -154,6 +154,20 @@ export default function ReviewPage({ session, onDone, onBack }) {
     setCurrentTime(t)
   }
 
+  async function syncSeek(seconds) {
+    if (!session?.sessionId) return
+    try {
+      await updateDoc(doc(db, 'mark_sessions', session.sessionId), {
+        navCommand: { action: 'seek', time: seconds, ts: Date.now() },
+      })
+    } catch {}
+  }
+
+  function seekToAndSync(seconds) {
+    seekTo(seconds)
+    syncSeek(seconds)
+  }
+
   function handleVideoFile(e) {
     const file = e.target.files?.[0]
     if (!file) return
@@ -314,7 +328,7 @@ export default function ReviewPage({ session, onDone, onBack }) {
           errors={errors}
           videoDuration={duration}
           currentTime={currentTime}
-          onSeek={seekTo}
+          onSeek={seekToAndSync}
           onDragStart={() => { isDraggingRef.current = true }}
         />
         <div style={{display:'flex',justifyContent:'space-between',marginTop:6}}>
