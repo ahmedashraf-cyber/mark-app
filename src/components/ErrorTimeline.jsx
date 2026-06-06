@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { useState, useRef } from 'react'
 
 const TYPE_COLORS = {
   wrong_event:   '#FF453A',
@@ -33,63 +33,65 @@ function SpeakerIcon({ muted }) {
 
 export default function ErrorTimeline({
   errors, videoDuration, currentTime, playing, muted,
-  onSeek, onSyncSeek, onTogglePlay, onToggleMute,
+  onSeek, onSyncSeek, onTogglePlay, onToggleMute, onDragStart,
 }) {
   const trackRef = useRef(null)
-  const durRef   = useRef(videoDuration || 0)
-  const seekRef  = useRef(onSeek)
-  const syncRef  = useRef(onSyncSeek)
-  durRef.current  = videoDuration || 0
-  seekRef.current = onSeek
-  syncRef.current = onSyncSeek
 
-  const [isDragging, setIsDragging] = useState(false)
-  const [hovering,   setHovering]   = useState(false)
-  const [hoverPct,   setHoverPct]   = useState(0)
-  const [hoverTime,  setHoverTime]  = useState(0)
-  const [tooltip,    setTooltip]    = useState(null)
+  // dragPct drives the VISUAL position during drag only.
+  // null = not dragging, use currentTime prop instead.
+  // The video is NOT seeked during drag — only on pointer-up (one clean seek).
+  const [dragPct,   setDragPct]   = useState(null)
+  const [hovering,  setHovering]  = useState(false)
+  const [hoverPct,  setHoverPct]  = useState(0)
+  const [hoverTime, setHoverTime] = useState(0)
+  const [tooltip,   setTooltip]   = useState(null)
 
-  const duration = videoDuration || 0
-  const progress = duration > 0 ? Math.min(1, currentTime / duration) : 0
+  const duration   = videoDuration || 0
+  const isDragging = dragPct !== null
 
-  // ── Pointer-capture drag — works correctly in Tauri webview ──────────────
-  // setPointerCapture routes ALL pointermove events to this element,
-  // even when the pointer leaves it. getBoundingClientRect stays valid
-  // because the element never loses the events.
+  // During drag: ball follows cursor exactly (local state, no React re-render lag)
+  // After release: ball is at the seeked position (from currentTime prop)
+  const progressPct = isDragging
+    ? dragPct * 100
+    : duration > 0 ? Math.min(100, (currentTime / duration) * 100) : 0
+
   function pctFromPointer(e) {
     const rect = trackRef.current?.getBoundingClientRect()
-    if (!rect) return 0
+    if (!rect || rect.width === 0) return 0
     return Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width))
-  }
-
-  function applySeek(e) {
-    const t = pctFromPointer(e) * durRef.current
-    seekRef.current?.(t)
-    syncRef.current?.(t)
   }
 
   function handlePointerDown(e) {
     if (!duration) return
     e.preventDefault()
     trackRef.current.setPointerCapture(e.pointerId)
-    setIsDragging(true)
-    applySeek(e)
+    // Tell parent to freeze onTimeUpdate — prevents video's lagging position
+    // from overwriting currentTime state while dragging
+    onDragStart?.()
+    setDragPct(pctFromPointer(e))
   }
 
   function handlePointerMove(e) {
     const pct = pctFromPointer(e)
     setHoverPct(pct)
     setHoverTime(pct * duration)
-    if (e.buttons === 0) return   // no button held — just hovering
+    // Visual-only update — no video seek during move.
+    // Avoids stacked rapid seeks that confuse WebView2.
     if (!trackRef.current?.hasPointerCapture(e.pointerId)) return
-    applySeek(e)
+    setDragPct(pct)
   }
 
   function handlePointerUp(e) {
     if (!trackRef.current?.hasPointerCapture(e.pointerId)) return
+    const pct = pctFromPointer(e)
     trackRef.current.releasePointerCapture(e.pointerId)
-    setIsDragging(false)
-    applySeek(e)
+    // Seek first, THEN clear dragPct.
+    // React 19 batches setCurrentTime(t) (inside onSeek) and setDragPct(null)
+    // into one render — ball lands at correct position with no snap-back frame.
+    const t = pct * duration
+    onSeek?.(t)       // seekTo in parent — sets video + state
+    onSyncSeek?.(t)   // Firestore — syncs collection app
+    setDragPct(null)
   }
 
   const thumbSize = isDragging ? 16 : hovering ? 14 : 10
@@ -132,7 +134,7 @@ export default function ErrorTimeline({
 
       {/* Current time */}
       <span className="mono" style={{ fontSize: 11, color: 'var(--t-2)', flexShrink: 0, minWidth: 72, textAlign: 'right' }}>
-        {fmt(currentTime)}
+        {fmt(isDragging ? hoverTime : currentTime)}
       </span>
 
       {/* Track */}
@@ -157,10 +159,12 @@ export default function ErrorTimeline({
           height: trackH, background: 'var(--bg-3)', borderRadius: 99,
           transition: isDragging ? 'none' : 'height .12s', overflow: 'visible',
         }}>
+
           {/* Orange fill */}
           <div style={{
-            position: 'absolute', left: 0, width: `${progress * 100}%`,
+            position: 'absolute', left: 0, width: `${progressPct}%`,
             height: '100%', background: 'var(--p2)', borderRadius: 99, opacity: 0.9,
+            transition: isDragging ? 'none' : 'width .05s',
           }}/>
 
           {/* Hover ghost */}
@@ -181,7 +185,7 @@ export default function ErrorTimeline({
                 title={`${err.triggeredEventLabel || err.errorType} @ ${fmt(err.videoTimeSec || 0)}`}
                 onMouseEnter={e => { e.stopPropagation(); setTooltip({ x: pct, label: `${err.triggeredEventLabel || err.errorType} · ${fmt(err.videoTimeSec || 0)}` }) }}
                 onMouseLeave={() => setTooltip(null)}
-                onClick={e => { e.stopPropagation(); seekRef.current?.(err.videoTimeSec || 0); syncRef.current?.(err.videoTimeSec || 0) }}
+                onClick={e => { e.stopPropagation(); onSeek?.(err.videoTimeSec || 0); onSyncSeek?.(err.videoTimeSec || 0) }}
                 onPointerDown={e => e.stopPropagation()}
                 style={{
                   position: 'absolute', left: `${pct}%`, top: '50%',
@@ -197,7 +201,9 @@ export default function ErrorTimeline({
           {/* Playhead thumb */}
           {duration > 0 && (
             <div style={{
-              position: 'absolute', left: `${progress * 100}%`, top: '50%',
+              position: 'absolute',
+              left: `${progressPct}%`,
+              top: '50%',
               transform: 'translate(-50%, -50%)',
               width: thumbSize, height: thumbSize,
               borderRadius: '50%', background: '#fff',
@@ -209,7 +215,7 @@ export default function ErrorTimeline({
           )}
         </div>
 
-        {/* Hover time tooltip */}
+        {/* Hover / drag time tooltip */}
         {(hovering || isDragging) && duration > 0 && (
           <div style={{
             position: 'absolute', left: `${hoverPct * 100}%`, bottom: 24,

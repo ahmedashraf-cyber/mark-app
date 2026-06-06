@@ -16,6 +16,9 @@ export default function ReviewPage({ session, onDone, onBack, bridgeSyncStatus, 
   const videoRef     = useRef(null)
   const fileInputRef = useRef(null)
   const rootRef      = useRef(null)
+  // Stays true from drag-start until onSeeked fires — gates onTimeUpdate
+  // so the video's lagging position cannot snap the ball back after a seek
+  const isDraggingRef = useRef(false)
   const [videoLoaded,   setVideoLoaded]   = useState(false)
   const [reviewStarted, setReviewStarted] = useState(false)
   const [playing,  setPlaying]  = useState(false)
@@ -302,7 +305,14 @@ export default function ReviewPage({ session, onDone, onBack, bridgeSyncStatus, 
           <video
             ref={videoRef}
             style={{width:'100%',height:'100%',objectFit:'contain'}}
-            onTimeUpdate={() => setCurrentTime(videoRef.current?.currentTime || 0)}
+            onTimeUpdate={() => {
+              if (isDraggingRef.current) return // gated during drag — prevents snap-back
+              setCurrentTime(videoRef.current?.currentTime || 0)
+            }}
+            onSeeked={() => {
+              isDraggingRef.current = false // seek complete — safe to re-enable onTimeUpdate
+              setCurrentTime(videoRef.current?.currentTime || 0)
+            }}
             onLoadedMetadata={() => setDuration(videoRef.current?.duration || 0)}
             onPlay={() => { setPlaying(true); syncSetPlaying(true, videoRef) }}
             onPause={() => { setPlaying(false); syncSetPlaying(false, videoRef) }}
@@ -387,6 +397,7 @@ export default function ReviewPage({ session, onDone, onBack, bridgeSyncStatus, 
           onSyncSeek={syncSeek}
           onTogglePlay={togglePlay}
           onToggleMute={toggleMute}
+          onDragStart={() => { isDraggingRef.current = true }}
         />
       </div>
 
