@@ -14,7 +14,6 @@ export default function ReviewPage({ session, onDone, onBack, bridgeSyncStatus, 
   const { syncNavigation, syncSetPlaying, syncSeek } = useSync(onBridgeSyncStatus, session.sessionId)
 
   const videoRef  = useRef(null)
-  const fileInputRef = useRef(null)
   const rootRef   = useRef(null)
   // Stays true from drag-start until onSeeked fires — gates onTimeUpdate
   // so the video's lagging position cannot snap the ball back after a seek
@@ -171,22 +170,21 @@ export default function ReviewPage({ session, onDone, onBack, bridgeSyncStatus, 
     setMuted(v.muted)
   }
 
-  // In Tauri on Windows, File objects from <input type="file"> expose a .path
-  // property with the real filesystem path. convertFileSrc(path) produces an
-  // asset:// URL that WebView2 serves with proper HTTP range request support,
-  // giving a finite duration and working seek — unlike blob: URLs.
-  function handleVideoFile(e) {
-    const file = e.target.files?.[0]
-    if (!file) return
-    const path = file.path
-    if (!path) {
-      console.error('[MARK] file.path not available — cannot load via asset protocol')
-      return
+  // Uses a Rust-side rfd file dialog (via invoke) to get the real filesystem path,
+  // then convertFileSrc() to produce an asset:// URL that WebView2 can range-request.
+  // file.path is unavailable in Tauri 2 and plugin-dialog doesn't register — this is
+  // the only approach confirmed to work.
+  async function handleVideoFile() {
+    try {
+      const path = await invoke('pick_video_file')
+      if (!path) return
+      const url = convertFileSrc(path)
+      console.log('[MARK] loading video via asset URL:', url)
+      const v = videoRef.current
+      if (v) { v.src = url; v.load(); setVideoLoaded(true) }
+    } catch (e) {
+      console.error('[MARK] pick_video_file failed:', e)
     }
-    const url = convertFileSrc(path)
-    console.log('[MARK] loading video via asset URL:', url)
-    const v = videoRef.current
-    if (v) { v.src = url; v.load(); setVideoLoaded(true) }
   }
 
   // Called by the "Start Reviewing" button. This is a REAL user click, so it
@@ -335,17 +333,18 @@ export default function ReviewPage({ session, onDone, onBack, bridgeSyncStatus, 
           {!videoLoaded && (
             <div
               style={{position:'absolute',inset:0,display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',gap:16,cursor:'pointer'}}
-              onClick={() => fileInputRef.current?.click()}
+              onClick={handleVideoFile}
               onDragOver={e => e.preventDefault()}
               onDrop={e => {
                 e.preventDefault()
+                // Try file.path first (may work on some Tauri builds)
                 const file = e.dataTransfer.files?.[0]
-                if (!file) return
-                const path = file.path
-                if (path) {
-                  const url = convertFileSrc(path)
+                if (file?.path) {
+                  const url = convertFileSrc(file.path)
                   const v = videoRef.current
                   if (v) { v.src = url; v.load(); setVideoLoaded(true) }
+                } else {
+                  handleVideoFile()
                 }
               }}
             >
@@ -360,8 +359,6 @@ export default function ReviewPage({ session, onDone, onBack, bridgeSyncStatus, 
               </div>
             </div>
           )}
-
-          <input ref={fileInputRef} type="file" accept="video/*" style={{display:'none'}} onChange={handleVideoFile}/>
 
           {/* Start Reviewing gate — video is loaded but review not yet started.
               The button click is a real user interaction that wakes the keyboard,

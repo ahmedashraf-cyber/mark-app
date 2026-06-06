@@ -169,6 +169,18 @@ fn inject_bridge_windows(session_id: &str) -> Result<String, String> {
     Ok("injected".to_string())
 }
 
+// ─── Native file picker — returns real filesystem path for convertFileSrc ─────
+// file.path is not available in Tauri 2 from <input type="file">, and the
+// plugin-dialog JS bridge doesn't register. This Rust command uses rfd to open
+// a native Windows file dialog and return the selected path directly.
+#[command]
+fn pick_video_file() -> Option<String> {
+    rfd::FileDialog::new()
+        .add_filter("Video", &["mp4", "mkv", "mov", "avi", "webm", "mts", "m2ts"])
+        .pick_file()
+        .map(|p| p.to_string_lossy().to_string())
+}
+
 // ─── Legacy command kept for API compatibility (sync now goes via Firestore) ───
 #[command]
 fn send_key_to_collection_app(_exe_name: String, _key_code: String) -> Result<String, String> {
@@ -180,6 +192,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             send_key_to_collection_app,
             inject_bridge_script,
+            pick_video_file,
         ])
         .run(tauri::generate_context!())
         .expect("error while running MARK");
