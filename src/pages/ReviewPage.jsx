@@ -315,12 +315,15 @@ export default function ReviewPage({ session, onDone, onBack, bridgeSyncStatus, 
       </div>
 
       {/* Controls bar */}
-      <div style={{flexShrink:0,background:'var(--bg-2)',borderTop:'1px solid var(--b-1)',padding:'8px 16px 12px'}}>
-        <ErrorTimeline errors={errors} videoDuration={duration} currentTime={currentTime} onSeek={seekTo} />
-        <div style={{display:'flex',justifyContent:'space-between',marginTop:6}}>
-          <span className="mono" style={{fontSize:11,color:'var(--t-3)'}}>{formatTime(currentTime)}</span>
-          <span className="mono" style={{fontSize:11,color:'var(--t-3)'}}>{formatTime(duration)}</span>
-        </div>
+      <div style={{flexShrink:0,background:'var(--bg-2)',borderTop:'1px solid var(--b-1)',padding:'4px 16px 8px'}}>
+        <ErrorTimeline
+          errors={errors}
+          videoDuration={duration}
+          currentTime={currentTime}
+          playing={playing}
+          onSeek={seekTo}
+          onTogglePlay={togglePlay}
+        />
       </div>
 
       {/* Error Tag Modal */}
