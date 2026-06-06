@@ -314,8 +314,8 @@ fn inject_bridge_windows(session_id: &str) -> Result<String, String> {
 fn open_file(path: String) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
-        std::process::Command::new("explorer")
-            .arg(&path)
+        std::process::Command::new("cmd")
+            .args(["/c", "start", "", &path])
             .spawn()
             .map_err(|e| format!("Failed to open file: {}", e))?;
     }
