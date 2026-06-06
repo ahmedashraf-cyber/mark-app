@@ -45,11 +45,16 @@ export default function ErrorTimeline({
   const [hoverTime, setHoverTime] = useState(0)
   const [tooltip,   setTooltip]   = useState(null)
 
-  // Keep duration in a ref so onUp always reads the live value,
-  // not the value captured when pointerdown fired (which may be 0
-  // if onLoadedMetadata hadn't fired yet on first interaction)
-  const durationRef = useRef(videoDuration || 0)
-  durationRef.current = videoDuration || 0
+  // All three refs are updated every render so the window-level closures
+  // always call the latest callbacks — never a value captured at drag-start.
+  // If React hasn't committed a re-render when pointerdown fires (e.g. first
+  // interaction), const seek = onSeek captures undefined; refs never can.
+  const durationRef   = useRef(videoDuration || 0)
+  const onSeekRef     = useRef(onSeek)
+  const onSyncSeekRef = useRef(onSyncSeek)
+  durationRef.current   = videoDuration || 0
+  onSeekRef.current     = onSeek
+  onSyncSeekRef.current = onSyncSeek
 
   const duration   = videoDuration || 0
   const isDragging = dragPct !== null
@@ -73,12 +78,6 @@ export default function ErrorTimeline({
     onDragStart?.()
     setDragPct(pctFromClientX(e.clientX))
 
-    // Capture callbacks now — but NOT duration. Duration is read from
-    // durationRef.current at the moment of use so it's always the live value,
-    // never the potentially-zero value from the render when pointerdown fired.
-    const seek     = onSeek
-    const syncSeek = onSyncSeek
-
     function onMove(ev) {
       const pct = pctFromClientX(ev.clientX)
       setDragPct(pct)
@@ -90,8 +89,9 @@ export default function ErrorTimeline({
       cleanup()
       const pct = pctFromClientX(ev.clientX)
       const t   = pct * durationRef.current  // live — never stale or zero
-      seek?.(t)
-      syncSeek?.(t)
+      console.log('[MARK onUp] t=', t, 'dur=', durationRef.current, 'onSeek=', typeof onSeekRef.current)
+      onSeekRef.current?.(t)      // always the latest seekToAndSync — never captured stale value
+      onSyncSeekRef.current?.(t)  // always the latest syncSeek
       setDragPct(null)
     }
 

@@ -152,6 +152,7 @@ export default function ReviewPage({ session, onDone, onBack, bridgeSyncStatus, 
     if (!v) return
     // isFinite guards NaN (video not yet loaded) — NaN || 0 would clamp every seek to 0
     const t = Math.max(0, isFinite(v.duration) ? Math.min(v.duration, seconds) : seconds)
+    console.log('[MARK seekTo] seconds=', seconds, 'v.duration=', v.duration, 't=', t, 'v=', !!v)
     v.currentTime = t
     setCurrentTime(t)
   }
