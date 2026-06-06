@@ -2,10 +2,6 @@ import { useState, useRef } from 'react'
 
 export default function ErrorTimeline({ errors, videoDuration, onSeek, currentTime, onDragStart }) {
   const trackRef = useRef(null)
-  // W3C spec: pointer capture is implicitly released BEFORE pointerup fires,
-  // so hasPointerCapture() always returns false inside handlePointerUp.
-  // We use our own ref to track drag state instead.
-  const isDraggingRef = useRef(false)
 
   // dragPct is the scrubber position (0–1) while the user is dragging.
   // It is ONLY used for the visual position — the video is not touched until
@@ -26,45 +22,55 @@ export default function ErrorTimeline({ errors, videoDuration, onSeek, currentTi
     return `${m}:${sec.toString().padStart(2, '0')}`
   }
 
-  function pctFromPointer(e) {
+  function pctFromClientX(clientX) {
     const rect = trackRef.current?.getBoundingClientRect()
     if (!rect || rect.width === 0) return 0
-    return Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width))
+    return Math.max(0, Math.min(1, (clientX - rect.left) / rect.width))
   }
 
   function handlePointerDown(e) {
     e.preventDefault()
-    trackRef.current.setPointerCapture(e.pointerId)
-    isDraggingRef.current = true
-    // Tell parent to freeze onTimeUpdate so the video's lagging position
-    // cannot overwrite currentTime state while we are dragging.
+
+    // Freeze parent's onTimeUpdate so the lagging video position cannot
+    // overwrite the drag visual while the pointer is held down.
     onDragStart?.()
-    setDragPct(pctFromPointer(e))
-  }
+    setDragPct(pctFromClientX(e.clientX))
 
-  function handlePointerMove(e) {
-    if (!isDraggingRef.current) return
-    // Visual-only update — no video seek during drag.
-    // This avoids stacked rapid seeks that confuse WebView2.
-    setDragPct(pctFromPointer(e))
-  }
+    // Capture the prop values now — closures below must not go stale
+    // if the component re-renders mid-drag.
+    const dur  = videoDuration
+    const seek = onSeek
 
-  function handlePointerUp(e) {
-    if (!isDraggingRef.current) return
-    isDraggingRef.current = false
-    const pct = pctFromPointer(e)
+    // Why window-level listeners instead of onPointerMove/onPointerUp props:
+    // React delegates events to the root container. When the pointer leaves the
+    // track div, React stops firing the element's handlers. Attaching directly
+    // to window guarantees we receive every move and the final release regardless
+    // of where the pointer ends up, without needing setPointerCapture or any
+    // spec quirks around implicit capture release before pointerup.
+    function onMove(ev) {
+      setDragPct(pctFromClientX(ev.clientX))
+    }
 
-    // Seek first, then clear dragPct.
-    // React 19 batches both setCurrentTime(t) (from onSeek inside the parent)
-    // and setDragPct(null) into one render, so the ball lands at the correct
-    // final position with no intermediate snap-back frame.
-    onSeek?.(pct * videoDuration)
-    setDragPct(null)
-  }
+    function onUp(ev) {
+      cleanup()
+      seek?.(pctFromClientX(ev.clientX) * dur)
+      setDragPct(null)
+    }
 
-  function handlePointerCancel() {
-    isDraggingRef.current = false
-    setDragPct(null)
+    function onCancel() {
+      cleanup()
+      setDragPct(null)
+    }
+
+    function cleanup() {
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup',   onUp)
+      window.removeEventListener('pointercancel', onCancel)
+    }
+
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup',   onUp)
+    window.addEventListener('pointercancel', onCancel)
   }
 
   // During drag: show the drag position.
@@ -78,9 +84,6 @@ export default function ErrorTimeline({ errors, videoDuration, onSeek, currentTi
       ref={trackRef}
       style={{ position: 'relative', height: 44, display: 'flex', alignItems: 'center', cursor: 'pointer' }}
       onPointerDown={handlePointerDown}
-      onPointerMove={handlePointerMove}
-      onPointerUp={handlePointerUp}
-      onPointerCancel={handlePointerCancel}
     >
 
       {/* Track */}

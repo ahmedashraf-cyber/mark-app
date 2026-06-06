@@ -147,7 +147,9 @@ export default function ReviewPage({ session, onDone, onBack }) {
   function seekTo(seconds) {
     const v = videoRef.current
     if (!v) return
-    const t = Math.max(0, Math.min(v.duration || 0, seconds))
+    // isFinite guards against NaN/Infinity (video not yet loaded);
+    // fall back to the requested time so the browser clamps it instead.
+    const t = Math.max(0, isFinite(v.duration) ? Math.min(v.duration, seconds) : seconds)
     v.currentTime = t
     // Update state immediately so the UI reflects the seek target at once,
     // rather than waiting for onTimeUpdate (which may fire with a stale value).
