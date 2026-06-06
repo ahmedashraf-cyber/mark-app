@@ -75,14 +75,8 @@ export async function exportSessionToGoogleSheets({ session, tags, quality, tagC
   }
 
   const { invoke } = await import('@tauri-apps/api/core')
-  const raw    = await invoke('post_to_sheets', { url: APPS_SCRIPT_URL, body: JSON.stringify(payload) })
-  // PowerShell ConvertTo-Json wraps strings in quotes, parse carefully
-  let result
-  try { result = JSON.parse(raw) } catch { result = JSON.parse(JSON.stringify(raw)) }
-  if (result.error) throw new Error(result.error)
-  // Apps Script returns {url: "..."} - PowerShell may wrap in extra object
-  const sheetUrl = result.url || result?.url
-  if (!sheetUrl) throw new Error('No URL returned: ' + raw)
+  const sheetUrl = await invoke('create_google_sheet', { payload: JSON.stringify(payload) })
+  if (!sheetUrl) throw new Error('No URL returned from create_google_sheet')
   return sheetUrl
 }
 

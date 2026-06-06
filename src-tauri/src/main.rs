@@ -335,33 +335,218 @@ fn send_key_to_collection_app(_exe_name: String, _key_code: String) -> Result<St
     Ok("noop".to_string())
 }
 
-// --- Post JSON to Google Apps Script via PowerShell (bypasses WebView2 CSP) --
+
+// --- Google Sheets API via Service Account JWT --------------------------------
+const SA_CLIENT_EMAIL: &str = "mark-reporter@hudl-studio.iam.gserviceaccount.com";
+const SA_PRIVATE_KEY: &str = "-----BEGIN PRIVATE KEY-----\nMIIEvAIBADANBgkqhkiG9w0BAQEFAASCBKYwggSiAgEAAoIBAQC6LAc8XSxg5QLj\nfctNEIVaogAnA1WSvS1UtM8slnFGJSRc63OEhw6Y4SYaF/63XRlzevPHM5d825YZ\nHaxukZnHrOi436kq9+LzxBUnN0h9tGX9MaFoHHg1ra+Hj7fEHyZShVEkR6ogecG8\nbYuWXz1Un5f4hp4009ZbRx0bVYvYnyi6gCiFVNZZcAU4GzFo9jVVrbwyjL9OHHdl\nkmwRb+C/k57FnoE5vBMb2HZf3Q9H/CbBDK5IapNVG0Hib26MuPS4/kx5fBSr5DKl\n5AcfMrddh2YDgOpYwwgSgSKKfXmcZ2Iu6bMaG7Jv+j+i+CFaRN7kVmifsAK8mKQE\nZYLWzKz1AgMBAAECggEAFf1vWVz0Cfni7nYEVnT2G295LyKAsBVyTkgRFIYsmQl4\nExWojmXZfotRkdF1v7jacb57HvNkGFZjk1Hi9ShzjpdI4dVhSPcAsqRdj0VDZb2y\nMkbzdrWuKUD7s7pxDVRUlXizzeI9IRrgnF4gF8HmH6G+NJfKBhljf2KV+I2ROCPY\n+tfwH8iJuIyZL7PTcSTxg54UUhCY6+arCkJ2tF268MJCb6ydrXGDzgQU5CfNWQNY\n9o1jK8BggvSr0LVxPiF6otITH3AhgLal+E5T3CdORfLR1PU9hMCSii6xxr7Q3EDM\nsY1x/BoIz9jRZwg9FfKn4ZAGClsHlZmWTzDZ0pSWPQKBgQDdLdfFp03MZpkdrZti\nznpMd+8peUiYp7gJ6UXy2Mrf2Ne76v5j+rY8J9GAQr3glR0bLCfRvQKkxE1xPmW6\n3YdkfNsSrj42sYmbBWeLvzEmDg/0MgyoI45epvnOKwotiuDdjxV8qTGG6l6kYCmR\n+3r9i/MqPsGPUv++aRifUxtqPwKBgQDXe0xiessqDqymHgbt0rl3JpRYDTPIDSgK\n539FcDBaaExVFQ9Ay5EXjkXEAP0i1RwHQK864/vyjmI+Y8XonI0Lacjg6oSj6Tfg\n6bpaBh1VNm3UC59/0ZgHjBhx7Gk5P7yGMzhmJNoAVeYsLnr0GOs4nIypSJbQyIEf\nQZMH+iNTywKBgBTbUdGNqURxGFc4G8MBfX7ggGkEyte6WRx2JuZzkw3wwMczrbF3\n3t9lUdgqcwVOimQZkdexXyJycGsRWz53zWCodXAZhjxaGYPIyq7e5J+WC+MXJSJl\n1/MNA9lxLZCF3BaIe5o5yjXSvAH8H29oq3xlShTdvhrp1Lv75RqBF8C5AoGActCX\n2sFjD33SMJE/T+lAOWStFl2ygZ3BAE5pWi51FTcNtSgLgJL3NH3yXoXIW48B6Dtn\nIxHnZU7IukWfZlpELRiomG9dTZku1QC08tLfPlBKJPoseobLYvoa7FjzmDWF1lvk\naUipgBRFGLWLfhTpALkpmem7snOjmWvvVAjMWhECgYB4CdgjA8nGZiGb+SSfAkXT\nHpPWLkD3UdNBX1zc8GOZeT59UzyGzqQ/yxhUzYixHDLRRa1hJqrU/nlkZCGus2HE\nbWOnU3k713wI/8qoBywrtVDDejLHOYqwJwQHjy8MsnZTggs6+RWpbGqeq8CUA6Lg\n9Ay6VxPbsVq7lICbee2LoA==\n-----END PRIVATE KEY-----\n";
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct JwtClaims {
+    iss: String,
+    scope: String,
+    aud: String,
+    exp: u64,
+    iat: u64,
+}
+
+async fn get_google_access_token() -> Result<String, String> {
+    use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|e| e.to_string())?
+        .as_secs();
+
+    let claims = JwtClaims {
+        iss: SA_CLIENT_EMAIL.to_string(),
+        scope: "https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/drive".to_string(),
+        aud: "https://oauth2.googleapis.com/token".to_string(),
+        exp: now + 3600,
+        iat: now,
+    };
+
+    let key = EncodingKey::from_rsa_pem(SA_PRIVATE_KEY.as_bytes())
+        .map_err(|e| format!("Key error: {}", e))?;
+
+    let jwt = encode(&Header::new(Algorithm::RS256), &claims, &key)
+        .map_err(|e| format!("JWT error: {}", e))?;
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .post("https://oauth2.googleapis.com/token")
+        .form(&[
+            ("grant_type", "urn:ietf:params:oauth:grant-type:jwt-bearer"),
+            ("assertion", &jwt),
+        ])
+        .send()
+        .await
+        .map_err(|e| format!("Token request failed: {}", e))?;
+
+    let json: serde_json::Value = resp.json().await
+        .map_err(|e| format!("Token parse failed: {}", e))?;
+
+    json["access_token"]
+        .as_str()
+        .map(|s| s.to_string())
+        .ok_or_else(|| format!("No access_token in response: {}", json))
+}
+
 #[command]
-fn post_to_sheets(url: String, body: String) -> Result<String, String> {
-    #[cfg(target_os = "windows")]
-    {
-        // Escape body for PowerShell single-quoted string
-        let safe_body = body.replace('\'', "''");
-        let ps_cmd = format!(
-            "$r = Invoke-RestMethod -Uri '{}' -Method Post -ContentType 'text/plain' -Body '{}'; ConvertTo-Json $r",
-            url, safe_body
-        );
-        let output = std::process::Command::new("powershell")
-            .args(["-NoProfile", "-NonInteractive", "-Command", &ps_cmd])
-            .output()
-            .map_err(|e| format!("PowerShell failed: {}", e))?;
-        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-        if !output.status.success() && !stderr.trim().is_empty() {
-            return Err(stderr);
+async fn create_google_sheet(payload: String) -> Result<String, String> {
+    let data: serde_json::Value = serde_json::from_str(&payload)
+        .map_err(|e| format!("Parse payload: {}", e))?;
+
+    let token = get_google_access_token().await?;
+    let client = reqwest::Client::new();
+
+    // 1. Create the spreadsheet
+    let sheet_name = data["sheetName"].as_str().unwrap_or("MARK Report");
+    let tab_name   = data["tabName"].as_str().unwrap_or("Session");
+
+    let create_body = serde_json::json!({
+        "properties": { "title": sheet_name },
+        "sheets": [{ "properties": { "title": tab_name } }]
+    });
+
+    let create_resp = client
+        .post("https://sheets.googleapis.com/v4/spreadsheets")
+        .bearer_auth(&token)
+        .json(&create_body)
+        .send()
+        .await
+        .map_err(|e| format!("Create sheet failed: {}", e))?;
+
+    let sheet_data: serde_json::Value = create_resp.json().await
+        .map_err(|e| format!("Create sheet parse: {}", e))?;
+
+    let spreadsheet_id = sheet_data["spreadsheetId"]
+        .as_str()
+        .ok_or_else(|| format!("No spreadsheetId: {}", sheet_data))?
+        .to_string();
+
+    let sheet_url = format!("https://docs.google.com/spreadsheets/d/{}/edit", spreadsheet_id);
+
+    // 2. Build rows: quality row + headers + data
+    let quality_row = data["qualityRow"].as_str().unwrap_or("");
+    let headers = data["headers"].as_array().cloned().unwrap_or_default();
+    let rows    = data["rows"].as_array().cloned().unwrap_or_default();
+    let video_links  = data["videoLinks"].as_array().cloned().unwrap_or_default();
+    let timestamps   = data["timestamps"].as_array().cloned().unwrap_or_default();
+
+    let col_count = headers.len();
+
+    // Build values array for batchUpdate
+    let mut values: Vec<serde_json::Value> = vec![];
+
+    // Row 1: quality score
+    let mut q_row = vec![serde_json::Value::String(quality_row.to_string())];
+    for _ in 1..col_count { q_row.push(serde_json::Value::String("".to_string())); }
+    values.push(serde_json::Value::Array(q_row));
+
+    // Row 2: headers
+    values.push(serde_json::Value::Array(headers.clone()));
+
+    // Rows 3+: data, with video link in last column
+    for (i, row) in rows.iter().enumerate() {
+        let mut r = row.as_array().cloned().unwrap_or_default();
+        // Replace last empty cell with hyperlink formula if video link exists
+        let link = video_links.get(i).and_then(|v| v.as_str()).unwrap_or("");
+        let ts   = timestamps.get(i).and_then(|v| v.as_str()).unwrap_or("");
+        if !link.is_empty() {
+            let formula = format!("=HYPERLINK(\"{}\",\"Open Video ({})\") ", link, ts);
+            if let Some(last) = r.last_mut() {
+                *last = serde_json::Value::String(formula);
+            }
         }
-        Ok(stdout)
+        values.push(serde_json::Value::Array(r));
     }
-    #[cfg(not(target_os = "windows"))]
-    {
-        let _ = (url, body);
-        Ok(r#"{"url":""}"#.to_string())
-    }
+
+    // 3. Write values
+    let range = format!("{}!A1", tab_name);
+    let update_body = serde_json::json!({
+        "range": range,
+        "majorDimension": "ROWS",
+        "values": values
+    });
+
+    client
+        .put(format!(
+            "https://sheets.googleapis.com/v4/spreadsheets/{}/values/{}?valueInputOption=USER_ENTERED",
+            spreadsheet_id, urlencoding::encode(&range)
+        ))
+        .bearer_auth(&token)
+        .json(&update_body)
+        .send()
+        .await
+        .map_err(|e| format!("Write values failed: {}", e))?;
+
+    // 4. Format: bold row 1+2, merge row 1
+    let requests = serde_json::json!({
+        "requests": [
+            // Merge quality row
+            {
+                "mergeCells": {
+                    "range": { "sheetId": 0, "startRowIndex": 0, "endRowIndex": 1, "startColumnIndex": 0, "endColumnIndex": col_count },
+                    "mergeType": "MERGE_ALL"
+                }
+            },
+            // Bold rows 1 and 2
+            {
+                "repeatCell": {
+                    "range": { "sheetId": 0, "startRowIndex": 0, "endRowIndex": 2 },
+                    "cell": { "userEnteredFormat": { "textFormat": { "bold": true } } },
+                    "fields": "userEnteredFormat.textFormat.bold"
+                }
+            },
+            // Orange text for quality row
+            {
+                "repeatCell": {
+                    "range": { "sheetId": 0, "startRowIndex": 0, "endRowIndex": 1 },
+                    "cell": { "userEnteredFormat": {
+                        "textFormat": { "bold": true, "foregroundColor": { "red": 0.91, "green": 0.35, "blue": 0.047 } },
+                        "backgroundColor": { "red": 0.1, "green": 0.1, "blue": 0.18 }
+                    }},
+                    "fields": "userEnteredFormat.textFormat,userEnteredFormat.backgroundColor"
+                }
+            },
+            // Freeze 2 rows
+            {
+                "updateSheetProperties": {
+                    "properties": { "sheetId": 0, "gridProperties": { "frozenRowCount": 2 } },
+                    "fields": "gridProperties.frozenRowCount"
+                }
+            }
+        ]
+    });
+
+    client
+        .post(format!(
+            "https://sheets.googleapis.com/v4/spreadsheets/{}/batchUpdate",
+            spreadsheet_id
+        ))
+        .bearer_auth(&token)
+        .json(&requests)
+        .send()
+        .await
+        .map_err(|e| format!("Format failed: {}", e))?;
+
+    // 5. Make sheet publicly viewable (anyone with link)
+    let drive_body = serde_json::json!({
+        "role": "reader",
+        "type": "anyone"
+    });
+    client
+        .post(format!(
+            "https://www.googleapis.com/drive/v3/files/{}/permissions",
+            spreadsheet_id
+        ))
+        .bearer_auth(&token)
+        .json(&drive_body)
+        .send()
+        .await
+        .map_err(|e| format!("Share failed: {}", e))?;
+
+    Ok(sheet_url)
 }
 
 fn main() {
@@ -388,7 +573,7 @@ fn main() {
             pick_video_file,
             get_video_url,
             open_file,
-            post_to_sheets,
+            create_google_sheet,
         ])
         .run(tauri::generate_context!())
         .expect("error while running MARK");
