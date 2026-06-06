@@ -25,7 +25,6 @@ export const GK_EXTRAS = [
 ]
 
 // ── GK-specific wrong extras (shown when Wrong Extra / Missing Extra selected)
-export
 // events: which GK sub-event ids this applies to
 export const GK_WRONG_EXTRAS = {
   gk_save_attempt: [
