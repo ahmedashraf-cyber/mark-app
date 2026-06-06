@@ -5,6 +5,12 @@
   const sid='__SESSION_ID__';
   const video=document.querySelector('video');
   if(!video){console.error('[MARK] No video found');alert('[MARK] No video element found on this page.');return;}
+
+  // Mute collection app audio immediately and keep it muted — MARK's audio is the one to use
+  video.muted=true;
+  // Re-mute if something unmutes it (e.g. the collection app itself)
+  video.addEventListener('volumechange',()=>{ if(!video.muted) video.muted=true; });
+
   const load=src=>new Promise((ok,fail)=>{const s=document.createElement('script');s.src=src;s.onload=ok;s.onerror=fail;document.head.appendChild(s);});
   const CDN='https://www.gstatic.com/firebasejs/10.12.2';
   try{
@@ -28,40 +34,39 @@
   let unsub=null;
   function connect(user){
     if(unsub)unsub();
-    let lastNav=0, lastPos=0;
+    let lastNav=0,lastPos=0,lastSeek=0;
     unsub=db.collection('mark_sessions').doc(sid).onSnapshot(snap=>{
       if(!snap.exists)return;
       const data=snap.data();
 
-      // ── Discrete nav commands (arrow keys) ──────────────────────────────
+      // ── Discrete nav (arrow keys) ───────────────────────────────────────
       const c=data.navCommand;
       if(c&&c.ts>lastNav){
         lastNav=c.ts;
         const step=c.shift?0.04:0.4;
-        if(c.action==='forward') video.currentTime=Math.max(0,video.currentTime+step);
+        if(c.action==='forward')  video.currentTime=Math.max(0,video.currentTime+step);
         else if(c.action==='backward') video.currentTime=Math.max(0,video.currentTime-step);
-        // playpause kept as fallback but posSync handles play state now
-        else if(c.action==='playpause') video.paused?video.play():video.pause();
       }
 
-      // ── Position heartbeat (play/pause + real-time position sync) ────────
-      // Only apply if the posSync is newer than the last one we processed.
-      // We also skip if the position is already close (within 1.5s) to avoid
-      // fighting the video's own natural playback — only correct big drifts.
+      // ── Explicit seek (scrubber drag / click) ───────────────────────────
+      const sk=data.seekCommand;
+      if(sk&&sk.ts>lastSeek){
+        lastSeek=sk.ts;
+        video.currentTime=sk.currentTime;
+      }
+
+      // ── Position heartbeat (play/pause + drift correction) ──────────────
       const p=data.posSync;
       if(p&&p.ts>lastPos){
         lastPos=p.ts;
-        // Sync play/pause state
-        if(p.playing&&video.paused) video.play();
+        if(p.playing&&video.paused)  video.play();
         else if(!p.playing&&!video.paused) video.pause();
-        // Sync position — only jump if we've drifted more than 1.5s
-        // (avoids constant seeking while both videos play normally)
         const drift=Math.abs(video.currentTime-p.currentTime);
         if(drift>1.5) video.currentTime=p.currentTime;
       }
     },e=>console.error('[MARK] snapshot error',e));
     panel.style.display='none';
-    console.log('[MARK] connected & listening as',user.email,'(panel hidden)');
+    console.log('[MARK] connected & listening as',user.email);
   }
   auth.onAuthStateChanged(u=>{if(u)connect(u);else showLogin();});
 })();

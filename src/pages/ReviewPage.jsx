@@ -13,7 +13,7 @@ export default function ReviewPage({ session, onDone, onBack, bridgeSyncStatus, 
   const { profile } = useAuth()
   // Use the persistent sync status from App so the bridge connection survives
   // navigating back to setup and starting a new session — no re-injection needed.
-  const { syncNavigation, syncSetPlaying } = useSync(onBridgeSyncStatus, session.sessionId)
+  const { syncNavigation, syncSetPlaying, syncSeek } = useSync(onBridgeSyncStatus, session.sessionId)
 
   const videoRef  = useRef(null)
   const fileInputRef = useRef(null)
@@ -21,6 +21,7 @@ export default function ReviewPage({ session, onDone, onBack, bridgeSyncStatus, 
   const [videoLoaded, setVideoLoaded] = useState(false)
   const [reviewStarted, setReviewStarted] = useState(false)
   const [playing, setPlaying]         = useState(false)
+  const [muted, setMuted]             = useState(false)
   const [currentTime, setCurrentTime] = useState(0)
   const [duration, setDuration]       = useState(0)
 
@@ -114,6 +115,19 @@ export default function ReviewPage({ session, onDone, onBack, bridgeSyncStatus, 
     const v = videoRef.current
     if (!v) return
     v.currentTime = Math.max(0, Math.min(v.duration || 0, seconds))
+  }
+
+  // seekTo + sync to collection app — used by scrubber drag and error marker clicks
+  function seekToAndSync(seconds) {
+    seekTo(seconds)
+    syncSeek(seconds)
+  }
+
+  function toggleMute() {
+    const v = videoRef.current
+    if (!v) return
+    v.muted = !v.muted
+    setMuted(v.muted)
   }
 
   function handleVideoFile(e) {
@@ -327,8 +341,11 @@ export default function ReviewPage({ session, onDone, onBack, bridgeSyncStatus, 
           videoDuration={duration}
           currentTime={currentTime}
           playing={playing}
-          onSeek={seekTo}
+          muted={muted}
+          onSeek={seekToAndSync}
+          onSyncSeek={syncSeek}
           onTogglePlay={togglePlay}
+          onToggleMute={toggleMute}
         />
       </div>
 
