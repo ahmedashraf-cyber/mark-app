@@ -314,8 +314,9 @@ fn inject_bridge_windows(session_id: &str) -> Result<String, String> {
 fn open_file(path: String) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
-        std::process::Command::new("cmd")
-            .args(["/c", "start", "", &path])
+        // Use PowerShell Invoke-Item which handles spaces and special chars correctly
+        std::process::Command::new("powershell")
+            .args(["-NoProfile", "-Command", &format!("Invoke-Item '{}'", path.replace('\'', "''"))])
             .spawn()
             .map_err(|e| format!("Failed to open file: {}", e))?;
     }

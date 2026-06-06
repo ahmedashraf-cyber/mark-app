@@ -108,7 +108,7 @@ function DetailPanel({ tag, onEdit, onDelete, onClose }) {
 }
 
 // ── Timeline Row ──────────────────────────────────────────────────────────────
-function TimelineRow({ label, tags, videoDuration, currentTime, selectedId, onCardClick }) {
+function TimelineRow({ label, tags, videoDuration, currentTime, selectedId, onCardClick, homeTeam }) {
   const rowRef = useRef(null)
 
   // Auto-scroll to card closest to currentTime
@@ -129,17 +129,37 @@ function TimelineRow({ label, tags, videoDuration, currentTime, selectedId, onCa
       borderBottom: '1px solid var(--b-1)',
       minHeight: 56,
     }}>
-      {/* Team label */}
+      {/* Team badge */}
       <div style={{
-        width: 110, flexShrink: 0,
+        width: 120, flexShrink: 0,
         padding: '0 12px',
-        fontSize: 11, fontWeight: 800, color: 'var(--t-1)',
-        fontFamily: 'Inter, sans-serif',
+        display: 'flex', alignItems: 'center',
         borderRight: '1px solid var(--b-1)',
-        whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
-        letterSpacing: 0.2,
-        background: 'linear-gradient(90deg, var(--bg-2), transparent)',
       }}>
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 7,
+          padding: '4px 10px',
+          borderRadius: 8,
+          background: 'var(--bg-3)',
+          border: '1px solid var(--b-2)',
+          width: '100%',
+          transition: 'all 0.18s ease',
+        }}>
+          <div style={{
+            width: 6, height: 6, borderRadius: '50%', flexShrink: 0,
+            background: label === homeTeam ? '#0A84FF' : '#FF453A',
+            boxShadow: `0 0 5px ${label === homeTeam ? 'rgba(10,132,255,0.6)' : 'rgba(255,69,58,0.6)'}`,
+          }}/>
+          <span style={{
+            fontSize: 11, fontWeight: 800, color: 'var(--t-1)',
+            fontFamily: 'Inter, sans-serif',
+            letterSpacing: 0.1,
+            whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+          }}>
+            {label}
+          </span>
+        </div>
+      </div>
         {label}
       </div>
 
@@ -283,6 +303,7 @@ export default function TaggedEventsList({
         currentTime={currentTime}
         selectedId={selectedTag?.id}
         onCardClick={handleCardClick}
+        homeTeam={homeTeam}
       />
 
       {/* Away row */}
@@ -293,6 +314,7 @@ export default function TaggedEventsList({
         currentTime={currentTime}
         selectedId={selectedTag?.id}
         onCardClick={handleCardClick}
+        homeTeam={homeTeam}
       />
 
       {/* Empty state */}
