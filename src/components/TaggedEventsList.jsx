@@ -133,10 +133,12 @@ function TimelineRow({ label, tags, videoDuration, currentTime, selectedId, onCa
       <div style={{
         width: 110, flexShrink: 0,
         padding: '0 12px',
-        fontSize: 11, fontWeight: 700, color: 'var(--t-2)',
-        fontFamily: 'DM Sans, sans-serif',
+        fontSize: 11, fontWeight: 800, color: 'var(--t-1)',
+        fontFamily: 'Inter, sans-serif',
         borderRight: '1px solid var(--b-1)',
         whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+        letterSpacing: 0.2,
+        background: 'linear-gradient(90deg, var(--bg-2), transparent)',
       }}>
         {label}
       </div>
