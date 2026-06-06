@@ -137,8 +137,8 @@ async fn get_video_url(
 ) -> Result<String, String> {
     *state.path.lock().unwrap() = Some(path.clone());
     let port = *state.port.lock().unwrap();
-    let encoded = urlencoding::encode(&path).to_string();
-    Ok(format!("http://127.0.0.1:{}/video?path={}", port, encoded))
+    // Store path in state — server reads it directly, no URL encoding needed
+    Ok(format!("http://127.0.0.1:{}/video", port))
 }
 
 // ─── Native file picker via rfd ───────────────────────────────────────────────
