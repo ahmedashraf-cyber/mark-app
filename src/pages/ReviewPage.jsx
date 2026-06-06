@@ -68,10 +68,12 @@ export default function ReviewPage({ session, onDone, onBack, bridgeSyncStatus, 
         return
       }
 
-      // 0  Reset speed to 1x
+      // 0  Fifty Fifty event (replaces speed reset — use keyboard shortcut + / - to control speed)
       if (key === '0') {
         e.preventDefault()
-        changeSpeed(1)
+        setActiveKey('0')
+        setTimeout(() => setActiveKey(null), 600)
+        setPendingTag({ key: '0', isMissing: false, videoTime: videoRef.current?.currentTime || 0 })
         return
       }
 
@@ -187,6 +189,11 @@ export default function ReviewPage({ session, onDone, onBack, bridgeSyncStatus, 
     } catch (e) {
       console.error('[MARK] handleVideoFile failed:', e)
     }
+  }
+
+  function handleMouseEvent(ev) {
+    if (!reviewStarted) return
+    setPendingTag({ key: ev.key || '•', isMissing: false, videoTime: videoRef.current?.currentTime || 0, id: ev.id, label: ev.label })
   }
 
   // Called by the "Start Reviewing" button. This is a REAL user click, so it
@@ -354,7 +361,7 @@ export default function ReviewPage({ session, onDone, onBack, bridgeSyncStatus, 
       {/* Middle row: left sidebar + video + right sidebar */}
       <div style={{flex:1,display:'flex',overflow:'hidden'}}>
 
-        <EventsSidebar side="left" activeKey={activeKey} />
+        <EventsSidebar side="left" activeKey={activeKey} onMouseEvent={handleMouseEvent} />
 
         {/* Video */}
         <div style={{flex:1,position:'relative',background:'#000',overflow:'hidden'}}>
@@ -440,7 +447,7 @@ export default function ReviewPage({ session, onDone, onBack, bridgeSyncStatus, 
 
         </div>
 
-        <EventsSidebar side="right" activeKey={activeKey} />
+        <EventsSidebar side="right" activeKey={activeKey} onMouseEvent={handleMouseEvent} />
 
       </div>
 
