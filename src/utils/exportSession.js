@@ -74,15 +74,16 @@ export async function exportSessionToGoogleSheets({ session, tags, quality, tagC
     timestamps,
   }
 
-  const response = await fetch(APPS_SCRIPT_URL, {
-    method: 'POST',
-    headers: { 'Content-Type': 'text/plain' },
-    body: JSON.stringify(payload),
-  })
-
-  const result = await response.json()
+  const { invoke } = await import('@tauri-apps/api/core')
+  const raw    = await invoke('post_to_sheets', { url: APPS_SCRIPT_URL, body: JSON.stringify(payload) })
+  // PowerShell ConvertTo-Json wraps strings in quotes, parse carefully
+  let result
+  try { result = JSON.parse(raw) } catch { result = JSON.parse(JSON.stringify(raw)) }
   if (result.error) throw new Error(result.error)
-  return result.url
+  // Apps Script returns {url: "..."} - PowerShell may wrap in extra object
+  const sheetUrl = result.url || result?.url
+  if (!sheetUrl) throw new Error('No URL returned: ' + raw)
+  return sheetUrl
 }
 
 export async function exportSessionToXlsx({ session, tags, quality, tagCount, total, videoPath }) {

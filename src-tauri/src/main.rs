@@ -335,6 +335,35 @@ fn send_key_to_collection_app(_exe_name: String, _key_code: String) -> Result<St
     Ok("noop".to_string())
 }
 
+// --- Post JSON to Google Apps Script via PowerShell (bypasses WebView2 CSP) --
+#[command]
+fn post_to_sheets(url: String, body: String) -> Result<String, String> {
+    #[cfg(target_os = "windows")]
+    {
+        // Escape body for PowerShell single-quoted string
+        let safe_body = body.replace('\'', "''");
+        let ps_cmd = format!(
+            "$r = Invoke-RestMethod -Uri '{}' -Method Post -ContentType 'text/plain' -Body '{}'; ConvertTo-Json $r",
+            url, safe_body
+        );
+        let output = std::process::Command::new("powershell")
+            .args(["-NoProfile", "-NonInteractive", "-Command", &ps_cmd])
+            .output()
+            .map_err(|e| format!("PowerShell failed: {}", e))?;
+        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        if !output.status.success() && !stderr.trim().is_empty() {
+            return Err(stderr);
+        }
+        Ok(stdout)
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = (url, body);
+        Ok(r#"{"url":""}"#.to_string())
+    }
+}
+
 fn main() {
     let video_path: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
     let port_holder: Arc<Mutex<u16>> = Arc::new(Mutex::new(0));
@@ -342,12 +371,10 @@ fn main() {
     let video_path_for_server = video_path.clone();
     let port_holder_for_main = port_holder.clone();
 
-    // Start HTTP server before Tauri launches
     let rt = tokio::runtime::Runtime::new().unwrap();
     let port = rt.block_on(start_video_server(video_path_for_server));
     *port_holder_for_main.lock().unwrap() = port;
 
-    // Keep runtime alive in background thread
     std::thread::spawn(move || {
         rt.block_on(std::future::pending::<()>());
     });
@@ -361,6 +388,7 @@ fn main() {
             pick_video_file,
             get_video_url,
             open_file,
+            post_to_sheets,
         ])
         .run(tauri::generate_context!())
         .expect("error while running MARK");
