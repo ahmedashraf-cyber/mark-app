@@ -170,20 +170,20 @@ export default function ReviewPage({ session, onDone, onBack, bridgeSyncStatus, 
     setMuted(v.muted)
   }
 
-  // Uses a Rust-side rfd file dialog (via invoke) to get the real filesystem path,
-  // then convertFileSrc() to produce an asset:// URL that WebView2 can range-request.
-  // file.path is unavailable in Tauri 2 and plugin-dialog doesn't register — this is
-  // the only approach confirmed to work.
+  // pick_video_file (Rust/rfd) returns the real file path.
+  // get_video_url passes it to the embedded HTTP server which serves it
+  // with proper 206 Partial Content + range request support.
+  // This gives WebView2 a seekable video with a real finite duration.
   async function handleVideoFile() {
     try {
       const path = await invoke('pick_video_file')
       if (!path) return
-      const url = convertFileSrc(path)
-      console.log('[MARK] loading video via asset URL:', url)
+      const url = await invoke('get_video_url', { path })
+      console.log('[MARK] loading video via HTTP server:', url)
       const v = videoRef.current
       if (v) { v.src = url; v.load(); setVideoLoaded(true) }
     } catch (e) {
-      console.error('[MARK] pick_video_file failed:', e)
+      console.error('[MARK] handleVideoFile failed:', e)
     }
   }
 
@@ -335,14 +335,15 @@ export default function ReviewPage({ session, onDone, onBack, bridgeSyncStatus, 
               style={{position:'absolute',inset:0,display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',gap:16,cursor:'pointer'}}
               onClick={handleVideoFile}
               onDragOver={e => e.preventDefault()}
-              onDrop={e => {
+              onDrop={async e => {
                 e.preventDefault()
-                // Try file.path first (may work on some Tauri builds)
                 const file = e.dataTransfer.files?.[0]
                 if (file?.path) {
-                  const url = convertFileSrc(file.path)
-                  const v = videoRef.current
-                  if (v) { v.src = url; v.load(); setVideoLoaded(true) }
+                  try {
+                    const url = await invoke('get_video_url', { path: file.path })
+                    const v = videoRef.current
+                    if (v) { v.src = url; v.load(); setVideoLoaded(true) }
+                  } catch(_) { handleVideoFile() }
                 } else {
                   handleVideoFile()
                 }
