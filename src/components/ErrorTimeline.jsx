@@ -45,6 +45,12 @@ export default function ErrorTimeline({
   const [hoverTime, setHoverTime] = useState(0)
   const [tooltip,   setTooltip]   = useState(null)
 
+  // Keep duration in a ref so onUp always reads the live value,
+  // not the value captured when pointerdown fired (which may be 0
+  // if onLoadedMetadata hadn't fired yet on first interaction)
+  const durationRef = useRef(videoDuration || 0)
+  durationRef.current = videoDuration || 0
+
   const duration   = videoDuration || 0
   const isDragging = dragPct !== null
 
@@ -67,27 +73,25 @@ export default function ErrorTimeline({
     onDragStart?.()
     setDragPct(pctFromClientX(e.clientX))
 
-    // Capture prop values NOW — closures must not go stale on re-render
-    const dur      = videoDuration
+    // Capture callbacks now — but NOT duration. Duration is read from
+    // durationRef.current at the moment of use so it's always the live value,
+    // never the potentially-zero value from the render when pointerdown fired.
     const seek     = onSeek
     const syncSeek = onSyncSeek
 
-    // Window-level listeners: React event delegation stops firing when pointer
-    // leaves the div. window always receives the final pointerup regardless of
-    // where the pointer is when released — no setPointerCapture quirks needed.
     function onMove(ev) {
       const pct = pctFromClientX(ev.clientX)
       setDragPct(pct)
       setHoverPct(pct)
-      setHoverTime(pct * dur)
+      setHoverTime(pct * durationRef.current)
     }
 
     function onUp(ev) {
       cleanup()
       const pct = pctFromClientX(ev.clientX)
-      const t   = pct * dur
-      seek?.(t)      // seekTo in parent — moves video + updates state
-      syncSeek?.(t)  // Firestore seekCommand — syncs collection app
+      const t   = pct * durationRef.current  // live — never stale or zero
+      seek?.(t)
+      syncSeek?.(t)
       setDragPct(null)
     }
 
@@ -111,7 +115,7 @@ export default function ErrorTimeline({
     if (isDragging) return
     const pct = pctFromClientX(e.clientX)
     setHoverPct(pct)
-    setHoverTime(pct * duration)
+    setHoverTime(pct * durationRef.current)
   }
 
   const thumbSize = isDragging ? 16 : hovering ? 14 : 10
