@@ -4,67 +4,88 @@ import { db } from '../firebase/config'
 import { collection, addDoc, updateDoc, doc, serverTimestamp, increment } from 'firebase/firestore'
 import { useAuth } from '../hooks/useAuth.jsx'
 import { useSync } from '../hooks/useSync'
-import { KEY_TO_EVENT, MISSING_EVENT_KEY, NAV_SHORTCUTS, NAV_SHIFT_SHORTCUTS } from '../data/shortcuts'
+import { KEY_TO_EVENT, MISSING_EVENT_KEY, SPEED_MIN, SPEED_MAX, SPEED_STEP } from '../data/shortcuts'
 import ErrorTagModal from '../components/ErrorTagModal'
 import ErrorTimeline from '../components/ErrorTimeline'
 import EventsSidebar from '../components/EventsSidebar'
 
 export default function ReviewPage({ session, onDone, onBack, bridgeSyncStatus, onBridgeSyncStatus }) {
   const { profile } = useAuth()
-  // Use the persistent sync status from App so the bridge connection survives
-  // navigating back to setup and starting a new session — no re-injection needed.
   const { syncNavigation, syncSetPlaying, syncSeek } = useSync(onBridgeSyncStatus, session.sessionId)
 
-  const videoRef  = useRef(null)
+  const videoRef     = useRef(null)
   const fileInputRef = useRef(null)
-  const rootRef   = useRef(null)
-  const [videoLoaded, setVideoLoaded] = useState(false)
+  const rootRef      = useRef(null)
+  const [videoLoaded,   setVideoLoaded]   = useState(false)
   const [reviewStarted, setReviewStarted] = useState(false)
-  const [playing, setPlaying]         = useState(false)
-  const [muted, setMuted]             = useState(false)
+  const [playing,  setPlaying]  = useState(false)
+  const [muted,    setMuted]    = useState(false)
+  const [speed,    setSpeed]    = useState(1)
   const [currentTime, setCurrentTime] = useState(0)
-  const [duration, setDuration]       = useState(0)
+  const [duration,    setDuration]    = useState(0)
 
-  const [errors, setErrors]           = useState([])
-  const [pendingTag, setPendingTag]   = useState(null) // { key, isMissing, videoTime }
-  const syncStatus = bridgeSyncStatus  // read from persistent App state
-  const [injecting, setInjecting]     = useState(false)
-  const [activeKey, setActiveKey]     = useState(null) // last pressed shortcut key
+  const [errors,     setErrors]     = useState([])
+  const [pendingTag, setPendingTag] = useState(null)
+  const syncStatus   = bridgeSyncStatus
+  const [injecting,  setInjecting]  = useState(false)
+  const [activeKey,  setActiveKey]  = useState(null)
 
   // Done modal
-  const [showDoneModal, setShowDoneModal]     = useState(false)
-  const [reviewedEvents, setReviewedEvents]   = useState('')
-  const [submitting, setSubmitting]           = useState(false)
-  const [submitted, setSubmitted]             = useState(false)
+  const [showDoneModal,   setShowDoneModal]   = useState(false)
+  const [reviewedEvents,  setReviewedEvents]  = useState('')
+  const [submitting,      setSubmitting]      = useState(false)
+  const [submitted,       setSubmitted]       = useState(false)
 
-  // Handle keyboard
+  // ── Keyboard handler — matches collection app shortcuts exactly ─────────
   useEffect(() => {
     function handleKey(e) {
-      // Block until the reviewer has clicked "Start Reviewing"
       if (!reviewStarted) return
-      // Block if modal open
       if (pendingTag || showDoneModal) return
 
-      const key = e.key
+      const key   = e.key
       const shift = e.shiftKey
+      const upper = key.toUpperCase()
 
-      // Navigation shortcuts
-      if (key === ' ') {
+      // ↑  Play / Pause  (matches collection app)
+      if (key === 'ArrowUp') {
         e.preventDefault()
         togglePlay()
         return
       }
+
+      // → / ←  Fast forward / backward 400ms
+      // Shift+→ / Shift+←  Slow forward / backward 40ms
       if (key === 'ArrowRight' || key === 'ArrowLeft') {
         e.preventDefault()
-        const ms = shift ? 40 : 400
+        const ms  = shift ? 40 : 400
         const dir = key === 'ArrowRight' ? 1 : -1
         seekBy(dir * ms / 1000)
         syncNavigation(key === 'ArrowRight' ? 'forward' : 'backward', shift)
         return
       }
 
+      // 0  Reset speed to 1x
+      if (key === '0') {
+        e.preventDefault()
+        changeSpeed(1)
+        return
+      }
+
+      // + or =  Increase speed by 0.25 (max 2x)
+      if (key === '+' || key === '=') {
+        e.preventDefault()
+        changeSpeed(prev => Math.min(SPEED_MAX, Math.round((prev + SPEED_STEP) * 100) / 100))
+        return
+      }
+
+      // - or _  Decrease speed by 0.25 (min 0.25x)
+      if (key === '-' || key === '_') {
+        e.preventDefault()
+        changeSpeed(prev => Math.max(SPEED_MIN, Math.round((prev - SPEED_STEP) * 100) / 100))
+        return
+      }
+
       // Error tagging
-      const upper = key.toUpperCase()
       if (upper === MISSING_EVENT_KEY) {
         e.preventDefault()
         setActiveKey(upper)
@@ -104,6 +125,18 @@ export default function ReviewPage({ session, onDone, onBack, bridgeSyncStatus, 
     }
   }
 
+  // changeSpeed accepts a value or an updater function (same API as setState)
+  function changeSpeed(valueOrUpdater) {
+    const v = videoRef.current
+    if (!v) return
+    const current = v.playbackRate
+    const next = typeof valueOrUpdater === 'function'
+      ? valueOrUpdater(current)
+      : valueOrUpdater
+    v.playbackRate = next
+    setSpeed(next)
+  }
+
   function seekBy(seconds) {
     const v = videoRef.current
     if (!v) return
@@ -117,7 +150,6 @@ export default function ReviewPage({ session, onDone, onBack, bridgeSyncStatus, 
     v.currentTime = Math.max(0, Math.min(v.duration || 0, seconds))
   }
 
-  // seekTo + sync to collection app — used by scrubber drag and error marker clicks
   function seekToAndSync(seconds) {
     seekTo(seconds)
     syncSeek(seconds)
@@ -230,6 +262,11 @@ export default function ReviewPage({ session, onDone, onBack, bridgeSyncStatus, 
             Collection app {syncStatus === 'connected' ? 'synced' : 'not detected'}
           </div>
           <div className="tag-pill">{errors.length} errors tagged</div>
+          {speed !== 1 && (
+            <div className="tag-pill" style={{background:'rgba(10,132,255,0.15)',color:'#0A84FF',borderColor:'rgba(10,132,255,0.3)'}}>
+              {speed}x
+            </div>
+          )}
           <button
             className="btn-ghost"
             style={{padding:'7px 14px',fontSize:12}}
@@ -319,10 +356,12 @@ export default function ReviewPage({ session, onDone, onBack, bridgeSyncStatus, 
               <button className="btn-orange" style={{padding:'14px 40px',fontSize:16,fontWeight:700}} onClick={startReview}>
                 Start Reviewing →
               </button>
-              <div style={{fontSize:11,color:'var(--t-3)',display:'flex',gap:16,marginTop:4}}>
-                <span><span className="mono" style={{color:'var(--p2)'}}>← →</span> seek 400ms</span>
-                <span><span className="mono" style={{color:'var(--p2)'}}>Shift+← →</span> seek 40ms</span>
-                <span><span className="mono" style={{color:'var(--p2)'}}>Space</span> play/pause</span>
+              <div style={{fontSize:11,color:'var(--t-3)',display:'flex',gap:16,marginTop:4,flexWrap:'wrap',justifyContent:'center'}}>
+                <span><span className="mono" style={{color:'var(--p2)'}}>↑</span> play/pause</span>
+                <span><span className="mono" style={{color:'var(--p2)'}}>← →</span> ±400ms</span>
+                <span><span className="mono" style={{color:'var(--p2)'}}>Shift+← →</span> ±40ms</span>
+                <span><span className="mono" style={{color:'var(--p2)'}}>+ / -</span> speed</span>
+                <span><span className="mono" style={{color:'var(--p2)'}}>0</span> reset speed</span>
               </div>
             </div>
           )}

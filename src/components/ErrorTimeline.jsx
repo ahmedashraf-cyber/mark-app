@@ -1,4 +1,4 @@
-import { useRef, useState, useEffect } from 'react'
+import { useRef, useState } from 'react'
 
 const TYPE_COLORS = {
   wrong_event:   '#FF453A',
@@ -9,10 +9,10 @@ const TYPE_COLORS = {
 
 const fmt = (s) => {
   if (!isFinite(s) || isNaN(s)) return '0:00'
-  const m   = Math.floor(s / 60)
-  const sec = Math.floor(s % 60)
-  const ms  = Math.floor((s % 1) * 1000)
-  return `${m}:${sec.toString().padStart(2,'0')}.${ms.toString().padStart(3,'0')}`
+  const m  = Math.floor(s / 60)
+  const sc = Math.floor(s % 60)
+  const ms = Math.floor((s % 1) * 1000)
+  return `${m}:${sc.toString().padStart(2,'0')}.${ms.toString().padStart(3,'0')}`
 }
 
 function SpeakerIcon({ muted }) {
@@ -35,13 +35,10 @@ export default function ErrorTimeline({
   errors, videoDuration, currentTime, playing, muted,
   onSeek, onSyncSeek, onTogglePlay, onToggleMute,
 }) {
-  const trackRef  = useRef(null)
-  const dragging  = useRef(false)
-
-  // All live values kept in refs so drag handlers always read current data
-  const durRef    = useRef(videoDuration || 0)
-  const seekRef   = useRef(onSeek)
-  const syncRef   = useRef(onSyncSeek)
+  const trackRef = useRef(null)
+  const durRef   = useRef(videoDuration || 0)
+  const seekRef  = useRef(onSeek)
+  const syncRef  = useRef(onSyncSeek)
   durRef.current  = videoDuration || 0
   seekRef.current = onSeek
   syncRef.current = onSyncSeek
@@ -55,54 +52,48 @@ export default function ErrorTimeline({
   const duration = videoDuration || 0
   const progress = duration > 0 ? Math.min(1, currentTime / duration) : 0
 
-  // ── Core seek from a mouse event ─────────────────────────────────────────
-  // Reads from refs — always current, never stale
-  function seekFromMouseEvent(e) {
+  // ── Pointer-capture drag — works correctly in Tauri webview ──────────────
+  // setPointerCapture routes ALL pointermove events to this element,
+  // even when the pointer leaves it. getBoundingClientRect stays valid
+  // because the element never loses the events.
+  function pctFromPointer(e) {
     const rect = trackRef.current?.getBoundingClientRect()
-    if (!rect || !durRef.current) return
-    const pct = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width))
-    const t   = pct * durRef.current
+    if (!rect) return 0
+    return Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width))
+  }
+
+  function applySeek(e) {
+    const t = pctFromPointer(e) * durRef.current
     seekRef.current?.(t)
     syncRef.current?.(t)
   }
 
-  // ── Mouse down on the track ───────────────────────────────────────────────
-  function handleMouseDown(e) {
+  function handlePointerDown(e) {
     if (!duration) return
     e.preventDefault()
-    dragging.current = true
+    trackRef.current.setPointerCapture(e.pointerId)
     setIsDragging(true)
-    seekFromMouseEvent(e)
-
-    // These lambdas capture seekFromMouseEvent by reference — which itself
-    // reads from refs — so they're always fresh no matter when they fire
-    function onMove(ev) {
-      if (!dragging.current) return
-      seekFromMouseEvent(ev)
-    }
-    function onUp(ev) {
-      dragging.current = false
-      setIsDragging(false)
-      seekFromMouseEvent(ev)
-      window.removeEventListener('mousemove', onMove)
-      window.removeEventListener('mouseup',   onUp)
-    }
-
-    window.addEventListener('mousemove', onMove)
-    window.addEventListener('mouseup',   onUp)
+    applySeek(e)
   }
 
-  function handleTrackMouseMove(e) {
-    const rect = trackRef.current?.getBoundingClientRect()
-    if (!rect || !duration) return
-    const pct = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width))
+  function handlePointerMove(e) {
+    const pct = pctFromPointer(e)
     setHoverPct(pct)
     setHoverTime(pct * duration)
+    if (e.buttons === 0) return   // no button held — just hovering
+    if (!trackRef.current?.hasPointerCapture(e.pointerId)) return
+    applySeek(e)
   }
 
-  const thumbLeft  = `${progress * 100}%`
-  const thumbSize  = isDragging ? 16 : hovering ? 14 : 10
-  const trackH     = isDragging || hovering ? 5 : 3
+  function handlePointerUp(e) {
+    if (!trackRef.current?.hasPointerCapture(e.pointerId)) return
+    trackRef.current.releasePointerCapture(e.pointerId)
+    setIsDragging(false)
+    applySeek(e)
+  }
+
+  const thumbSize = isDragging ? 16 : hovering ? 14 : 10
+  const trackH    = isDragging || hovering ? 5 : 3
 
   const btnStyle = {
     flexShrink: 0, width: 28, height: 28,
@@ -144,27 +135,27 @@ export default function ErrorTimeline({
         {fmt(currentTime)}
       </span>
 
-      {/* Track — the entire zone is the drag target */}
+      {/* Track */}
       <div
         ref={trackRef}
         style={{
           flex: 1, position: 'relative', height: 28,
           display: 'flex', alignItems: 'center',
-          cursor: duration ? (isDragging ? 'grabbing' : 'pointer') : 'default',
-          userSelect: 'none',
+          cursor: !duration ? 'default' : isDragging ? 'grabbing' : 'pointer',
+          userSelect: 'none', touchAction: 'none',
         }}
-        onMouseDown={handleMouseDown}
+        onPointerDown={handlePointerDown}
+        onPointerMove={handlePointerMove}
+        onPointerUp={handlePointerUp}
+        onPointerCancel={handlePointerUp}
         onMouseEnter={() => setHovering(true)}
         onMouseLeave={() => { if (!isDragging) { setHovering(false); setTooltip(null) } }}
-        onMouseMove={handleTrackMouseMove}
       >
-        {/* Track rail */}
+        {/* Rail */}
         <div style={{
           position: 'absolute', left: 0, right: 0,
-          height: trackH,
-          background: 'var(--bg-3)', borderRadius: 99,
-          transition: isDragging ? 'none' : 'height .12s',
-          overflow: 'visible',
+          height: trackH, background: 'var(--bg-3)', borderRadius: 99,
+          transition: isDragging ? 'none' : 'height .12s', overflow: 'visible',
         }}>
           {/* Orange fill */}
           <div style={{
@@ -191,7 +182,7 @@ export default function ErrorTimeline({
                 onMouseEnter={e => { e.stopPropagation(); setTooltip({ x: pct, label: `${err.triggeredEventLabel || err.errorType} · ${fmt(err.videoTimeSec || 0)}` }) }}
                 onMouseLeave={() => setTooltip(null)}
                 onClick={e => { e.stopPropagation(); seekRef.current?.(err.videoTimeSec || 0); syncRef.current?.(err.videoTimeSec || 0) }}
-                onMouseDown={e => e.stopPropagation()}
+                onPointerDown={e => e.stopPropagation()}
                 style={{
                   position: 'absolute', left: `${pct}%`, top: '50%',
                   transform: 'translate(-50%, -50%)',
@@ -203,24 +194,17 @@ export default function ErrorTimeline({
             )
           })}
 
-          {/* Playhead thumb — always visible, grows on hover/drag */}
+          {/* Playhead thumb */}
           {duration > 0 && (
             <div style={{
-              position: 'absolute',
-              left: thumbLeft,
-              top: '50%',
+              position: 'absolute', left: `${progress * 100}%`, top: '50%',
               transform: 'translate(-50%, -50%)',
-              width: thumbSize,
-              height: thumbSize,
-              borderRadius: '50%',
-              background: '#fff',
-              border: `2px solid var(--p2)`,
-              zIndex: 4,
+              width: thumbSize, height: thumbSize,
+              borderRadius: '50%', background: '#fff',
+              border: '2px solid var(--p2)', zIndex: 4,
               pointerEvents: 'none',
               transition: isDragging ? 'none' : 'width .12s, height .12s',
-              boxShadow: isDragging
-                ? '0 0 12px rgba(232,89,12,0.8)'
-                : '0 0 8px rgba(232,89,12,0.5)',
+              boxShadow: isDragging ? '0 0 12px rgba(232,89,12,0.8)' : '0 0 8px rgba(232,89,12,0.5)',
             }}/>
           )}
         </div>
