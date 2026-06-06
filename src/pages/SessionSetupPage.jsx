@@ -134,14 +134,13 @@ export default function SessionSetupPage({ onSessionStart, lastResult }) {
           <span style={{fontSize:13,color:'#30D158',fontWeight:700}}>✅ Session complete — Quality Score: {lastResult.quality}%</span>
           <span style={{fontSize:12,color:'var(--t-3)'}}>{lastResult.tagCount} errors / {lastResult.total} events reviewed</span>
           <div style={{marginLeft:'auto',display:'flex',gap:8,alignItems:'center'}}>
-            {lastResult.sheetUrl && (
+            {lastResult.sheetUrl ? (
               <button
                 onClick={async () => {
                   try {
                     const { invoke } = await import('@tauri-apps/api/core')
                     await invoke('open_file', { path: lastResult.sheetUrl })
                   } catch(e) {
-                    // fallback — try window.open
                     window.open(lastResult.sheetUrl, '_blank')
                   }
                 }}
@@ -159,7 +158,12 @@ export default function SessionSetupPage({ onSessionStart, lastResult }) {
                 </svg>
                 Open Google Sheet
               </button>
-            )}
+            ) : lastResult.sheetError ? (
+              <span style={{fontSize:11,color:'#FF453A',maxWidth:340,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}
+                title={lastResult.sheetError}>
+                Sheet error: {lastResult.sheetError}
+              </span>
+            ) : null}
             {lastResult.filePath && (
               <button
                 onClick={async () => {

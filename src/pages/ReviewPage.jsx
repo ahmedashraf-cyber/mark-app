@@ -301,15 +301,17 @@ export default function ReviewPage({ session, onDone, onBack, bridgeSyncStatus, 
 
       // Export to Google Sheets and get the sheet URL
       let sheetUrl = null
+      let sheetError = null
       try {
         sheetUrl = await exportSessionToGoogleSheets({ session, tags, quality, tagCount, total, videoPath })
         console.log('[MARK] Google Sheet created:', sheetUrl)
       } catch (sheetErr) {
+        sheetError = sheetErr.message
         console.error('[MARK] Google Sheets export failed:', sheetErr)
       }
 
       setSubmitted(true)
-      setTimeout(() => onDone({ quality, tagCount, total, filePath, sheetUrl }), 1500)
+      setTimeout(() => onDone({ quality, tagCount, total, filePath, sheetUrl, sheetError }), 1500)
     } catch (e) {
       setSubmitting(false)
     }
