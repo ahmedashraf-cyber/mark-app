@@ -49,14 +49,15 @@ export default function ErrorTimeline({
   // always call the latest callbacks — never a value captured at drag-start.
   // If React hasn't committed a re-render when pointerdown fires (e.g. first
   // interaction), const seek = onSeek captures undefined; refs never can.
-  const durationRef   = useRef(videoDuration || 0)
+  const durationRef   = useRef(0)
   const onSeekRef     = useRef(onSeek)
   const onSyncSeekRef = useRef(onSyncSeek)
-  durationRef.current   = videoDuration || 0
+  // Guard against Infinity (live streams / metadata not fully loaded)
+  durationRef.current   = isFinite(videoDuration) ? (videoDuration || 0) : 0
   onSeekRef.current     = onSeek
   onSyncSeekRef.current = onSyncSeek
 
-  const duration   = videoDuration || 0
+  const duration   = durationRef.current
   const isDragging = dragPct !== null
 
   const progressPct = isDragging

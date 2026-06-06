@@ -150,8 +150,10 @@ export default function ReviewPage({ session, onDone, onBack, bridgeSyncStatus, 
   function seekTo(seconds) {
     const v = videoRef.current
     if (!v) return
-    // isFinite guards NaN (video not yet loaded) — NaN || 0 would clamp every seek to 0
-    const t = Math.max(0, isFinite(v.duration) ? Math.min(v.duration, seconds) : seconds)
+    // Guard both seconds and v.duration against Infinity/NaN
+    // v.duration is Infinity for live streams or before metadata loads fully
+    if (!isFinite(seconds) || !isFinite(v.duration)) return
+    const t = Math.max(0, Math.min(v.duration, seconds))
     console.log('[MARK seekTo] seconds=', seconds, 'v.duration=', v.duration, 't=', t, 'v=', !!v)
     v.currentTime = t
     setCurrentTime(t)
