@@ -133,33 +133,58 @@ export default function SessionSetupPage({ onSessionStart, lastResult }) {
         <div style={{background:'rgba(48,209,88,0.1)',borderBottom:'1px solid rgba(48,209,88,0.2)',padding:'10px 20px',display:'flex',alignItems:'center',gap:12,flexWrap:'wrap'}}>
           <span style={{fontSize:13,color:'#30D158',fontWeight:700}}>✅ Session complete — Quality Score: {lastResult.quality}%</span>
           <span style={{fontSize:12,color:'var(--t-3)'}}>{lastResult.tagCount} errors / {lastResult.total} events reviewed</span>
-          {lastResult.filePath && (
-            <button
-              onClick={async () => {
-                try {
-                  const { invoke } = await import('@tauri-apps/api/core')
-                  await invoke('open_file', { path: lastResult.filePath })
-                } catch(e) {
-                  console.error('[MARK] Cannot open file:', e)
-                }
-              }}
-              style={{
-                marginLeft: 'auto',
-                display: 'flex', alignItems: 'center', gap: 6,
-                padding: '5px 12px', borderRadius: 7, cursor: 'pointer',
-                border: '1px solid rgba(48,209,88,0.4)',
-                background: 'rgba(48,209,88,0.12)',
-                color: '#30D158', fontSize: 12, fontWeight: 600,
-                transition: 'all .1s',
-              }}
-            >
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none">
-                <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
-                <polyline points="14 2 14 8 20 8" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
-              </svg>
-              Open Report (.xlsx)
-            </button>
-          )}
+          <div style={{marginLeft:'auto',display:'flex',gap:8,alignItems:'center'}}>
+            {lastResult.sheetUrl && (
+              <button
+                onClick={async () => {
+                  try {
+                    const { invoke } = await import('@tauri-apps/api/core')
+                    await invoke('open_file', { path: lastResult.sheetUrl })
+                  } catch(e) {
+                    // fallback — try window.open
+                    window.open(lastResult.sheetUrl, '_blank')
+                  }
+                }}
+                style={{
+                  display:'flex', alignItems:'center', gap:6,
+                  padding:'5px 14px', borderRadius:7, cursor:'pointer',
+                  border:'1px solid rgba(66,133,244,0.5)',
+                  background:'rgba(66,133,244,0.12)',
+                  color:'#4285F4', fontSize:12, fontWeight:700,
+                  transition:'all .15s',
+                }}
+              >
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor">
+                  <path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-7 14H7v-2h5v2zm5-4H7v-2h10v2zm0-4H7V7h10v2z"/>
+                </svg>
+                Open Google Sheet
+              </button>
+            )}
+            {lastResult.filePath && (
+              <button
+                onClick={async () => {
+                  try {
+                    const { invoke } = await import('@tauri-apps/api/core')
+                    await invoke('open_file', { path: lastResult.filePath })
+                  } catch(e) { console.error('[MARK] Cannot open file:', e) }
+                }}
+                style={{
+                  display:'flex', alignItems:'center', gap:6,
+                  padding:'5px 12px', borderRadius:7, cursor:'pointer',
+                  border:'1px solid rgba(48,209,88,0.4)',
+                  background:'rgba(48,209,88,0.12)',
+                  color:'#30D158', fontSize:12, fontWeight:600,
+                  transition:'all .1s',
+                }}
+              >
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none">
+                  <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
+                  <polyline points="14 2 14 8 20 8" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
+                </svg>
+                Open .xlsx
+              </button>
+            )}
+          </div>
         </div>
       )}
 

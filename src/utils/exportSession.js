@@ -26,7 +26,70 @@ function fmtTime(s) {
   return `${m}:${sec.toString().padStart(2,'0')}.${ms.toString().padStart(3,'0')}`
 }
 
-export async function exportSessionToXlsx({ session, tags, quality, tagCount, total, videoPath }) {
+const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycby94BMwgE3kY_EUshYzd_Zxx6E-m8fEvi0_ThqOc9raUUKq2LTGV_LC43OOd3uYgqPtJw/exec'
+
+export async function exportSessionToGoogleSheets({ session, tags, quality, tagCount, total, videoPath }) {
+  const { home, away } = parseTeams(session.matchName)
+
+  // ── Build rows ──────────────────────────────────────────────────────────────
+  const dataRows = tags.map(tag => {
+    const extras = (tag.extras || []).map(extraLabel)
+    const team   = tag.team === 'home' ? home : tag.team === 'away' ? away : (tag.team || '')
+    return [
+      session.matchId || session.sessionId,
+      session.matchName || '',
+      tag.triggeredEventLabel || tag.triggeredKey || '',
+      fmtTime(tag.videoTimeSec),
+      extras[0] || '', extras[1] || '', extras[2] || '',
+      extras[3] || '', extras[4] || '',
+      team,
+    ]
+  })
+
+  // Only include Extra columns that have data
+  const maxExtras  = Math.max(0, ...dataRows.map(r => r.slice(4, 9).filter(Boolean).length))
+  const extraCount = Math.min(5, maxExtras)
+
+  const headers = [
+    'Match ID', 'Match Name', 'Event', 'Timestamp',
+    ...Array.from({ length: extraCount }, (_, i) => `Extra ${i + 1}`),
+    'Team',
+    'Open at Timestamp',
+  ]
+
+  const trimmedRows = dataRows.map(r => [
+    r[0], r[1], r[2], r[3],
+    ...r.slice(4, 4 + extraCount),
+    r[9],
+    '', // video link filled separately
+  ])
+
+  // Video links and timestamps for the Apps Script
+  const videoLinks = tags.map(tag =>
+    videoPath ? `file:///${videoPath.replace(/\\/g, '/')}` : ''
+  )
+  const timestamps = tags.map(tag => fmtTime(tag.videoTimeSec))
+
+  const payload = {
+    sheetName: `${session.matchName || 'Review'} — ${session.half || 'H1'}`,
+    tabName:   `${session.matchId || 'Session'} - ${session.half || 'H1'}`.slice(0, 31),
+    qualityRow: `Quality Score: ${quality}%  |  ${tagCount} errors / ${total} events reviewed`,
+    headers,
+    rows: trimmedRows,
+    videoLinks,
+    timestamps,
+  }
+
+  const response = await fetch(APPS_SCRIPT_URL, {
+    method:  'POST',
+    headers: { 'Content-Type': 'text/plain' }, // Apps Script requires text/plain for CORS
+    body:    JSON.stringify(payload),
+  })
+
+  const result = await response.json()
+  if (result.error) throw new Error(result.error)
+  return result.url // Google Sheet URL
+}
   const { home, away } = parseTeams(session.matchName)
 
   // ── Data rows ────────────────────────────────────────────────────────────────

@@ -309,16 +309,24 @@ fn inject_bridge_windows(session_id: &str) -> Result<String, String> {
     Ok("injected".to_string())
 }
 
-// ─── Open a file using the system default application ────────────────────────
+// ─── Open a file or URL using the system default application ─────────────────
 #[command]
 fn open_file(path: String) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
-        // Use PowerShell Invoke-Item which handles spaces and special chars correctly
-        std::process::Command::new("powershell")
-            .args(["-NoProfile", "-Command", &format!("Invoke-Item '{}'", path.replace('\'', "''"))])
-            .spawn()
-            .map_err(|e| format!("Failed to open file: {}", e))?;
+        if path.starts_with("http://") || path.starts_with("https://") {
+            // Open URL in default browser
+            std::process::Command::new("cmd")
+                .args(["/c", "start", "", &path])
+                .spawn()
+                .map_err(|e| format!("Failed to open URL: {}", e))?;
+        } else {
+            // Open file with default app via PowerShell
+            std::process::Command::new("powershell")
+                .args(["-NoProfile", "-Command", &format!("Invoke-Item '{}'", path.replace('\'', "''"))])
+                .spawn()
+                .map_err(|e| format!("Failed to open file: {}", e))?;
+        }
     }
     Ok(())
 }
