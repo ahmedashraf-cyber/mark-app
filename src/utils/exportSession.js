@@ -71,7 +71,7 @@ export async function exportSessionToGoogleSheets({ session, tags, quality, tagC
   const timestamps = tags.map(tag => fmtTime(tag.videoTimeSec))
 
   const payload = {
-    sheetName: `${session.matchName || 'Review'} — ${session.half || 'H1'}`,
+    sheetName: `${session.matchName || 'Review'} - ${session.half || 'H1'}`,
     tabName:   `${session.matchId || 'Session'} - ${session.half || 'H1'}`.slice(0, 31),
     qualityRow: `Quality Score: ${quality}%  |  ${tagCount} errors / ${total} events reviewed`,
     headers,
