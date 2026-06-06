@@ -32,32 +32,29 @@ function SpeakerIcon({ muted }) {
 }
 
 export default function ErrorTimeline({
-  errors, videoDuration, currentTime, playing, muted,
+  errors, videoDuration, videoRef, currentTime, playing, muted,
   onSeek, onSyncSeek, onTogglePlay, onToggleMute, onDragStart,
 }) {
   const trackRef = useRef(null)
 
-  // dragPct: visual ball position during drag (0-1). null = not dragging.
-  // Video is NOT seeked during drag — only once on pointer-up.
   const [dragPct,   setDragPct]   = useState(null)
   const [hovering,  setHovering]  = useState(false)
   const [hoverPct,  setHoverPct]  = useState(0)
   const [hoverTime, setHoverTime] = useState(0)
   const [tooltip,   setTooltip]   = useState(null)
 
-  // All three refs are updated every render so the window-level closures
-  // always call the latest callbacks — never a value captured at drag-start.
-  // If React hasn't committed a re-render when pointerdown fires (e.g. first
-  // interaction), const seek = onSeek captures undefined; refs never can.
-  const durationRef   = useRef(0)
+  // Refs for callbacks — always live, never stale closures
   const onSeekRef     = useRef(onSeek)
   const onSyncSeekRef = useRef(onSyncSeek)
-  // Guard against Infinity (live streams / metadata not fully loaded)
-  durationRef.current   = isFinite(videoDuration) ? (videoDuration || 0) : 0
+  const videoRefRef   = useRef(videoRef)  // ref to the videoRef passed from parent
   onSeekRef.current     = onSeek
   onSyncSeekRef.current = onSyncSeek
+  videoRefRef.current   = videoRef
 
-  const duration   = videoDuration || 0  // use raw prop for display — ball always shows
+  // For DISPLAY: use videoDuration prop (ball position, fill, markers)
+  // For SEEK MATH: read videoRef.current.duration live at pointer-up time
+  // — bypasses the entire prop/state chain that gave us 0 or Infinity
+  const duration   = videoDuration || 0
   const isDragging = dragPct !== null
 
   const progressPct = isDragging
@@ -79,20 +76,29 @@ export default function ErrorTimeline({
     onDragStart?.()
     setDragPct(pctFromClientX(e.clientX))
 
+    function getLiveDuration() {
+      // Read directly from the video element — the single source of truth.
+      // Bypasses videoDuration prop (which can be 0 or Infinity due to state timing).
+      const d = videoRefRef.current?.current?.duration
+      return isFinite(d) && d > 0 ? d : 0
+    }
+
     function onMove(ev) {
       const pct = pctFromClientX(ev.clientX)
       setDragPct(pct)
       setHoverPct(pct)
-      setHoverTime(pct * durationRef.current)
+      setHoverTime(pct * getLiveDuration())
     }
 
     function onUp(ev) {
       cleanup()
       const pct = pctFromClientX(ev.clientX)
-      const t   = pct * durationRef.current  // live — never stale or zero
-      console.log('[MARK onUp] t=', t, 'dur=', durationRef.current, 'onSeek=', typeof onSeekRef.current)
-      onSeekRef.current?.(t)      // always the latest seekToAndSync — never captured stale value
-      onSyncSeekRef.current?.(t)  // always the latest syncSeek
+      const dur = getLiveDuration()
+      const t   = pct * dur
+      console.log('[MARK onUp] t=', t, 'dur=', dur, 'onSeek=', typeof onSeekRef.current)
+      if (dur === 0) return  // video not ready — don't seek to 0
+      onSeekRef.current?.(t)
+      onSyncSeekRef.current?.(t)
       setDragPct(null)
     }
 
@@ -116,7 +122,8 @@ export default function ErrorTimeline({
     if (isDragging) return
     const pct = pctFromClientX(e.clientX)
     setHoverPct(pct)
-    setHoverTime(pct * durationRef.current)
+    const d = videoRefRef.current?.current?.duration
+    setHoverTime(pct * (isFinite(d) && d > 0 ? d : 0))
   }
 
   const thumbSize = isDragging ? 16 : hovering ? 14 : 10

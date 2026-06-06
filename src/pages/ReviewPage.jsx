@@ -394,6 +394,7 @@ export default function ReviewPage({ session, onDone, onBack, bridgeSyncStatus, 
         <ErrorTimeline
           errors={errors}
           videoDuration={duration}
+          videoRef={videoRef}
           currentTime={currentTime}
           playing={playing}
           muted={muted}
