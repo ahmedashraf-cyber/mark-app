@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
-import { invoke } from '@tauri-apps/api/core'
+import { invoke, convertFileSrc } from '@tauri-apps/api/core'
+import { open as openDialog } from '@tauri-apps/plugin-dialog'
 import { db } from '../firebase/config'
 import { collection, addDoc, updateDoc, doc, serverTimestamp, increment } from 'firebase/firestore'
 import { useAuth } from '../hooks/useAuth.jsx'
@@ -13,9 +14,8 @@ export default function ReviewPage({ session, onDone, onBack, bridgeSyncStatus, 
   const { profile } = useAuth()
   const { syncNavigation, syncSetPlaying, syncSeek } = useSync(onBridgeSyncStatus, session.sessionId)
 
-  const videoRef     = useRef(null)
-  const fileInputRef = useRef(null)
-  const rootRef      = useRef(null)
+  const videoRef  = useRef(null)
+  const rootRef   = useRef(null)
   // Stays true from drag-start until onSeeked fires — gates onTimeUpdate
   // so the video's lagging position cannot snap the ball back after a seek
   const isDraggingRef = useRef(false)
@@ -171,12 +171,23 @@ export default function ReviewPage({ session, onDone, onBack, bridgeSyncStatus, 
     setMuted(v.muted)
   }
 
-  function handleVideoFile(e) {
-    const file = e.target.files?.[0]
-    if (!file) return
-    const url = URL.createObjectURL(file)
-    const v = videoRef.current
-    if (v) { v.src = url; v.load(); setVideoLoaded(true) }
+  // URL.createObjectURL() produces blob: URLs that WebView2 cannot range-request,
+  // so video.duration is always Infinity and currentTime assignments are silently
+  // ignored. convertFileSrc() produces an asset:// URL served by Tauri's built-in
+  // HTTP server which supports range requests — duration is finite and seeking works.
+  async function handleVideoFile() {
+    try {
+      const path = await openDialog({
+        multiple: false,
+        filters: [{ name: 'Video', extensions: ['mp4', 'mkv', 'mov', 'avi', 'webm', 'mts', 'm2ts'] }],
+      })
+      if (!path) return
+      const url = convertFileSrc(path)
+      const v = videoRef.current
+      if (v) { v.src = url; v.load(); setVideoLoaded(true) }
+    } catch (e) {
+      console.error('[MARK] Failed to open video file:', e)
+    }
   }
 
   // Called by the "Start Reviewing" button. This is a REAL user click, so it
@@ -325,15 +336,23 @@ export default function ReviewPage({ session, onDone, onBack, bridgeSyncStatus, 
           {!videoLoaded && (
             <div
               style={{position:'absolute',inset:0,display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',gap:16,cursor:'pointer'}}
-              onClick={() => fileInputRef.current?.click()}
+              onClick={handleVideoFile}
               onDragOver={e => e.preventDefault()}
-              onDrop={e => {
+              onDrop={async e => {
                 e.preventDefault()
-                const file = e.dataTransfer.files?.[0]
-                if (file) {
-                  const url = URL.createObjectURL(file)
-                  const v = videoRef.current
-                  if (v) { v.src = url; v.load(); setVideoLoaded(true) }
+                // On Windows/Tauri, File objects expose a .path property.
+                // Use it with convertFileSrc() so WebView2 gets a range-requestable URL.
+                const item = e.dataTransfer.items?.[0]
+                if (item?.kind === 'file') {
+                  const file = item.getAsFile()
+                  const path = file?.path || null
+                  if (path) {
+                    const url = convertFileSrc(path)
+                    const v = videoRef.current
+                    if (v) { v.src = url; v.load(); setVideoLoaded(true) }
+                  } else {
+                    handleVideoFile() // fallback: open native dialog
+                  }
                 }
               }}
             >
@@ -343,8 +362,8 @@ export default function ReviewPage({ session, onDone, onBack, bridgeSyncStatus, 
                 </svg>
               </div>
               <div style={{textAlign:'center'}}>
-                <div style={{fontSize:14,fontWeight:600,color:'var(--t-2)'}}>Drop video file here</div>
-                <div style={{fontSize:12,color:'var(--t-3)',marginTop:4}}>or click to browse</div>
+                <div style={{fontSize:14,fontWeight:600,color:'var(--t-2)'}}>Drop video here or click to browse</div>
+                <div style={{fontSize:12,color:'var(--t-3)',marginTop:4}}>mp4 · mkv · mov · avi · webm · mts</div>
               </div>
             </div>
           )}
@@ -382,7 +401,6 @@ export default function ReviewPage({ session, onDone, onBack, bridgeSyncStatus, 
             </div>
           )}
 
-          <input ref={fileInputRef} type="file" accept="video/*" style={{display:'none'}} onChange={handleVideoFile}/>
         </div>
 
         <EventsSidebar side="right" activeKey={activeKey} />
