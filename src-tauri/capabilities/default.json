@@ -8,7 +8,6 @@
     "core:window:allow-close",
     "core:window:allow-minimize",
     "core:window:allow-maximize",
-    "core:window:allow-set-focus",
-    "dialog:allow-open"
+    "core:window:allow-set-focus"
   ]
 }
