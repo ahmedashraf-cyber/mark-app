@@ -12,6 +12,9 @@ function AppInner() {
   const [lastResult, setLastResult]   = useState(null)
   const [update, setUpdate]           = useState(null)
   const [updateDismissed, setUpdateDismissed] = useState(false)
+  // Persist bridge sync status across sessions — bridge in collection app
+  // stays alive after Done, so the next session should inherit the connection.
+  const [bridgeSyncStatus, setBridgeSyncStatus] = useState('disconnected')
 
   // Check for update on startup (only once, after login)
   useEffect(() => {
@@ -43,6 +46,8 @@ function AppInner() {
       {session ? (
         <ReviewPage
           session={session}
+          bridgeSyncStatus={bridgeSyncStatus}
+          onBridgeSyncStatus={setBridgeSyncStatus}
           onDone={(result) => { setLastResult(result); setSession(null) }}
           onBack={() => setSession(null)}
         />

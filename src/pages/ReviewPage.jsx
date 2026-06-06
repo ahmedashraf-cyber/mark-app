@@ -9,9 +9,11 @@ import ErrorTagModal from '../components/ErrorTagModal'
 import ErrorTimeline from '../components/ErrorTimeline'
 import EventsSidebar from '../components/EventsSidebar'
 
-export default function ReviewPage({ session, onDone, onBack }) {
+export default function ReviewPage({ session, onDone, onBack, bridgeSyncStatus, onBridgeSyncStatus }) {
   const { profile } = useAuth()
-  const { syncNavigation } = useSync((status) => setSyncStatus(status), session.sessionId)
+  // Use the persistent sync status from App so the bridge connection survives
+  // navigating back to setup and starting a new session — no re-injection needed.
+  const { syncNavigation } = useSync(onBridgeSyncStatus, session.sessionId)
 
   const videoRef  = useRef(null)
   const fileInputRef = useRef(null)
@@ -24,7 +26,7 @@ export default function ReviewPage({ session, onDone, onBack }) {
 
   const [errors, setErrors]           = useState([])
   const [pendingTag, setPendingTag]   = useState(null) // { key, isMissing, videoTime }
-  const [syncStatus, setSyncStatus]   = useState('disconnected')
+  const syncStatus = bridgeSyncStatus  // read from persistent App state
   const [injecting, setInjecting]     = useState(false)
   const [activeKey, setActiveKey]     = useState(null) // last pressed shortcut key
 
