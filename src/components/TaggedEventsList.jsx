@@ -160,8 +160,6 @@ function TimelineRow({ label, tags, videoDuration, currentTime, selectedId, onCa
           </span>
         </div>
       </div>
-        {label}
-      </div>
 
       {/* Scrollable timeline */}
       <div
