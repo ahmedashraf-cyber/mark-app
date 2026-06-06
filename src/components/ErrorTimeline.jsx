@@ -37,14 +37,8 @@ export default function ErrorTimeline({
 }) {
   const trackRef = useRef(null)
 
-  // W3C spec: pointer capture is implicitly released BEFORE pointerup fires,
-  // so hasPointerCapture() always returns false inside handlePointerUp.
-  // We use our own ref instead — this is the fix from Claude Code.
-  const isDraggingRef = useRef(false)
-
-  // dragPct drives the VISUAL ball position only — decoupled from video.
-  // null = not dragging, use currentTime prop for position.
-  // Video is only seeked once, on pointer-up.
+  // dragPct: visual ball position during drag (0-1). null = not dragging.
+  // Video is NOT seeked during drag — only once on pointer-up.
   const [dragPct,   setDragPct]   = useState(null)
   const [hovering,  setHovering]  = useState(false)
   const [hoverPct,  setHoverPct]  = useState(0)
@@ -58,48 +52,66 @@ export default function ErrorTimeline({
     ? dragPct * 100
     : duration > 0 ? Math.min(100, (currentTime / duration) * 100) : 0
 
-  function pctFromPointer(e) {
+  function pctFromClientX(clientX) {
     const rect = trackRef.current?.getBoundingClientRect()
     if (!rect || rect.width === 0) return 0
-    return Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width))
+    return Math.max(0, Math.min(1, (clientX - rect.left) / rect.width))
   }
 
   function handlePointerDown(e) {
     if (!duration) return
     e.preventDefault()
-    trackRef.current.setPointerCapture(e.pointerId)
-    isDraggingRef.current = true
-    const pct = pctFromPointer(e)
-    setDragPct(pct)
+
+    // Freeze parent's onTimeUpdate — prevents lagging video position
+    // from overwriting currentTime state while pointer is held down
+    onDragStart?.()
+    setDragPct(pctFromClientX(e.clientX))
+
+    // Capture prop values NOW — closures must not go stale on re-render
+    const dur      = videoDuration
+    const seek     = onSeek
+    const syncSeek = onSyncSeek
+
+    // Window-level listeners: React event delegation stops firing when pointer
+    // leaves the div. window always receives the final pointerup regardless of
+    // where the pointer is when released — no setPointerCapture quirks needed.
+    function onMove(ev) {
+      const pct = pctFromClientX(ev.clientX)
+      setDragPct(pct)
+      setHoverPct(pct)
+      setHoverTime(pct * dur)
+    }
+
+    function onUp(ev) {
+      cleanup()
+      const pct = pctFromClientX(ev.clientX)
+      const t   = pct * dur
+      seek?.(t)      // seekTo in parent — moves video + updates state
+      syncSeek?.(t)  // Firestore seekCommand — syncs collection app
+      setDragPct(null)
+    }
+
+    function onCancel() {
+      cleanup()
+      setDragPct(null)
+    }
+
+    function cleanup() {
+      window.removeEventListener('pointermove',   onMove)
+      window.removeEventListener('pointerup',     onUp)
+      window.removeEventListener('pointercancel', onCancel)
+    }
+
+    window.addEventListener('pointermove',   onMove)
+    window.addEventListener('pointerup',     onUp)
+    window.addEventListener('pointercancel', onCancel)
+  }
+
+  function handleMouseMove(e) {
+    if (isDragging) return
+    const pct = pctFromClientX(e.clientX)
     setHoverPct(pct)
     setHoverTime(pct * duration)
-    onDragStart?.()  // parent freezes onTimeUpdate
-  }
-
-  function handlePointerMove(e) {
-    const pct = pctFromPointer(e)
-    setHoverPct(pct)
-    setHoverTime(pct * duration)
-    if (!isDraggingRef.current) return
-    setDragPct(pct)
-  }
-
-  function handlePointerUp(e) {
-    if (!isDraggingRef.current) return   // own ref — never false-negative
-    isDraggingRef.current = false
-    const pct = pctFromPointer(e)
-    const t   = pct * duration
-    // Seek first, then clear dragPct.
-    // React 19 batches setCurrentTime(t) from onSeek and setDragPct(null)
-    // into one render — ball stays at correct position, no snap-back.
-    onSeek?.(t)
-    onSyncSeek?.(t)
-    setDragPct(null)
-  }
-
-  function handlePointerCancel() {
-    isDraggingRef.current = false
-    setDragPct(null)
   }
 
   const thumbSize = isDragging ? 16 : hovering ? 14 : 10
@@ -155,11 +167,9 @@ export default function ErrorTimeline({
           userSelect: 'none', touchAction: 'none',
         }}
         onPointerDown={handlePointerDown}
-        onPointerMove={handlePointerMove}
-        onPointerUp={handlePointerUp}
-        onPointerCancel={handlePointerCancel}
         onMouseEnter={() => setHovering(true)}
         onMouseLeave={() => { if (!isDragging) { setHovering(false); setTooltip(null) } }}
+        onMouseMove={handleMouseMove}
       >
         {/* Rail */}
         <div style={{

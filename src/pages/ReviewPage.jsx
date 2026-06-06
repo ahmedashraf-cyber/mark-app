@@ -150,7 +150,8 @@ export default function ReviewPage({ session, onDone, onBack, bridgeSyncStatus, 
   function seekTo(seconds) {
     const v = videoRef.current
     if (!v) return
-    const t = Math.max(0, Math.min(v.duration || 0, seconds))
+    // isFinite guards NaN (video not yet loaded) — NaN || 0 would clamp every seek to 0
+    const t = Math.max(0, isFinite(v.duration) ? Math.min(v.duration, seconds) : seconds)
     v.currentTime = t
     setCurrentTime(t)
   }
