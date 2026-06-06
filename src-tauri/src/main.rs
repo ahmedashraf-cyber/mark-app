@@ -177,7 +177,6 @@ fn send_key_to_collection_app(_exe_name: String, _key_code: String) -> Result<St
 
 fn main() {
     tauri::Builder::default()
-        .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             send_key_to_collection_app,
             inject_bridge_script,
