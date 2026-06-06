@@ -77,9 +77,10 @@ export default function ErrorTimeline({
     setDragPct(pctFromClientX(e.clientX))
 
     function getLiveDuration() {
-      // Read directly from the video element — the single source of truth.
-      // Bypasses videoDuration prop (which can be 0 or Infinity due to state timing).
-      const d = videoRefRef.current?.current?.duration
+      const vr  = videoRefRef.current        // should be the videoRef object
+      const el  = vr?.current                // should be the <video> DOM element
+      const d   = el?.duration
+      console.log('[MARK getLiveDuration] vr=', !!vr, 'el=', !!el, 'el.duration=', d, 'el.readyState=', el?.readyState)
       return isFinite(d) && d > 0 ? d : 0
     }
 
