@@ -2,7 +2,7 @@
 // Shows a banner if update is available
 
 const REPO = 'ahmedashraf-cyber/mark-app'
-export const CURRENT_VERSION = '2.3.4' // matches package.json version
+export const CURRENT_VERSION = '2.3.5' // matches package.json version
 
 function semverGt(a, b) {
   // Returns true if a > b

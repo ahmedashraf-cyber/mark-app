@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from 'react'
+import { useState, useRef } from 'react'
 
 const TYPE_COLORS = {
   wrong_event:   '#FF453A',
@@ -8,7 +8,7 @@ const TYPE_COLORS = {
 }
 
 const fmt = (s) => {
-  if (!isFinite(s) || isNaN(s) || s === 0) return '0:00'
+  if (!isFinite(s) || isNaN(s)) return '0:00'
   const m  = Math.floor(s / 60)
   const sc = Math.floor(s % 60)
   const ms = Math.floor((s % 1) * 1000)
@@ -35,17 +35,16 @@ export default function ErrorTimeline({
   errors, videoDuration, currentTime, playing, muted,
   onSeek, onSyncSeek, onTogglePlay, onToggleMute, onDragStart,
 }) {
-  const trackRef   = useRef(null)
-  // Keep latest callbacks + duration in refs so window listeners are never stale
-  const onSeekRef  = useRef(onSeek)
-  const onSyncRef  = useRef(onSyncSeek)
-  const durRef     = useRef(videoDuration || 0)
-  const dragRef    = useRef(false)       // true while pointer is held
-  onSeekRef.current = onSeek
-  onSyncRef.current = onSyncSeek
-  durRef.current    = videoDuration || 0
+  const trackRef = useRef(null)
 
-  // dragPct drives the VISUAL ball position — completely decoupled from video
+  // W3C spec: pointer capture is implicitly released BEFORE pointerup fires,
+  // so hasPointerCapture() always returns false inside handlePointerUp.
+  // We use our own ref instead — this is the fix from Claude Code.
+  const isDraggingRef = useRef(false)
+
+  // dragPct drives the VISUAL ball position only — decoupled from video.
+  // null = not dragging, use currentTime prop for position.
+  // Video is only seeked once, on pointer-up.
   const [dragPct,   setDragPct]   = useState(null)
   const [hovering,  setHovering]  = useState(false)
   const [hoverPct,  setHoverPct]  = useState(0)
@@ -59,67 +58,48 @@ export default function ErrorTimeline({
     ? dragPct * 100
     : duration > 0 ? Math.min(100, (currentTime / duration) * 100) : 0
 
-  // ── pctFromClientX uses trackRef — always accurate via ref ───────────────
-  function pctFromClientX(clientX) {
+  function pctFromPointer(e) {
     const rect = trackRef.current?.getBoundingClientRect()
     if (!rect || rect.width === 0) return 0
-    return Math.max(0, Math.min(1, (clientX - rect.left) / rect.width))
+    return Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width))
   }
-
-  // ── Window-level pointer listeners registered on drag start ──────────────
-  // We attach to window (not the div) so events fire even when the pointer
-  // leaves the element — guaranteed to work in WebView2.
-  useEffect(() => {
-    function onMove(e) {
-      if (!dragRef.current) return
-      const pct = pctFromClientX(e.clientX)
-      setDragPct(pct)
-      setHoverPct(pct)
-      setHoverTime(pct * durRef.current)
-    }
-
-    function onUp(e) {
-      if (!dragRef.current) return
-      dragRef.current = false
-      const pct = pctFromClientX(e.clientX)
-      const t   = pct * durRef.current
-      // Seek video (sets state in parent) then clear visual drag position.
-      // React 19 batches both into one render — no snap-back frame.
-      onSeekRef.current?.(t)
-      onSyncRef.current?.(t)
-      setDragPct(null)
-      window.removeEventListener('pointermove', onMove)
-      window.removeEventListener('pointerup',   onUp)
-    }
-
-    // Store so cleanup can remove them
-    window.__markMove = onMove
-    window.__markUp   = onUp
-
-    return () => {
-      window.removeEventListener('pointermove', window.__markMove)
-      window.removeEventListener('pointerup',   window.__markUp)
-    }
-  }, []) // runs once — all values read from refs, never stale
 
   function handlePointerDown(e) {
     if (!duration) return
     e.preventDefault()
-    dragRef.current = true
-    const pct = pctFromClientX(e.clientX)
+    trackRef.current.setPointerCapture(e.pointerId)
+    isDraggingRef.current = true
+    const pct = pctFromPointer(e)
     setDragPct(pct)
     setHoverPct(pct)
     setHoverTime(pct * duration)
-    onDragStart?.()  // tells parent to freeze onTimeUpdate
-    window.addEventListener('pointermove', window.__markMove)
-    window.addEventListener('pointerup',   window.__markUp)
+    onDragStart?.()  // parent freezes onTimeUpdate
   }
 
-  function handleMouseMove(e) {
-    if (isDragging) return  // window listener handles it during drag
-    const pct = pctFromClientX(e.clientX)
+  function handlePointerMove(e) {
+    const pct = pctFromPointer(e)
     setHoverPct(pct)
     setHoverTime(pct * duration)
+    if (!isDraggingRef.current) return
+    setDragPct(pct)
+  }
+
+  function handlePointerUp(e) {
+    if (!isDraggingRef.current) return   // own ref — never false-negative
+    isDraggingRef.current = false
+    const pct = pctFromPointer(e)
+    const t   = pct * duration
+    // Seek first, then clear dragPct.
+    // React 19 batches setCurrentTime(t) from onSeek and setDragPct(null)
+    // into one render — ball stays at correct position, no snap-back.
+    onSeek?.(t)
+    onSyncSeek?.(t)
+    setDragPct(null)
+  }
+
+  function handlePointerCancel() {
+    isDraggingRef.current = false
+    setDragPct(null)
   }
 
   const thumbSize = isDragging ? 16 : hovering ? 14 : 10
@@ -160,7 +140,7 @@ export default function ErrorTimeline({
         <SpeakerIcon muted={muted} />
       </button>
 
-      {/* Current time — shows drag position while dragging */}
+      {/* Current time — shows drag target while dragging */}
       <span className="mono" style={{ fontSize: 11, color: 'var(--t-2)', flexShrink: 0, minWidth: 72, textAlign: 'right' }}>
         {isDragging ? fmt(hoverTime) : fmt(currentTime)}
       </span>
@@ -175,9 +155,11 @@ export default function ErrorTimeline({
           userSelect: 'none', touchAction: 'none',
         }}
         onPointerDown={handlePointerDown}
+        onPointerMove={handlePointerMove}
+        onPointerUp={handlePointerUp}
+        onPointerCancel={handlePointerCancel}
         onMouseEnter={() => setHovering(true)}
         onMouseLeave={() => { if (!isDragging) { setHovering(false); setTooltip(null) } }}
-        onMouseMove={handleMouseMove}
       >
         {/* Rail */}
         <div style={{
@@ -210,7 +192,7 @@ export default function ErrorTimeline({
                 title={`${err.triggeredEventLabel || err.errorType} @ ${fmt(err.videoTimeSec || 0)}`}
                 onMouseEnter={e => { e.stopPropagation(); setTooltip({ x: pct, label: `${err.triggeredEventLabel || err.errorType} · ${fmt(err.videoTimeSec || 0)}` }) }}
                 onMouseLeave={() => setTooltip(null)}
-                onClick={e => { e.stopPropagation(); onSeekRef.current?.(err.videoTimeSec || 0); onSyncRef.current?.(err.videoTimeSec || 0) }}
+                onClick={e => { e.stopPropagation(); onSeek?.(err.videoTimeSec || 0); onSyncSeek?.(err.videoTimeSec || 0) }}
                 onPointerDown={e => e.stopPropagation()}
                 style={{
                   position: 'absolute', left: `${pct}%`, top: '50%',
@@ -240,7 +222,7 @@ export default function ErrorTimeline({
           )}
         </div>
 
-        {/* Hover / drag time tooltip */}
+        {/* Hover / drag tooltip */}
         {(hovering || isDragging) && duration > 0 && (
           <div style={{
             position: 'absolute', left: `${hoverPct * 100}%`, bottom: 24,
@@ -267,7 +249,7 @@ export default function ErrorTimeline({
         )}
       </div>
 
-      {/* Duration — only show when video loaded */}
+      {/* Duration */}
       <span className="mono" style={{ fontSize: 11, color: 'var(--t-3)', flexShrink: 0, minWidth: 72 }}>
         {duration > 0 ? fmt(duration) : '--:--'}
       </span>
