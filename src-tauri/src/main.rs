@@ -86,6 +86,7 @@ async fn start_video_server(video_path: Arc<Mutex<Option<String>>>) -> u16 {
                             .header("Content-Range", format!("bytes {}-{}/{}", start, end, file_size))
                             .header("Accept-Ranges", "bytes")
                             .header("Access-Control-Allow-Origin", "*")
+                            .header("Access-Control-Expose-Headers", "Content-Range, Accept-Ranges, Content-Length, Content-Type")
                             .body(Body::from(buf)).unwrap();
                     }
                 }
@@ -101,6 +102,7 @@ async fn start_video_server(video_path: Arc<Mutex<Option<String>>>) -> u16 {
                 .header("Content-Length", file_size.to_string())
                 .header("Accept-Ranges", "bytes")
                 .header("Access-Control-Allow-Origin", "*")
+                .header("Access-Control-Expose-Headers", "Content-Range, Accept-Ranges, Content-Length, Content-Type")
                 .body(Body::from(buf)).unwrap()
         } else {
             Response::builder()
