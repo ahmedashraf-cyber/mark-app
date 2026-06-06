@@ -9,9 +9,9 @@
     "core:window:allow-minimize",
     "core:window:allow-maximize",
     "core:window:allow-set-focus",
+    "fs:allow-write-file",
     "fs:allow-write-text-file",
-    "fs:allow-write-binary-file",
-    "fs:allow-download-dir",
+    "fs:allow-download-write",
     "shell:allow-open"
   ]
 }
