@@ -28,19 +28,38 @@
   let unsub=null;
   function connect(user){
     if(unsub)unsub();
-    let last=Date.now();
+    let lastNav=0, lastPos=0;
     unsub=db.collection('mark_sessions').doc(sid).onSnapshot(snap=>{
       if(!snap.exists)return;
-      const c=snap.data().navCommand;
-      if(!c||c.ts<=last)return;
-      last=c.ts;
-      const step=c.shift?0.04:0.4;
-      if(c.action==='forward')video.currentTime=Math.max(0,video.currentTime+step);
-      else if(c.action==='backward')video.currentTime=Math.max(0,video.currentTime-step);
-      else if(c.action==='playpause')video.paused?video.play():video.pause();
+      const data=snap.data();
+
+      // ── Discrete nav commands (arrow keys) ──────────────────────────────
+      const c=data.navCommand;
+      if(c&&c.ts>lastNav){
+        lastNav=c.ts;
+        const step=c.shift?0.04:0.4;
+        if(c.action==='forward') video.currentTime=Math.max(0,video.currentTime+step);
+        else if(c.action==='backward') video.currentTime=Math.max(0,video.currentTime-step);
+        // playpause kept as fallback but posSync handles play state now
+        else if(c.action==='playpause') video.paused?video.play():video.pause();
+      }
+
+      // ── Position heartbeat (play/pause + real-time position sync) ────────
+      // Only apply if the posSync is newer than the last one we processed.
+      // We also skip if the position is already close (within 1.5s) to avoid
+      // fighting the video's own natural playback — only correct big drifts.
+      const p=data.posSync;
+      if(p&&p.ts>lastPos){
+        lastPos=p.ts;
+        // Sync play/pause state
+        if(p.playing&&video.paused) video.play();
+        else if(!p.playing&&!video.paused) video.pause();
+        // Sync position — only jump if we've drifted more than 1.5s
+        // (avoids constant seeking while both videos play normally)
+        const drift=Math.abs(video.currentTime-p.currentTime);
+        if(drift>1.5) video.currentTime=p.currentTime;
+      }
     },e=>console.error('[MARK] snapshot error',e));
-    // Connected — hide the panel. Sync runs silently in the background; the
-    // onSnapshot listener above keeps working whether or not the panel is shown.
     panel.style.display='none';
     console.log('[MARK] connected & listening as',user.email,'(panel hidden)');
   }

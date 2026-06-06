@@ -13,7 +13,7 @@ export default function ReviewPage({ session, onDone, onBack, bridgeSyncStatus, 
   const { profile } = useAuth()
   // Use the persistent sync status from App so the bridge connection survives
   // navigating back to setup and starting a new session — no re-injection needed.
-  const { syncNavigation } = useSync(onBridgeSyncStatus, session.sessionId)
+  const { syncNavigation, syncSetPlaying } = useSync(onBridgeSyncStatus, session.sessionId)
 
   const videoRef  = useRef(null)
   const fileInputRef = useRef(null)
@@ -51,7 +51,6 @@ export default function ReviewPage({ session, onDone, onBack, bridgeSyncStatus, 
       if (key === ' ') {
         e.preventDefault()
         togglePlay()
-        syncNavigation('playpause', false)
         return
       }
       if (key === 'ArrowRight' || key === 'ArrowLeft') {
@@ -93,8 +92,15 @@ export default function ReviewPage({ session, onDone, onBack, bridgeSyncStatus, 
   function togglePlay() {
     const v = videoRef.current
     if (!v) return
-    if (v.paused) { v.play(); setPlaying(true) }
-    else { v.pause(); setPlaying(false) }
+    if (v.paused) {
+      v.play()
+      setPlaying(true)
+      syncSetPlaying(true, videoRef)
+    } else {
+      v.pause()
+      setPlaying(false)
+      syncSetPlaying(false, videoRef)
+    }
   }
 
   function seekBy(seconds) {
@@ -245,8 +251,8 @@ export default function ReviewPage({ session, onDone, onBack, bridgeSyncStatus, 
             style={{width:'100%',height:'100%',objectFit:'contain'}}
             onTimeUpdate={() => setCurrentTime(videoRef.current?.currentTime || 0)}
             onLoadedMetadata={() => setDuration(videoRef.current?.duration || 0)}
-            onPlay={() => setPlaying(true)}
-            onPause={() => setPlaying(false)}
+            onPlay={() => { setPlaying(true); syncSetPlaying(true, videoRef) }}
+            onPause={() => { setPlaying(false); syncSetPlaying(false, videoRef) }}
           />
 
           {!videoLoaded && (
