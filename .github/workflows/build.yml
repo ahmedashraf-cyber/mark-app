@@ -30,6 +30,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: './src-tauri -> target'
+          cache-on-failure: true
 
       - name: Install frontend dependencies
         run: npm ci
@@ -43,7 +44,7 @@ jobs:
           releaseName: 'MARK Latest Build'
           releaseBody: |
             Download the .msi or .exe installer below.
-            Requirements: Windows 10+, AutoHotkey v1
+            Requirements: Windows 10+
           releaseDraft: false
           prerelease: true
           tauriScript: npx tauri
