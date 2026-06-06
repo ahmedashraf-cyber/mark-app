@@ -1,6 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { invoke, convertFileSrc } from '@tauri-apps/api/core'
-import { open as openDialog } from '@tauri-apps/plugin-dialog'
 import { db } from '../firebase/config'
 import { collection, addDoc, updateDoc, doc, serverTimestamp, increment } from 'firebase/firestore'
 import { useAuth } from '../hooks/useAuth.jsx'
@@ -15,6 +14,7 @@ export default function ReviewPage({ session, onDone, onBack, bridgeSyncStatus, 
   const { syncNavigation, syncSetPlaying, syncSeek } = useSync(onBridgeSyncStatus, session.sessionId)
 
   const videoRef  = useRef(null)
+  const fileInputRef = useRef(null)
   const rootRef   = useRef(null)
   // Stays true from drag-start until onSeeked fires — gates onTimeUpdate
   // so the video's lagging position cannot snap the ball back after a seek
@@ -171,23 +171,22 @@ export default function ReviewPage({ session, onDone, onBack, bridgeSyncStatus, 
     setMuted(v.muted)
   }
 
-  // URL.createObjectURL() produces blob: URLs that WebView2 cannot range-request,
-  // so video.duration is always Infinity and currentTime assignments are silently
-  // ignored. convertFileSrc() produces an asset:// URL served by Tauri's built-in
-  // HTTP server which supports range requests — duration is finite and seeking works.
-  async function handleVideoFile() {
-    try {
-      const path = await openDialog({
-        multiple: false,
-        filters: [{ name: 'Video', extensions: ['mp4', 'mkv', 'mov', 'avi', 'webm', 'mts', 'm2ts'] }],
-      })
-      if (!path) return
-      const url = convertFileSrc(path)
-      const v = videoRef.current
-      if (v) { v.src = url; v.load(); setVideoLoaded(true) }
-    } catch (e) {
-      console.error('[MARK] Failed to open video file:', e)
+  // In Tauri on Windows, File objects from <input type="file"> expose a .path
+  // property with the real filesystem path. convertFileSrc(path) produces an
+  // asset:// URL that WebView2 serves with proper HTTP range request support,
+  // giving a finite duration and working seek — unlike blob: URLs.
+  function handleVideoFile(e) {
+    const file = e.target.files?.[0]
+    if (!file) return
+    const path = file.path
+    if (!path) {
+      console.error('[MARK] file.path not available — cannot load via asset protocol')
+      return
     }
+    const url = convertFileSrc(path)
+    console.log('[MARK] loading video via asset URL:', url)
+    const v = videoRef.current
+    if (v) { v.src = url; v.load(); setVideoLoaded(true) }
   }
 
   // Called by the "Start Reviewing" button. This is a REAL user click, so it
@@ -336,23 +335,17 @@ export default function ReviewPage({ session, onDone, onBack, bridgeSyncStatus, 
           {!videoLoaded && (
             <div
               style={{position:'absolute',inset:0,display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',gap:16,cursor:'pointer'}}
-              onClick={handleVideoFile}
+              onClick={() => fileInputRef.current?.click()}
               onDragOver={e => e.preventDefault()}
-              onDrop={async e => {
+              onDrop={e => {
                 e.preventDefault()
-                // On Windows/Tauri, File objects expose a .path property.
-                // Use it with convertFileSrc() so WebView2 gets a range-requestable URL.
-                const item = e.dataTransfer.items?.[0]
-                if (item?.kind === 'file') {
-                  const file = item.getAsFile()
-                  const path = file?.path || null
-                  if (path) {
-                    const url = convertFileSrc(path)
-                    const v = videoRef.current
-                    if (v) { v.src = url; v.load(); setVideoLoaded(true) }
-                  } else {
-                    handleVideoFile() // fallback: open native dialog
-                  }
+                const file = e.dataTransfer.files?.[0]
+                if (!file) return
+                const path = file.path
+                if (path) {
+                  const url = convertFileSrc(path)
+                  const v = videoRef.current
+                  if (v) { v.src = url; v.load(); setVideoLoaded(true) }
                 }
               }}
             >
@@ -367,6 +360,8 @@ export default function ReviewPage({ session, onDone, onBack, bridgeSyncStatus, 
               </div>
             </div>
           )}
+
+          <input ref={fileInputRef} type="file" accept="video/*" style={{display:'none'}} onChange={handleVideoFile}/>
 
           {/* Start Reviewing gate — video is loaded but review not yet started.
               The button click is a real user interaction that wakes the keyboard,
