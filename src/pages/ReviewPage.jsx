@@ -147,7 +147,9 @@ export default function ReviewPage({ session, onDone, onBack, bridgeSyncStatus, 
   function seekTo(seconds) {
     const v = videoRef.current
     if (!v) return
-    v.currentTime = Math.max(0, Math.min(v.duration || 0, seconds))
+    const t = Math.max(0, Math.min(v.duration || 0, seconds))
+    v.currentTime = t
+    setCurrentTime(t)
   }
 
   function seekToAndSync(seconds) {
