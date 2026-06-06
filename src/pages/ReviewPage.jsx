@@ -1,11 +1,12 @@
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { invoke, convertFileSrc } from '@tauri-apps/api/core'
 import { db } from '../firebase/config'
-import { collection, addDoc, updateDoc, doc, serverTimestamp, increment } from 'firebase/firestore'
+import { collection, addDoc, updateDoc, deleteDoc, doc, serverTimestamp, increment, decrement } from 'firebase/firestore'
 import { useAuth } from '../hooks/useAuth.jsx'
 import { useSync } from '../hooks/useSync'
 import { KEY_TO_EVENT, MISSING_EVENT_KEY, SPEED_MIN, SPEED_MAX, SPEED_STEP } from '../data/shortcuts'
-import ErrorTagModal from '../components/ErrorTagModal'
+import TagPanel from '../components/TagPanel'
+import TaggedEventsList from '../components/TaggedEventsList'
 import ErrorTimeline from '../components/ErrorTimeline'
 import EventsSidebar from '../components/EventsSidebar'
 
@@ -26,8 +27,9 @@ export default function ReviewPage({ session, onDone, onBack, bridgeSyncStatus, 
   const [currentTime, setCurrentTime] = useState(0)
   const [duration,    setDuration]    = useState(0)
 
-  const [errors,     setErrors]     = useState([])
+  const [tags,       setTags]       = useState([])
   const [pendingTag, setPendingTag] = useState(null)
+  const [editTag,    setEditTag]    = useState(null)
   const syncStatus   = bridgeSyncStatus
   const [injecting,  setInjecting]  = useState(false)
   const [activeKey,  setActiveKey]  = useState(null)
@@ -42,7 +44,7 @@ export default function ReviewPage({ session, onDone, onBack, bridgeSyncStatus, 
   useEffect(() => {
     function handleKey(e) {
       if (!reviewStarted) return
-      if (pendingTag || showDoneModal) return
+      if (pendingTag || showDoneModal || editTag) return
 
       const key   = e.key
       const shift = e.shiftKey
@@ -111,7 +113,7 @@ export default function ReviewPage({ session, onDone, onBack, bridgeSyncStatus, 
     }
     window.addEventListener('keydown', handleKey)
     return () => window.removeEventListener('keydown', handleKey)
-  }, [pendingTag, showDoneModal, syncNavigation, reviewStarted])
+  }, [pendingTag, showDoneModal, editTag, syncNavigation, reviewStarted])
 
   function togglePlay() {
     const v = videoRef.current
@@ -199,34 +201,76 @@ export default function ReviewPage({ session, onDone, onBack, bridgeSyncStatus, 
       .catch(() => {})
   }
 
-  async function handleTagConfirm(tagData) {
+  async function handleTagSave(tagData) {
     setPendingTag(null)
-    const errorDoc = {
+    const id = `tag_${Date.now()}_${Math.random().toString(36).slice(2,7)}`
+    const docData = {
       ...tagData,
-      sessionId:   session.sessionId,
-      matchId:     session.matchId,
-      half:        session.half,
-      reviewerId:  profile.uid,
+      id,
+      sessionId:     session.sessionId,
+      matchId:       session.matchId,
+      half:          session.half,
+      reviewerId:    profile.uid,
       reviewerEmail: profile.email,
-      createdAt:   serverTimestamp(),
+      createdAt:     serverTimestamp(),
     }
     try {
-      await addDoc(collection(db, 'mark_error_tags'), errorDoc)
+      await addDoc(collection(db, 'mark_error_tags'), { ...docData })
       await updateDoc(doc(db, 'mark_sessions', session.sessionId), {
         totalTaggedErrors: increment(1)
       })
-      setErrors(prev => [...prev, tagData])
+      setTags(prev => [...prev, { ...docData, _firestoreId: id }])
     } catch (e) {
-      console.error('Failed to save tag:', e)
+      console.error('[MARK] Failed to save tag:', e)
+    }
+  }
+
+  async function handleTagEdit(updatedTag) {
+    setEditTag(null)
+    try {
+      // Find the Firestore doc by querying our local state for the _firestoreId
+      const existing = tags.find(t => t.id === updatedTag.id)
+      if (existing?._firestoreId) {
+        // Find firestore doc ref — we stored it as _firestoreId
+        const q = await import('firebase/firestore').then(m =>
+          m.query(m.collection(db, 'mark_error_tags'), m.where('id', '==', updatedTag.id))
+        )
+        const snap = await import('firebase/firestore').then(m => m.getDocs(q))
+        snap.forEach(async d => {
+          await updateDoc(d.ref, {
+            extras: updatedTag.extras,
+            team:   updatedTag.team,
+          })
+        })
+      }
+      setTags(prev => prev.map(t => t.id === updatedTag.id ? { ...t, ...updatedTag } : t))
+    } catch (e) {
+      console.error('[MARK] Failed to edit tag:', e)
+    }
+  }
+
+  async function handleTagDelete(tag) {
+    setEditTag(null)
+    try {
+      const { query, where, getDocs, deleteDoc: del } = await import('firebase/firestore')
+      const q = query(collection(db, 'mark_error_tags'), where('id', '==', tag.id))
+      const snap = await getDocs(q)
+      snap.forEach(async d => { await del(d.ref) })
+      await updateDoc(doc(db, 'mark_sessions', session.sessionId), {
+        totalTaggedErrors: increment(-1)
+      })
+      setTags(prev => prev.filter(t => t.id !== tag.id))
+    } catch (e) {
+      console.error('[MARK] Failed to delete tag:', e)
     }
   }
 
   async function handleDoneSubmit() {
     if (!reviewedEvents || isNaN(parseInt(reviewedEvents))) return
     setSubmitting(true)
-    const total = parseInt(reviewedEvents)
-    const tagCount = errors.length
-    const quality = Math.round(100 - ((tagCount / Math.max(total, 1)) * 100))
+    const total    = parseInt(reviewedEvents)
+    const tagCount = tags.length
+    const quality  = Math.round(100 - ((tagCount / Math.max(total, 1)) * 100))
 
     try {
       await updateDoc(doc(db, 'mark_sessions', session.sessionId), {
@@ -278,7 +322,7 @@ export default function ReviewPage({ session, onDone, onBack, bridgeSyncStatus, 
             <span className={`status-dot ${syncStatus === 'connected' ? 'green' : 'gray'}`}/>
             Collection app {syncStatus === 'connected' ? 'synced' : 'not detected'}
           </div>
-          <div className="tag-pill">{errors.length} errors tagged</div>
+          <div className="tag-pill">{tags.length} errors tagged</div>
           {speed !== 1 && (
             <div className="tag-pill" style={{background:'rgba(10,132,255,0.15)',color:'#0A84FF',borderColor:'rgba(10,132,255,0.3)'}}>
               {speed}x
@@ -403,7 +447,7 @@ export default function ReviewPage({ session, onDone, onBack, bridgeSyncStatus, 
       {/* Controls bar */}
       <div style={{flexShrink:0,background:'var(--bg-2)',borderTop:'1px solid var(--b-1)',padding:'4px 16px 8px'}}>
         <ErrorTimeline
-          errors={errors}
+          errors={tags}
           videoDuration={duration}
           videoRef={videoRef}
           currentTime={currentTime}
@@ -417,16 +461,23 @@ export default function ReviewPage({ session, onDone, onBack, bridgeSyncStatus, 
         />
       </div>
 
-      {/* Error Tag Modal */}
-      {pendingTag && (
-        <ErrorTagModal
-          triggeredKey={pendingTag.key}
-          isMissing={pendingTag.isMissing}
-          videoTime={pendingTag.videoTime}
-          onConfirm={handleTagConfirm}
-          onCancel={() => setPendingTag(null)}
-        />
-      )}
+      {/* Tagged Events List */}
+      <TaggedEventsList
+        tags={tags}
+        onSeek={seekToAndSync}
+        onEdit={tag => setEditTag(tag)}
+      />
+
+      {/* Tag Panel — slides up when event key pressed */}
+      <TagPanel
+        pendingTag={pendingTag}
+        onSave={handleTagSave}
+        onCancel={() => setPendingTag(null)}
+        editTag={editTag}
+        onEditSave={handleTagEdit}
+        onEditDelete={handleTagDelete}
+        onEditCancel={() => setEditTag(null)}
+      />
 
       {/* Done Modal */}
       {showDoneModal && (
@@ -444,13 +495,13 @@ export default function ReviewPage({ session, onDone, onBack, bridgeSyncStatus, 
                 <p style={{fontSize:13,color:'var(--t-3)',marginBottom:20}}>Enter how many events you reviewed to calculate the quality score.</p>
                 <div style={{background:'var(--bg-3)',borderRadius:10,padding:14,marginBottom:20,display:'flex',gap:20}}>
                   <div style={{textAlign:'center',flex:1}}>
-                    <div style={{fontSize:28,fontWeight:800,color:'var(--p2)'}}>{errors.length}</div>
+                    <div style={{fontSize:28,fontWeight:800,color:'var(--p2)'}}>{tags.length}</div>
                     <div style={{fontSize:11,color:'var(--t-3)'}}>Errors Tagged</div>
                   </div>
                   <div style={{width:1,background:'var(--b-1)'}}/>
                   <div style={{textAlign:'center',flex:1}}>
                     <div style={{fontSize:28,fontWeight:800,color:'var(--t-1)'}}>
-                      {reviewedEvents ? Math.round(100 - (errors.length / Math.max(parseInt(reviewedEvents),1)) * 100) : '—'}
+                      {reviewedEvents ? Math.round(100 - (tags.length / Math.max(parseInt(reviewedEvents),1)) * 100) : '—'}
                     </div>
                     <div style={{fontSize:11,color:'var(--t-3)'}}>Quality Score</div>
                   </div>
