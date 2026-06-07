@@ -32,6 +32,8 @@
   }
 
   // Count events from Apollo cache for a matchId within a timestamp range
+  // timestamps are in milliseconds (cache stores videoTimestamp in ms)
+  const EXCLUDED_TYPES = ['starting-xi', 'half-start', 'squad'];
   function countEventsInRange(matchId, startTs, endTs) {
     try {
       const cache = window.apollo && window.apollo.client && window.apollo.client.cache.extract();
@@ -42,8 +44,9 @@
         (v.matchId === numMatchId || v.matchId === String(numMatchId)) &&
         v.payload &&
         typeof v.payload.videoTimestamp === 'number' &&
-        v.payload.videoTimestamp >= startTs &&
-        v.payload.videoTimestamp <= endTs
+        v.payload.videoTimestamp > 0 &&
+        v.payload.videoTimestamp <= endTs &&
+        !EXCLUDED_TYPES.includes(v.payload.name)
       ).length;
     } catch(e) {
       console.error('[MARK] countEventsInRange error:', e);
@@ -57,26 +60,13 @@
     let lastNav=0,lastPos=0,lastSeek=0,lastCount=0;
     let lastTimeWrite=0;
 
-    // Get half-start offset from Apollo cache (match clock offset from video file start)
-    function getHalfStartOffset() {
-      try {
-        const cache = window.apollo && window.apollo.client && window.apollo.client.cache.extract();
-        if (!cache) return 0;
-        const halfStart = Object.values(cache).find(v =>
-          v.__typename === 'Event' && v.payload && v.payload.name === 'half-start'
-        );
-        return halfStart?.payload?.videoTimestamp || 0;
-      } catch(e) { return 0; }
-    }
-    const halfStartOffset = getHalfStartOffset();
-    console.log('[MARK] halfStartOffset:', halfStartOffset);
-
     // Write collection app match time to Firestore every second
+    // matchTime = video.currentTime * 1000 (cache stores timestamps in milliseconds)
     video.addEventListener('timeupdate', () => {
       const now = Date.now();
       if (now - lastTimeWrite < 1000) return;
       lastTimeWrite = now;
-      const matchTime = video.currentTime + halfStartOffset;
+      const matchTime = video.currentTime * 1000;
       db.collection('mark_sessions').doc(sid).set({
         collectionAppTime: { currentTime: matchTime, ts: now }
       }, { merge: true }).catch(e => console.error('[MARK] collectionAppTime write failed:', e));
