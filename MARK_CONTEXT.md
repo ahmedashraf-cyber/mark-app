@@ -1,27 +1,40 @@
-# MARK — Context File
-**Version:** 1.0  
+# MARK — Full Context
+**Version:** 2.9.8  
 **Last updated:** June 2026  
-**Companion to:** FIELD (https://ahmedashraf-cyber.github.io/flowops/index.html)
+**Status:** Active, in use by Hudl Egypt reviewers
 
 ---
 
-## What Is MARK
+## Repos & Tokens
 
-MARK is a Windows desktop review application for Hudl Egypt's training operation. Reviewers (Batch Trainers) use it alongside the Statsbomb Tag Once collection app to review collector work, tag errors, and auto-calculate quality scores. Results feed directly into FIELD.
-
-**Name origin:** Reviewers mark errors, mark moments, leave their mark on collector quality.
+| Resource | Value |
+|----------|-------|
+| MARK repo | https://github.com/ahmedashraf-cyber/mark-app |
+| FIELD repo | https://github.com/ahmedashraf-cyber/flowops |
+| GitHub token | Ask Ahmed — regenerated per session |
+| Firebase project | `hudl-training-ops` |
+| Firebase API key | `AIzaSyB-HWh2kJgoPDwzYhZWgW6pi8uZK8u9K7U` |
+| Google Sheets API key | `AIzaSyDEO-0MZ4-LOdIJ7aIyscgmLWGN5h8MpNI` |
+| Matches Sheet ID | `1zoh7CmoQKPMLGBEklHXznG1Y8xBS-iuu0phRWn8-wXc` |
+| Interview Sheet ID | `190Zih7R1HswY2yVxl4WanfH-QhGlt4X8bOBteFrNtiY` |
 
 ---
 
-## Repos & Access
+## Session Setup (Every Session)
 
-- **MARK repo:** https://github.com/ahmedashraf-cyber/mark-app
-- **FIELD repo:** https://github.com/ahmedashraf-cyber/flowops  
-- **GitHub token:** ask Ahmed directly
-- **Firebase project:** hudl-training-ops (SAME as FIELD — one auth, one database)
-- **Firebase API key:** AIzaSyB-HWh2kJgoPDwzYhZWgW6pi8uZK8u9K7U
-- **Google Sheets API key:** AIzaSyDEO-0MZ4-LOdIJ7aIyscgmLWGN5h8MpNI
-- **Matches Sheet ID:** 1dPwnYhIOiLUy_aBuVijPH3xtU6kxnEu-8FF115kXjSc
+```bash
+cd /home/claude
+git clone https://ahmedashraf-cyber:TOKEN@github.com/ahmedashraf-cyber/mark-app.git mark_push
+cd mark_push
+git config user.email "ahmed.ashraf@hudl.com"
+git config user.name "Ahmed Ashraf"
+# working file: /home/claude/mark_push/src/...
+# push dir: /home/claude/mark_push/
+```
+
+**Version bump rule:** Always bump in `package.json` ONLY — `scripts/sync-version.js` auto-patches `tauri.conf.json` (version + window title) during `npm run build`.
+
+**Push rule:** After every push, wait for GitHub Actions green, then install the new `.msi` from the `v{VERSION}` release.
 
 ---
 
@@ -29,29 +42,14 @@ MARK is a Windows desktop review application for Hudl Egypt's training operation
 
 | Layer | Choice |
 |-------|--------|
-| Desktop shell | Tauri 2 (Windows) |
+| Desktop shell | Tauri 2 (Rust + WebView2, Windows only) |
 | UI | React 19 + Tailwind CSS 3 |
-| Design | Same as FIELD — dark theme, #E8590C orange, Inter + DM Sans + JetBrains Mono |
-| Auth | Firebase Auth — same trainer accounts as FIELD, no second login |
+| Design | Dark theme, `#E8590C` orange, Inter + DM Sans + JetBrains Mono |
+| Auth | Firebase Auth — same trainer accounts as FIELD |
 | Database | Firebase Firestore — same project as FIELD |
-| Sync | Tauri command → AHK ControlSend → collection app |
-| Match data | Google Sheets API (same key as FIELD) |
-
----
-
-## Session Setup (Dev)
-
-```bash
-cd /home/claude/mark-app
-npm install
-npm run dev   # opens at http://localhost:1420
-```
-
-For Tauri desktop build (requires Rust):
-```bash
-npm run tauri dev    # dev with Tauri window
-npm run tauri build  # build .exe installer
-```
+| Video sync | Bridge script injected into collection app via DevTools → Firestore |
+| Match data | Google Sheets API (live fetch on load) |
+| Build CI | GitHub Actions → Windows runner → Tauri build → GitHub Release |
 
 ---
 
@@ -59,32 +57,41 @@ npm run tauri build  # build .exe installer
 
 ```
 mark-app/
+├── scripts/
+│   └── sync-version.js        # Auto-patches tauri.conf.json title + version from package.json
 ├── src/
-│   ├── firebase/config.js     # Firebase (same project as FIELD)
+│   ├── firebase/config.js     # Firebase init (same project as FIELD)
 │   ├── hooks/
-│   │   ├── useAuth.js         # Auth — reads trainer profile from FIELD's Firestore
-│   │   └── useSync.js         # Sync — sends keystrokes to collection app
-│   ├── data/shortcuts.js      # Tornado shortcuts + MARK-only Y key
+│   │   ├── useAuth.jsx        # Auth — reads trainer profile from Firestore
+│   │   ├── useSync.js         # Writes navCommand to Firestore (video sync)
+│   │   └── useUpdateCheck.js  # Checks GitHub Releases for newer version; exports CURRENT_VERSION
+│   ├── data/
+│   │   ├── shortcuts.js       # TORNADO_EVENTS array + KEY_TO_EVENT map + MISSING_EVENT_KEY
+│   │   └── matches.js         # Legacy static 127-match fallback (replaced by live Sheets fetch)
 │   ├── pages/
 │   │   ├── LoginPage.jsx      # Sign in with FIELD credentials
-│   │   ├── SessionSetupPage.jsx # Match/half selection + lock check
-│   │   └── ReviewPage.jsx     # Core review UI — video, tagging, timeline
+│   │   ├── SessionSetupPage.jsx # Match/half selection + lock + live matches from Sheets API
+│   │   ├── ReviewPage.jsx     # Core review UI — video, tagging, timeline, quality score
+│   │   └── SessionHistoryPage.jsx # Past sessions list
 │   ├── components/
-│   │   ├── ErrorTagModal.jsx  # Modal after key press — select error type
-│   │   └── ErrorTimeline.jsx  # Horizontal timeline of tagged errors
+│   │   ├── TagPanel.jsx       # Bottom slide-up overlay — full error tagging workflow
+│   │   └── TaggedEventsList.jsx # Timeline + cards of tagged errors
+│   ├── utils/
+│   │   └── exportSession.js   # Exports session to .xlsx
 │   ├── App.jsx
 │   ├── main.jsx
 │   └── index.css              # FIELD design tokens (CSS vars)
 ├── src-tauri/
-│   ├── src/main.rs            # Tauri + sync command (Windows API)
+│   ├── src/
+│   │   ├── main.rs            # Tauri commands: inject_bridge_script, open_file, etc.
+│   │   └── bridge_script.js   # Injected into collection app — Firebase listener + video control
 │   ├── Cargo.toml
-│   ├── tauri.conf.json
+│   ├── tauri.conf.json        # productName, version, window title (auto-synced)
 │   └── build.rs
-├── index.html
-├── package.json
-├── vite.config.js
-├── tailwind.config.js
-└── MARK_CONTEXT.md            # this file
+├── .github/workflows/build.yml # CI: read version → delete old release → Tauri build → GitHub Release
+├── package.json               # version is the single source of truth
+├── scripts/sync-version.js    # Pre-build: patches tauri.conf.json from package.json
+└── MARK_CONTEXT.md
 ```
 
 ---
@@ -94,9 +101,8 @@ mark-app/
 | Collection | Purpose |
 |-----------|---------|
 | `mark_sessions` | One doc per review session |
-| `mark_error_tags` | One doc per error tag |
-| `mark_locks` | Half-level lock — matchId_half → reviewerId |
-| `mark_match_assignments` | Match → collector mapping |
+| `mark_error_tags` | One doc per error tagged |
+| `mark_locks` | Half-level lock: `{matchId}_{half}` → reviewer |
 
 ### mark_sessions schema
 ```
@@ -106,77 +112,55 @@ collectorId, collectorCode,
 status: 'in_progress' | 'completed',
 isFirstReview: boolean,
 totalTaggedErrors, totalReviewedEvents,
-qualityScore: 100 - ((errors/events) × 100)  ← INVERTED: higher = better
+qualityScore: 100 - ((errors/events) × 100)  ← higher = better
 startedAt, completedAt
+navCommand: { action, shift, ts }  ← written by MARK, read by bridge
+collectionAppTime: { currentTime: ms, ts }  ← written by bridge every second
 ```
 
 ### mark_error_tags schema
 ```
 sessionId, matchId, half,
 reviewerId, reviewerEmail,
-errorType: 'wrong_event' | 'wrong_player' | 'confused_with' | 'missing_event',
 triggeredKey, triggeredEventId, triggeredEventLabel,
-extras: { confusedWith?, missingEvent? },
+extras: [errorTypeId, gkSubTypeId?, selectedExtra?, correction?],
+team: 'home' | 'away' | null,
 videoTimeSec,
-timestamp, createdAt
+timestamp, isMissing
 ```
 
 ---
 
-## Sync Mechanism
-
-**Confirmed working** — tested on actual machine with AutoHotkey before building.
+## Video Sync Architecture
 
 ```
-Reviewer presses key in MARK
-  → Tauri command: send_key_to_collection_app(exe, keyCode)
-  → src-tauri/src/main.rs
-  → Runs AHK script: ControlSend, {key}, ahk_exe Statsbomb Tag Once collection app.exe
-  → Collection app video jumps in sync
-  → Delay: < 5ms (well within 200ms tolerance)
+Reviewer presses arrow in MARK
+  → useSync.js writes navCommand to Firestore mark_sessions/{sid}
+  → bridge_script.js (running inside collection app) reads via onSnapshot
+  → bridge moves collection app video: video.currentTime += step
+  → collectionAppTime written every second for event count calculation
 ```
 
-Collection app exe: `Statsbomb Tag Once collection app.exe`  
-Window class: `Chrome_WidgetWin_1`  
-AHK version required: v1 (AutoHotkey v1.x)
+**Auto event count formula:**
+```
+endTs = video.currentTime × 1000   (bridge writes this in ms)
+startTs = 0                         (always from match start)
+count = events where videoTimestamp between startTs and endTs
+exclude: starting-xi, half-start, squad
+```
 
 ---
 
-## Navigation Shortcuts (same as collection app)
+## Matches Sheet Live Fetch
 
-| Key | Action |
-|-----|--------|
-| → | Forward 600ms |
-| ← | Backward 600ms |
-| Shift+→ | Forward 200ms |
-| Shift+← | Backward 200ms |
-| Space | Play / Pause |
+`SessionSetupPage.jsx` fetches from Google Sheets API on every load:
+1. GET spreadsheet metadata → reads first tab name (auto-discovers, no hardcoding)
+2. GET values for that tab A1:Z
+3. Maps by header row — column aliases handle any capitalisation/spacing
+4. Correct sheet ID: `1zoh7CmoQKPMLGBEklHXznG1Y8xBS-iuu0phRWn8-wXc`
+5. Headers: `Production ID, Staging ID, Game Week, Competition, Country, Match Date, Match Name, Home Team, Away Team, Season, Trainer`
 
----
-
-## Error Tagging Shortcuts (Tornado keys repurposed)
-
-| Key | Event |
-|-----|-------|
-| S | Half Start |
-| E | Pass |
-| Q | Pass (Flight) |
-| D | Dribble |
-| T | Miscontrol |
-| W | Reception |
-| B | Block |
-| R | Ball Recovery |
-| F | Clearance |
-| G | Goal Keeper |
-| A | Tackle |
-| V | Interception |
-| X | Foul Committed |
-| O | Out |
-| C | Shield |
-| Z | Shot |
-| **Y** | **Missing Event (MARK only)** |
-
-Each tag shows modal with: Wrong Event / Wrong Player / Confused With (→ dropdown) / Missing Event (→ dropdown)
+**Known bad ID (DO NOT USE):** `1dPwnYhIOiLUy_aBuVijPH3xtU6kxnEu-8FF115kXjSc` — this was from the system prompt and is wrong.
 
 ---
 
@@ -184,38 +168,61 @@ Each tag shows modal with: Wrong Event / Wrong Player / Confused With (→ dropd
 
 ```
 Quality Score = 100 - ((Tagged Errors / Total Reviewed Events) × 100)
+Higher = better. 100 = perfect.
 ```
 
-Higher = better. 100 = perfect. Reviewer enters Total Reviewed Events manually when pressing Done.
+---
+
+## Version Bump Procedure
+
+```bash
+# 1. Update ONLY package.json version
+# 2. Commit and push — sync-version.js handles tauri.conf.json automatically
+# 3. Wait for GitHub Actions green
+# 4. Install new .msi from Releases
+```
+
+**Never manually edit the version in `tauri.conf.json`** — it gets overwritten by `sync-version.js` on next build.
 
 ---
 
-## FIELD Integration Points
+## GitHub Actions Workflow
 
-| Where in FIELD | What it shows |
-|----------------|--------------|
-| Trainer gate → Review tab | "Open MARK" button + own session history |
+`.github/workflows/build.yml`:
+1. PowerShell reads version from `package.json`
+2. Deletes existing GitHub release for that version tag (if any) — prevents asset conflict
+3. Runs `npm run build` (which runs `sync-version.js` first)
+4. Tauri build → `MARK_{VERSION}_x64-setup.exe` + `.msi`
+5. Creates GitHub Release tagged `v{VERSION}`
+
+**Tag format:** `v2.9.8` (not `latest`) — each version gets its own release.
+
+---
+
+## Design System
+
+Identical to FIELD:
+- Background: `--bg: #0a0a12`, `--bg-2: #111120`, `--bg-3: #1a1a2e`
+- Text: `--t-1`, `--t-2`, `--t-3`
+- Borders: `--b-1`, `--b-2`
+- Accent: `--p2: #E8590C` (orange)
+- Fonts: Inter (headings/800), DM Sans (body), JetBrains Mono (mono/code)
+- Team colors: Home `#0A84FF`, Away `#FF453A`
+
+---
+
+## FIELD Integration
+
+| FIELD Gate | What it shows |
+|------------|--------------|
+| Trainer gate → Review tab | "Open MARK" + own session history |
 | BSup gate → Review dashboard | All trainer sessions + real-time scores |
 | BM gate | Aggregate scores across all batches |
-| Trainee profile | Their own quality score history |
 
 ---
 
-## Build Order (remaining)
+## Pending / Future
 
-1. ✅ Foundation — auth, sync, video player, error tagging, timeline, session management
-2. 🔲 FIELD integration — add Review tabs to Trainer/BSup/BM gates in FIELD
-3. 🔲 Attitude tracking — session behavior signals stored silently
-4. 🔲 Detection integration — session = daily task signal for trainer detection score
-5. 🔲 Windows installer — Tauri build pipeline + GitHub Actions
-
----
-
-## Attitude Tracking (future — store silently now, use later)
-
-- Session duration vs video length ratio
-- Pause frequency
-- Navigation direction (forward vs backward)
-- Error tag distribution across timeline
-- Backtrack rate
-- Session abandonment
+- FIELD integration screens (Review tabs in Trainer/BSup/BM gates)
+- Attitude tracking (session behavior signals — store silently now, use later)
+- TagPanel — verify per-event extras are 100% correct with Wafaa
