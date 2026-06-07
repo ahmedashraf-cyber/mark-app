@@ -7,27 +7,58 @@ import { CURRENT_VERSION } from '../hooks/useUpdateCheck'
 const SHEETS_API_KEY   = 'AIzaSyDEO-0MZ4-LOdIJ7aIyscgmLWGN5h8MpNI'
 const MATCHES_SHEET_ID = '1dPwnYhIOiLUy_aBuVijPH3xtU6kxnEu-8FF115kXjSc'
 
-// Column name aliases — handles any capitalisation / spacing in the sheet header
-const COL = {
-  productionId: ['productionid','production id','production_id','prod id','prodid','id'],
-  stagingId:    ['stagingid','staging id','staging_id'],
-  matchName:    ['matchname','match name','match_name','name','match'],
-  homeTeam:     ['hometeam','home team','home_team','home'],
-  awayTeam:     ['awayteam','away team','away_team','away'],
-  matchDate:    ['matchdate','match date','match_date','date'],
-  competition:  ['competition','league','tournament'],
+// Wide alias list — every reasonable column name the sheet might use
+const COL_ALIASES = {
+  productionId: ['productionid','production id','production_id','prod id','prodid','production','match id','matchid','id'],
+  stagingId:    ['stagingid','staging id','staging_id','staging'],
+  matchName:    ['matchname','match name','match_name','name','match','game','fixture'],
+  homeTeam:     ['hometeam','home team','home_team','home','home team name'],
+  awayTeam:     ['awayteam','away team','away_team','away','away team name'],
+  matchDate:    ['matchdate','match date','match_date','date','game date','gamedate'],
+  competition:  ['competition','league','tournament','comp'],
   country:      ['country'],
   season:       ['season'],
-  trainer:      ['trainer','assigned to','assignedto'],
-  gameWeek:     ['gameweek','game week','game_week','week','gw','round'],
+  trainer:      ['trainer','assigned to','assignedto','analyst','collector'],
+  gameWeek:     ['gameweek','game week','game_week','week','gw','round','matchday'],
 }
 
 function resolveCol(headers, aliases) {
   for (const alias of aliases) {
-    const idx = headers.findIndex(h => h.toLowerCase().trim() === alias)
+    const idx = headers.findIndex(h => h.toLowerCase().replace(/[^a-z0-9]/g,'') === alias.replace(/[^a-z0-9]/g,''))
     if (idx !== -1) return idx
   }
   return -1
+}
+
+// Auto-detect column positions by scanning content (fallback when headers don't match)
+function autoDetectCols(rows) {
+  // Find column with 7-digit production IDs
+  const dataRows = rows.slice(0, 10)
+  let prodCol = -1
+  for (let c = 0; c < 20; c++) {
+    const vals = dataRows.map(r => String(r[c] || '').trim())
+    if (vals.filter(v => /^\d{7}$/.test(v)).length >= 3) { prodCol = c; break }
+  }
+  if (prodCol === -1) return null
+
+  // Find column with "X vs Y" pattern for match name
+  let nameCol = -1
+  for (let c = 0; c < 20; c++) {
+    const vals = dataRows.map(r => String(r[c] || '').trim())
+    if (vals.filter(v => v.includes(' vs ')).length >= 3) { nameCol = c; break }
+  }
+
+  // Find column with date pattern YYYY-MM-DD
+  let dateCol = -1
+  for (let c = 0; c < 20; c++) {
+    const vals = dataRows.map(r => String(r[c] || '').trim())
+    if (vals.filter(v => /^\d{4}-\d{2}-\d{2}/.test(v)).length >= 3) { dateCol = c; break }
+  }
+
+  console.log('[MARK] Auto-detected cols: prodId=', prodCol, 'name=', nameCol, 'date=', dateCol)
+  return { productionId: prodCol, matchName: nameCol, matchDate: dateCol,
+           stagingId: -1, homeTeam: -1, awayTeam: -1, competition: -1,
+           country: -1, season: -1, trainer: -1, gameWeek: -1 }
 }
 
 async function fetchMatchesFromSheet() {
@@ -38,39 +69,75 @@ async function fetchMatchesFromSheet() {
   if (!metaRes.ok) throw new Error(`Sheets API error ${metaRes.status}`)
   const meta     = await metaRes.json()
   const firstTab = meta?.sheets?.[0]?.properties?.title || 'Sheet1'
+  console.log('[MARK] Matches sheet tab:', firstTab)
 
-  // Step 2: fetch data using real tab name
-  const range    = encodeURIComponent(`${firstTab}!A1:Z`)
-  const dataRes  = await fetch(`${base}/values/${range}?key=${SHEETS_API_KEY}`)
+  // Step 2: fetch data
+  const range   = encodeURIComponent(`${firstTab}!A1:Z`)
+  const dataRes = await fetch(`${base}/values/${range}?key=${SHEETS_API_KEY}`)
   if (!dataRes.ok) throw new Error(`Sheets API error ${dataRes.status}`)
   const data = await dataRes.json()
   const rows = data.values || []
+  console.log('[MARK] Sheet rows:', rows.length, '| Row 1 (headers):', rows[0])
+
   if (rows.length < 2) return []
 
-  // Row 0 = headers
+  // Try header-based mapping first
   const headers = rows[0].map(h => String(h).toLowerCase().trim())
-  const idx = {}
-  for (const [field, aliases] of Object.entries(COL)) {
+  let idx = {}
+  for (const [field, aliases] of Object.entries(COL_ALIASES)) {
     idx[field] = resolveCol(headers, aliases)
   }
+  console.log('[MARK] Column index map:', idx)
 
-  const get = (row, field) => idx[field] !== -1 ? String(row[idx[field]] || '').trim() : ''
+  // If productionId not found via headers, try auto-detect on data rows
+  if (idx.productionId === -1) {
+    console.log('[MARK] Header match failed, trying auto-detect...')
+    const detected = autoDetectCols(rows.slice(1))
+    if (detected) idx = detected
+  }
 
-  return rows.slice(1)
+  // If still no productionId column found, treat row 1 as data (no header row)
+  let dataStart = 1
+  if (idx.productionId === -1) {
+    console.log('[MARK] Trying no-header mode (row 1 is data)')
+    const detected = autoDetectCols(rows)
+    if (detected) { idx = detected; dataStart = 0 }
+  }
+
+  const get = (row, field) => {
+    const i = idx[field]
+    return (i !== undefined && i !== -1 && i < row.length) ? String(row[i] || '').trim() : ''
+  }
+
+  const result = rows.slice(dataStart)
     .filter(r => r.length > 0 && get(r, 'productionId'))
-    .map(r => ({
-      productionId: get(r, 'productionId'),
-      stagingId:    get(r, 'stagingId'),
-      matchName:    get(r, 'matchName'),
-      homeTeam:     get(r, 'homeTeam'),
-      awayTeam:     get(r, 'awayTeam'),
-      matchDate:    get(r, 'matchDate'),
-      competition:  get(r, 'competition'),
-      country:      get(r, 'country'),
-      season:       get(r, 'season'),
-      trainer:      get(r, 'trainer'),
-      gameWeek:     get(r, 'gameWeek') ? Number(get(r, 'gameWeek')) : null,
-    }))
+    .map(r => {
+      const matchName = get(r, 'matchName')
+      // If matchName col found but homeTeam col not found, parse from "Home vs Away"
+      let homeTeam = get(r, 'homeTeam')
+      let awayTeam = get(r, 'awayTeam')
+      if (matchName.includes(' vs ') && (!homeTeam || !awayTeam)) {
+        const parts = matchName.split(' vs ')
+        homeTeam = homeTeam || parts[0]?.trim() || ''
+        awayTeam = awayTeam || parts[1]?.trim() || ''
+      }
+      return {
+        productionId: get(r, 'productionId'),
+        stagingId:    get(r, 'stagingId'),
+        matchName,
+        homeTeam,
+        awayTeam,
+        matchDate:    get(r, 'matchDate'),
+        competition:  get(r, 'competition'),
+        country:      get(r, 'country'),
+        season:       get(r, 'season'),
+        trainer:      get(r, 'trainer'),
+        gameWeek:     get(r, 'gameWeek') ? Number(get(r, 'gameWeek')) : null,
+      }
+    })
+
+  console.log('[MARK] Parsed matches:', result.length, '| First:', result[0])
+  return result
 }
 
 const HALVES = [
@@ -92,11 +159,16 @@ export default function SessionSetupPage({ onSessionStart, lastResult, onShowHis
   const [matches, setMatches]             = useState([])
   const [matchesLoading, setMatchesLoading] = useState(true)
   const [matchesError, setMatchesError]   = useState('')
+  const [debugInfo, setDebugInfo]         = useState('')
 
   useEffect(() => {
     setMatchesLoading(true)
     fetchMatchesFromSheet()
-      .then(rows => { setMatches(rows); setMatchesLoading(false) })
+      .then(rows => {
+        setMatches(rows)
+        setMatchesLoading(false)
+        if (rows.length === 0) setDebugInfo('Sheet returned 0 rows — check console for header details')
+      })
       .catch(e => { setMatchesError(e.message); setMatchesLoading(false) })
   }, [])
 
@@ -259,6 +331,8 @@ export default function SessionSetupPage({ onSessionStart, lastResult, onShowHis
               <div style={{padding:24,textAlign:'center',color:'var(--t-3)',fontSize:13}}>Loading matches…</div>
             ) : matchesError ? (
               <div style={{padding:24,textAlign:'center',color:'#FF453A',fontSize:13}}>Failed to load matches: {matchesError}</div>
+            ) : filteredMatches.length === 0 && debugInfo ? (
+              <div style={{padding:24,textAlign:'center',color:'#FF9F0A',fontSize:12}}>{debugInfo}<br/>Open DevTools (F12) → Console for details</div>
             ) : filteredMatches.length === 0 ? (
               <div style={{padding:24,textAlign:'center',color:'var(--t-3)',fontSize:13}}>No matches match your search</div>
             ) : filteredMatches.map((m, i) => {
