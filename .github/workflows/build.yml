@@ -37,27 +37,26 @@ jobs:
 
       - name: Read version
         id: pkg
-        shell: bash
-        run: echo "VERSION=$(node -p \"require('./package.json').version\")" >> $GITHUB_OUTPUT
+        run: |
+          $version = (Get-Content package.json | ConvertFrom-Json).version
+          echo "VERSION=$version" >> $env:GITHUB_OUTPUT
+        shell: pwsh
 
       - name: Delete existing release for this version
-        shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          TAG="v${{ steps.pkg.outputs.VERSION }}"
-          REPO="${{ github.repository }}"
-          RELEASE=$(curl -sf -H "Authorization: Bearer $GH_TOKEN" \
-            "https://api.github.com/repos/$REPO/releases/tags/$TAG" 2>/dev/null || echo "{}")
-          ID=$(echo "$RELEASE" | python3 -c "import sys,json; print(json.load(sys.stdin).get('id',''))" 2>/dev/null || true)
-          if [ -n "$ID" ] && [ "$ID" != "" ] && [ "$ID" != "None" ]; then
-            echo "Deleting release id=$ID tag=$TAG"
-            curl -sf -X DELETE -H "Authorization: Bearer $GH_TOKEN" \
-              "https://api.github.com/repos/$REPO/releases/$ID" || true
-            git push origin --delete "$TAG" 2>/dev/null || true
-          else
-            echo "No existing release for $TAG"
-          fi
+          $tag = "v${{ steps.pkg.outputs.VERSION }}"
+          $repo = "${{ github.repository }}"
+          $headers = @{ Authorization = "Bearer ${{ secrets.GITHUB_TOKEN }}"; Accept = "application/vnd.github+json" }
+          try {
+            $release = Invoke-RestMethod -Uri "https://api.github.com/repos/$repo/releases/tags/$tag" -Headers $headers -ErrorAction Stop
+            $id = $release.id
+            Write-Host "Deleting release id=$id tag=$tag"
+            Invoke-RestMethod -Method Delete -Uri "https://api.github.com/repos/$repo/releases/$id" -Headers $headers | Out-Null
+            git push origin --delete $tag 2>$null
+          } catch {
+            Write-Host "No existing release for $tag"
+          }
+        shell: pwsh
 
       - name: Build Tauri app
         uses: tauri-apps/tauri-action@v0
