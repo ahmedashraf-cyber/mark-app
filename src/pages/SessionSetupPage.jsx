@@ -7,19 +7,20 @@ import { CURRENT_VERSION } from '../hooks/useUpdateCheck'
 const SHEETS_API_KEY   = 'AIzaSyDEO-0MZ4-LOdIJ7aIyscgmLWGN5h8MpNI'
 const MATCHES_SHEET_ID = '1dPwnYhIOiLUy_aBuVijPH3xtU6kxnEu-8FF115kXjSc'
 
-// Wide alias list — every reasonable column name the sheet might use
+// Column aliases — exact sheet headers: Production ID, Staging ID, Game Week,
+// Competition, Country, Match Date, Match Name, Home Team, Away Team, Season, Trainer
 const COL_ALIASES = {
-  productionId: ['productionid','production id','production_id','prod id','prodid','production','match id','matchid','id'],
-  stagingId:    ['stagingid','staging id','staging_id','staging'],
-  matchName:    ['matchname','match name','match_name','name','match','game','fixture'],
-  homeTeam:     ['hometeam','home team','home_team','home','home team name'],
-  awayTeam:     ['awayteam','away team','away_team','away','away team name'],
-  matchDate:    ['matchdate','match date','match_date','date','game date','gamedate'],
+  productionId: ['production id','productionid','production_id','prod id','prodid','production','match id','matchid','id'],
+  stagingId:    ['staging id','stagingid','staging_id','staging'],
+  matchName:    ['match name','matchname','match_name','name','match','game','fixture'],
+  homeTeam:     ['home team','hometeam','home_team','home'],
+  awayTeam:     ['away team','awayteam','away_team','away'],
+  matchDate:    ['match date','matchdate','match_date','date','game date','gamedate'],
   competition:  ['competition','league','tournament','comp'],
   country:      ['country'],
   season:       ['season'],
   trainer:      ['trainer','assigned to','assignedto','analyst','collector'],
-  gameWeek:     ['gameweek','game week','game_week','week','gw','round','matchday'],
+  gameWeek:     ['game week','gameweek','game_week','week','gw','round','matchday'],
 }
 
 function resolveCol(headers, aliases) {
