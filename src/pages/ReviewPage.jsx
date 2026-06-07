@@ -45,27 +45,39 @@ export default function ReviewPage({ session, onDone, onBack, bridgeSyncStatus, 
   const [submitting,      setSubmitting]      = useState(false)
   const [submitted,       setSubmitted]       = useState(false)
 
-  // ── Keyboard handler — matches collection app shortcuts exactly ─────────
+  // ── Auto-start review on first video interaction ─────────────────────────
+  const reviewStartedRef = useRef(false)
+  function markReviewStart() {
+    if (reviewStartedRef.current) return
+    reviewStartedRef.current = true
+    setReviewStarted(true)
+    const startTs = videoRef.current?.currentTime || 0
+    setReviewStartTs(startTs)
+    console.log('[MARK] review auto-started at videoTs:', startTs)
+  }
+
+  // ── Keyboard handler — active as soon as video is loaded ──────────────────
   useEffect(() => {
     function handleKey(e) {
-      if (!reviewStarted) return
+      if (!videoLoaded) return
       if (pendingTag || showDoneModal || editTag) return
 
       const key   = e.key
       const shift = e.shiftKey
       const upper = key.toUpperCase()
 
-      // ↑  Play / Pause  (matches collection app)
+      // ↑  Play / Pause
       if (key === 'ArrowUp') {
         e.preventDefault()
+        markReviewStart()
         togglePlay()
         return
       }
 
-      // → / ←  Fast forward / backward 400ms
-      // Shift+→ / Shift+←  Slow forward / backward 40ms
+      // → / ←  Fast forward / backward
       if (key === 'ArrowRight' || key === 'ArrowLeft') {
         e.preventDefault()
+        markReviewStart()
         const ms  = shift ? 40 : 400
         const dir = key === 'ArrowRight' ? 1 : -1
         seekBy(dir * ms / 1000)
@@ -73,30 +85,33 @@ export default function ReviewPage({ session, onDone, onBack, bridgeSyncStatus, 
         return
       }
 
-      // 0  Fifty Fifty event (replaces speed reset — use keyboard shortcut + / - to control speed)
+      // 0  Fifty Fifty event
       if (key === '0') {
         e.preventDefault()
+        markReviewStart()
         setActiveKey('0')
         setTimeout(() => setActiveKey(null), 600)
         setPendingTag({ key: '0', isMissing: false, videoTime: videoRef.current?.currentTime || 0 })
         return
       }
 
-      // + or =  Increase speed by 0.25 (max 2x)
+      // + or =  Increase speed
       if (key === '+' || key === '=') {
         e.preventDefault()
         changeSpeed(prev => Math.min(SPEED_MAX, Math.round((prev + SPEED_STEP) * 100) / 100))
         return
       }
 
-      // - or _  Decrease speed by 0.25 (min 0.25x)
+      // - or _  Decrease speed
       if (key === '-' || key === '_') {
         e.preventDefault()
         changeSpeed(prev => Math.max(SPEED_MIN, Math.round((prev - SPEED_STEP) * 100) / 100))
         return
       }
 
-      // Error tagging
+      // Error tagging — only after review started
+      if (!reviewStartedRef.current) return
+
       if (upper === MISSING_EVENT_KEY) {
         e.preventDefault()
         setActiveKey(upper)
@@ -120,11 +135,12 @@ export default function ReviewPage({ session, onDone, onBack, bridgeSyncStatus, 
     }
     window.addEventListener('keydown', handleKey)
     return () => window.removeEventListener('keydown', handleKey)
-  }, [pendingTag, showDoneModal, editTag, syncNavigation, reviewStarted])
+  }, [videoLoaded, pendingTag, showDoneModal, editTag, syncNavigation])
 
   function togglePlay() {
     const v = videoRef.current
     if (!v) return
+    markReviewStart()
     if (v.paused) {
       v.play()
       setPlaying(true)
@@ -200,22 +216,9 @@ export default function ReviewPage({ session, onDone, onBack, bridgeSyncStatus, 
   }
 
   function handleMouseEvent(ev) {
-    if (!reviewStarted) return
+    if (!videoLoaded) return
+    markReviewStart()
     setPendingTag({ key: ev.key || '•', isMissing: false, videoTime: videoRef.current?.currentTime || 0, id: ev.id, label: ev.label })
-  }
-
-  // Called by the "Start Reviewing" button. This is a REAL user click, so it
-  // properly wakes the webview's keyboard — after this, arrow keys register
-  // immediately without any further clicks for the whole session.
-  function startReview() {
-    setReviewStarted(true)
-    const startTs = videoRef.current?.currentTime || 0
-    setReviewStartTs(startTs)
-    console.log('[MARK] review started at videoTs:', startTs)
-    try { rootRef.current?.focus() } catch(_) {}
-    import('@tauri-apps/api/window')
-      .then(({ getCurrentWindow }) => getCurrentWindow().setFocus())
-      .catch(() => {})
   }
 
   async function handleTagSave(tagData) {
@@ -477,39 +480,6 @@ export default function ReviewPage({ session, onDone, onBack, bridgeSyncStatus, 
               <div style={{textAlign:'center'}}>
                 <div style={{fontSize:14,fontWeight:600,color:'var(--t-2)'}}>Drop video here or click to browse</div>
                 <div style={{fontSize:12,color:'var(--t-3)',marginTop:4}}>mp4 · mkv · mov · avi · webm · mts</div>
-              </div>
-            </div>
-          )}
-
-          {/* Start Reviewing gate — video is loaded but review not yet started.
-              The button click is a real user interaction that wakes the keyboard,
-              so arrow keys sync immediately for the rest of the session. */}
-          {videoLoaded && !reviewStarted && (
-            <div style={{
-              position:'absolute', inset:0, zIndex:50,
-              display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', gap:20,
-              background:'rgba(10,10,12,0.92)', backdropFilter:'blur(4px)',
-            }}>
-              <div style={{width:64,height:64,borderRadius:18,background:'var(--p2)',display:'flex',alignItems:'center',justifyContent:'center'}}>
-                <svg width="30" height="30" viewBox="0 0 24 24" fill="none">
-                  <path d="M5 3l14 9-14 9V3z" fill="white"/>
-                </svg>
-              </div>
-              <div style={{textAlign:'center'}}>
-                <div style={{fontFamily:'Inter',fontWeight:800,fontSize:20,color:'var(--t-1)'}}>Ready to Review</div>
-                <div style={{fontSize:13,color:'var(--t-3)',marginTop:6,maxWidth:340,lineHeight:1.5}}>
-                  Make sure the collection app is open, then click below to begin. Keyboard controls activate when you start.
-                </div>
-              </div>
-              <button className="btn-orange" style={{padding:'14px 40px',fontSize:16,fontWeight:700}} onClick={startReview}>
-                Start Reviewing →
-              </button>
-              <div style={{fontSize:11,color:'var(--t-3)',display:'flex',gap:16,marginTop:4,flexWrap:'wrap',justifyContent:'center'}}>
-                <span><span className="mono" style={{color:'var(--p2)'}}>↑</span> play/pause</span>
-                <span><span className="mono" style={{color:'var(--p2)'}}>← →</span> ±400ms</span>
-                <span><span className="mono" style={{color:'var(--p2)'}}>Shift+← →</span> ±40ms</span>
-                <span><span className="mono" style={{color:'var(--p2)'}}>+ / -</span> speed</span>
-                <span><span className="mono" style={{color:'var(--p2)'}}>0</span> reset speed</span>
               </div>
             </div>
           )}
