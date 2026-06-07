@@ -52,29 +52,18 @@ export default function ReviewPage({ session, onDone, onBack, bridgeSyncStatus, 
     reviewStartedRef.current = true
     setReviewStarted(true)
 
-    // Ask bridge for collection app's current video time (match clock)
+    // Read collection app's current time from posSync (already in Firestore, no round trip needed)
     try {
-      const reqTs = Date.now()
-      await updateDoc(doc(db, 'mark_sessions', session.sessionId), {
-        getVideoTimeRequest: { ts: reqTs }
-      })
-      // Wait up to 2s for bridge response
-      const collectionTime = await new Promise((resolve) => {
-        const timeout = setTimeout(() => { unsubFn(); resolve(videoRef.current?.currentTime || 0) }, 2000)
-        const unsubFn = onSnapshot(doc(db, 'mark_sessions', session.sessionId), (snap) => {
-          const resp = snap.data()?.getVideoTimeResponse
-          if (resp && resp.ts >= reqTs) {
-            clearTimeout(timeout); unsubFn(); resolve(resp.time)
-          }
-        })
-      })
+      const snap = await import('firebase/firestore').then(m =>
+        m.getDoc(m.doc(db, 'mark_sessions', session.sessionId))
+      )
+      const posSync = snap.data()?.posSync
+      const collectionTime = posSync?.currentTime ?? 0
       setReviewStartTs(collectionTime)
-      console.log('[MARK] review started, collection app time:', collectionTime)
+      console.log('[MARK] review started, collection app posSync time:', collectionTime)
     } catch(e) {
-      // Fallback to MARK's own currentTime
-      const fallback = videoRef.current?.currentTime || 0
-      setReviewStartTs(fallback)
-      console.log('[MARK] review started (bridge fallback), time:', fallback)
+      setReviewStartTs(0)
+      console.log('[MARK] review started, posSync unavailable, using 0')
     }
   }
 
@@ -310,30 +299,20 @@ export default function ReviewPage({ session, onDone, onBack, bridgeSyncStatus, 
   // Request event count from bridge — returns count or -1 if bridge unavailable
   async function requestEventCount() {
     const matchId = session.matchId
-    const reqTs   = Date.now()
+    const countReqTs = Date.now()
 
-    // Get collection app's current time as endTs
-    let endTs = videoRef.current?.currentTime || 0
+    // Get collection app's current time from posSync (no round trip needed)
+    let endTs = 0
     try {
-      await updateDoc(doc(db, 'mark_sessions', session.sessionId), {
-        getVideoTimeRequest: { ts: reqTs }
-      })
-      endTs = await new Promise((resolve) => {
-        const timeout = setTimeout(() => { unsubFn2(); resolve(videoRef.current?.currentTime || 0) }, 2000)
-        const unsubFn2 = onSnapshot(doc(db, 'mark_sessions', session.sessionId), (snap) => {
-          const resp = snap.data()?.getVideoTimeResponse
-          if (resp && resp.ts >= reqTs) {
-            clearTimeout(timeout); unsubFn2(); resolve(resp.time)
-          }
-        })
-      })
+      const { getDoc, doc: firestoreDoc } = await import('firebase/firestore')
+      const snap = await getDoc(firestoreDoc(db, 'mark_sessions', session.sessionId))
+      endTs = snap.data()?.posSync?.currentTime ?? 0
     } catch(e) {
-      console.warn('[MARK] could not get collection app endTs, using MARK time:', endTs)
+      console.warn('[MARK] could not get posSync endTs:', e)
     }
 
     console.log('[MARK] requesting event count:', { matchId, startTs: reviewStartTs, endTs })
 
-    const countReqTs = Date.now()
     await updateDoc(doc(db, 'mark_sessions', session.sessionId), {
       eventCountRequest: { matchId, startTs: reviewStartTs, endTs, ts: countReqTs }
     })
