@@ -6,7 +6,6 @@ import { CURRENT_VERSION } from '../hooks/useUpdateCheck'
 
 const SHEETS_API_KEY   = 'AIzaSyDEO-0MZ4-LOdIJ7aIyscgmLWGN5h8MpNI'
 const MATCHES_SHEET_ID = '1dPwnYhIOiLUy_aBuVijPH3xtU6kxnEu-8FF115kXjSc'
-const MATCHES_RANGE    = 'Sheet1!A1:Z'
 
 // Column name aliases — handles any capitalisation / spacing in the sheet header
 const COL = {
@@ -32,10 +31,19 @@ function resolveCol(headers, aliases) {
 }
 
 async function fetchMatchesFromSheet() {
-  const url = `https://sheets.googleapis.com/v4/spreadsheets/${MATCHES_SHEET_ID}/values/${encodeURIComponent(MATCHES_RANGE)}?key=${SHEETS_API_KEY}`
-  const res  = await fetch(url)
-  if (!res.ok) throw new Error(`Sheets API error ${res.status}`)
-  const data = await res.json()
+  const base = `https://sheets.googleapis.com/v4/spreadsheets/${MATCHES_SHEET_ID}`
+
+  // Step 1: get metadata to find the first sheet's real tab name
+  const metaRes = await fetch(`${base}?key=${SHEETS_API_KEY}`)
+  if (!metaRes.ok) throw new Error(`Sheets API error ${metaRes.status}`)
+  const meta     = await metaRes.json()
+  const firstTab = meta?.sheets?.[0]?.properties?.title || 'Sheet1'
+
+  // Step 2: fetch data using real tab name
+  const range    = encodeURIComponent(`${firstTab}!A1:Z`)
+  const dataRes  = await fetch(`${base}/values/${range}?key=${SHEETS_API_KEY}`)
+  if (!dataRes.ok) throw new Error(`Sheets API error ${dataRes.status}`)
+  const data = await dataRes.json()
   const rows = data.values || []
   if (rows.length < 2) return []
 
