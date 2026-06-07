@@ -47,13 +47,35 @@ export default function ReviewPage({ session, onDone, onBack, bridgeSyncStatus, 
 
   // ── Auto-start review on first video interaction ─────────────────────────
   const reviewStartedRef = useRef(false)
-  function markReviewStart() {
+  async function markReviewStart() {
     if (reviewStartedRef.current) return
     reviewStartedRef.current = true
     setReviewStarted(true)
-    const startTs = videoRef.current?.currentTime || 0
-    setReviewStartTs(startTs)
-    console.log('[MARK] review auto-started at videoTs:', startTs)
+
+    // Ask bridge for collection app's current video time (match clock)
+    try {
+      const reqTs = Date.now()
+      await updateDoc(doc(db, 'mark_sessions', session.sessionId), {
+        getVideoTimeRequest: { ts: reqTs }
+      })
+      // Wait up to 2s for bridge response
+      const collectionTime = await new Promise((resolve) => {
+        const timeout = setTimeout(() => { unsubFn(); resolve(videoRef.current?.currentTime || 0) }, 2000)
+        const unsubFn = onSnapshot(doc(db, 'mark_sessions', session.sessionId), (snap) => {
+          const resp = snap.data()?.getVideoTimeResponse
+          if (resp && resp.ts >= reqTs) {
+            clearTimeout(timeout); unsubFn(); resolve(resp.time)
+          }
+        })
+      })
+      setReviewStartTs(collectionTime)
+      console.log('[MARK] review started, collection app time:', collectionTime)
+    } catch(e) {
+      // Fallback to MARK's own currentTime
+      const fallback = videoRef.current?.currentTime || 0
+      setReviewStartTs(fallback)
+      console.log('[MARK] review started (bridge fallback), time:', fallback)
+    }
   }
 
   // ── Keyboard handler — active as soon as video is loaded ──────────────────
@@ -287,24 +309,41 @@ export default function ReviewPage({ session, onDone, onBack, bridgeSyncStatus, 
 
   // Request event count from bridge — returns count or -1 if bridge unavailable
   async function requestEventCount() {
-    const endTs   = videoRef.current?.currentTime || 0
-    const matchId = session.matchId // keep as string, bridge handles both
+    const matchId = session.matchId
     const reqTs   = Date.now()
+
+    // Get collection app's current time as endTs
+    let endTs = videoRef.current?.currentTime || 0
+    try {
+      await updateDoc(doc(db, 'mark_sessions', session.sessionId), {
+        getVideoTimeRequest: { ts: reqTs }
+      })
+      endTs = await new Promise((resolve) => {
+        const timeout = setTimeout(() => { unsubFn2(); resolve(videoRef.current?.currentTime || 0) }, 2000)
+        const unsubFn2 = onSnapshot(doc(db, 'mark_sessions', session.sessionId), (snap) => {
+          const resp = snap.data()?.getVideoTimeResponse
+          if (resp && resp.ts >= reqTs) {
+            clearTimeout(timeout); unsubFn2(); resolve(resp.time)
+          }
+        })
+      })
+    } catch(e) {
+      console.warn('[MARK] could not get collection app endTs, using MARK time:', endTs)
+    }
 
     console.log('[MARK] requesting event count:', { matchId, startTs: reviewStartTs, endTs })
 
+    const countReqTs = Date.now()
     await updateDoc(doc(db, 'mark_sessions', session.sessionId), {
-      eventCountRequest: { matchId, startTs: reviewStartTs, endTs, ts: reqTs }
+      eventCountRequest: { matchId, startTs: reviewStartTs, endTs, ts: countReqTs }
     })
 
     return new Promise((resolve) => {
       const timeout = setTimeout(() => { unsubFn(); resolve(-1) }, 5000)
       const unsubFn = onSnapshot(doc(db, 'mark_sessions', session.sessionId), (snap) => {
         const resp = snap.data()?.eventCountResponse
-        if (resp && resp.ts >= reqTs) {
-          clearTimeout(timeout)
-          unsubFn()
-          resolve(resp.count)
+        if (resp && resp.ts >= countReqTs) {
+          clearTimeout(timeout); unsubFn(); resolve(resp.count)
         }
       })
     })

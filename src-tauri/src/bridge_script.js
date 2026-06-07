@@ -85,6 +85,17 @@
         if(drift>1.5) video.currentTime=p.currentTime;
       }
 
+      // Get collection app video current time (for start/end timestamp sync)
+      const tvReq = data.getVideoTimeRequest;
+      if (tvReq && tvReq.ts > (window.__markLastTimeReq || 0)) {
+        window.__markLastTimeReq = tvReq.ts;
+        const collectionTime = video.currentTime;
+        console.log('[MARK] getVideoTime request -> collectionTime:', collectionTime);
+        db.collection('mark_sessions').doc(sid).update({
+          getVideoTimeResponse: { time: collectionTime, ts: Date.now() }
+        });
+      }
+
       // Event count request from MARK
       const req=data.eventCountRequest;
       if(req&&req.ts>lastCount){
