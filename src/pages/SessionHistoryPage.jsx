@@ -408,63 +408,55 @@ function MatchReport({ session, tags, onBack }) {
         )}
       </div>
 
-      {/* Video player - collapsible */}
-      {showVideo && (
-        <div style={{ flexShrink: 0, background: '#000', position: 'relative' }} className="slide-down">
-          <video
-            ref={videoRef}
-            style={{ width: '100%', maxHeight: 280, objectFit: 'contain', display: 'block' }}
-            onTimeUpdate={e => setCurrentTime(e.target.currentTime)}
-            onDurationChange={e => { if (isFinite(e.target.duration)) setDuration(e.target.duration) }}
-            onPlay={() => setPlaying(true)}
-            onPause={() => setPlaying(false)}
-          />
-          {/* Mini controls */}
-          <div style={{
-            position: 'absolute', bottom: 0, left: 0, right: 0,
-            background: 'linear-gradient(transparent, rgba(0,0,0,0.8))',
-            padding: '12px 14px 8px',
-            display: 'flex', alignItems: 'center', gap: 10,
+      {/* Single video element — always in DOM, wrapper shown/hidden */}
+      <div style={{ flexShrink: 0, background: '#000', position: 'relative', display: showVideo ? 'block' : 'none' }}>
+        <video
+          ref={videoRef}
+          style={{ width: '100%', maxHeight: 280, objectFit: 'contain', display: 'block' }}
+          onTimeUpdate={e => setCurrentTime(e.target.currentTime)}
+          onDurationChange={e => { if (isFinite(e.target.duration)) setDuration(e.target.duration) }}
+          onPlay={() => setPlaying(true)}
+          onPause={() => setPlaying(false)}
+        />
+        {/* Mini controls */}
+        <div style={{
+          position: 'absolute', bottom: 0, left: 0, right: 0,
+          background: 'linear-gradient(transparent, rgba(0,0,0,0.8))',
+          padding: '12px 14px 8px',
+          display: 'flex', alignItems: 'center', gap: 10,
+        }}>
+          <button onClick={togglePlay} style={{
+            width: 24, height: 24, borderRadius: 6, border: 'none',
+            background: playing ? 'rgba(255,255,255,0.2)' : 'var(--p2)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            cursor: 'pointer', flexShrink: 0,
           }}>
-            <button onClick={togglePlay} style={{
-              width: 24, height: 24, borderRadius: 6, border: 'none',
-              background: playing ? 'rgba(255,255,255,0.2)' : 'var(--p2)',
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-              cursor: 'pointer', flexShrink: 0,
-            }}>
-              {playing
-                ? <svg width="8" height="8" viewBox="0 0 24 24" fill="white"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
-                : <svg width="8" height="8" viewBox="0 0 24 24" fill="white"><path d="M5 3l14 9-14 9V3z"/></svg>
-              }
-            </button>
-            <span style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 10, color: 'rgba(255,255,255,0.8)', flexShrink: 0 }}>
-              {fmt(currentTime)}
-            </span>
-            <div style={{ flex: 1, height: 3, background: 'rgba(255,255,255,0.2)', borderRadius: 2, cursor: 'pointer' }}
-              onClick={e => {
-                if (!duration) return
-                const rect = e.currentTarget.getBoundingClientRect()
-                seekTo((e.clientX - rect.left) / rect.width * duration)
-              }}
-            >
-              <div style={{
-                height: '100%', borderRadius: 2, background: 'var(--p2)',
-                width: duration > 0 ? `${(currentTime / duration) * 100}%` : '0%',
-                transition: 'width 0.1s linear',
-              }}/>
-            </div>
-            <span style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 10, color: 'rgba(255,255,255,0.5)', flexShrink: 0 }}>
-              {fmt(duration)}
-            </span>
+            {playing
+              ? <svg width="8" height="8" viewBox="0 0 24 24" fill="white"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
+              : <svg width="8" height="8" viewBox="0 0 24 24" fill="white"><path d="M5 3l14 9-14 9V3z"/></svg>
+            }
+          </button>
+          <span style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 10, color: 'rgba(255,255,255,0.8)', flexShrink: 0 }}>
+            {fmt(currentTime)}
+          </span>
+          <div style={{ flex: 1, height: 3, background: 'rgba(255,255,255,0.2)', borderRadius: 2, cursor: 'pointer' }}
+            onClick={e => {
+              if (!duration) return
+              const rect = e.currentTarget.getBoundingClientRect()
+              seekTo((e.clientX - rect.left) / rect.width * duration)
+            }}
+          >
+            <div style={{
+              height: '100%', borderRadius: 2, background: 'var(--p2)',
+              width: duration > 0 ? `${(currentTime / duration) * 100}%` : '0%',
+              transition: 'width 0.1s linear',
+            }}/>
           </div>
+          <span style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 10, color: 'rgba(255,255,255,0.5)', flexShrink: 0 }}>
+            {fmt(duration)}
+          </span>
         </div>
-      )}
-
-      {/* Hidden video element for auto-load without showing */}
-      {!showVideo && <video ref={videoRef} style={{ display: 'none' }}
-        onTimeUpdate={e => setCurrentTime(e.target.currentTime)}
-        onDurationChange={e => { if (isFinite(e.target.duration)) setDuration(e.target.duration) }}
-      />}
+      </div>
 
       {/* Main content */}
       <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
