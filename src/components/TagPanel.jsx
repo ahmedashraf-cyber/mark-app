@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react'
 import { TORNADO_EVENTS, MISSING_EVENT_KEY } from '../data/shortcuts'
 
-// ── General extras (all events) ───────────────────────────────────────────────
+const KEYS = '1234567890QWERTYUIOPASDFGHJKLZXCVBNM'
+
 export const EXTRAS = [
   { key: '1', id: 'extra_event',      label: 'Extra Event',      events: 'all' },
   { key: '2', id: 'wrong_event',      label: 'Wrong Event',      events: 'all' },
@@ -14,7 +15,6 @@ export const EXTRAS = [
   { key: '9', id: 'wrong_body_part',  label: 'Wrong Body Part',  events: ['pass'] },
 ]
 
-// ── GK sub-events ─────────────────────────────────────────────────────────────
 export const GK_EXTRAS = [
   { key: '1', id: 'gk_punch',            label: 'Punch' },
   { key: '2', id: 'gk_smother',          label: 'Smother' },
@@ -24,42 +24,39 @@ export const GK_EXTRAS = [
   { key: '6', id: 'gk_collected',        label: 'Collected' },
 ]
 
-// ── GK-specific wrong extras (shown when Wrong Extra / Missing Extra selected)
-// events: which GK sub-event ids this applies to
 export const GK_WRONG_EXTRAS = {
   gk_save_attempt: [
-    { key: '1',   id: 'gkw_save',        label: 'Save' },
-    { key: null,  id: 'gkw_left_foot',   label: 'Left Foot' },
-    { key: null,  id: 'gkw_right_foot',  label: 'Right Foot' },
-    { key: null,  id: 'gkw_both_hands',  label: 'Both Hands' },
-    { key: null,  id: 'gkw_right_hand',  label: 'Right Hand' },
-    { key: null,  id: 'gkw_left_hand',   label: 'Left Hand' },
-    { key: null,  id: 'gkw_head',        label: 'Head' },
-    { key: null,  id: 'gkw_chest',       label: 'Chest' },
-    { key: null,  id: 'gkw_other',       label: 'Other' },
-    { key: '2',   id: 'gkw_diving',      label: 'Diving' },
-    { key: '3',   id: 'gkw_standing',    label: 'Standing' },
-    { key: '4',   id: 'gkw_to_post',     label: 'To Post' },
-    { key: '5',   id: 'gkw_off_target',  label: 'Off Target' },
-    { key: '6',   id: 'gkw_set',         label: 'Set' },
-    { key: '7',   id: 'gkw_moving',      label: 'Moving' },
-    { key: '8',   id: 'gkw_prone',       label: 'Prone' },
-    { key: '9',   id: 'gkw_save_to_post',label: 'Save to Post' },
+    { key: '1', id: 'gkw_save',         label: 'Save' },
+    { key: null, id: 'gkw_left_foot',   label: 'Left Foot' },
+    { key: null, id: 'gkw_right_foot',  label: 'Right Foot' },
+    { key: null, id: 'gkw_both_hands',  label: 'Both Hands' },
+    { key: null, id: 'gkw_right_hand',  label: 'Right Hand' },
+    { key: null, id: 'gkw_left_hand',   label: 'Left Hand' },
+    { key: null, id: 'gkw_head',        label: 'Head' },
+    { key: null, id: 'gkw_chest',       label: 'Chest' },
+    { key: null, id: 'gkw_other',       label: 'Other' },
+    { key: '2', id: 'gkw_diving',       label: 'Diving' },
+    { key: '3', id: 'gkw_standing',     label: 'Standing' },
+    { key: '4', id: 'gkw_to_post',      label: 'To Post' },
+    { key: '5', id: 'gkw_off_target',   label: 'Off Target' },
+    { key: '6', id: 'gkw_set',          label: 'Set' },
+    { key: '7', id: 'gkw_moving',       label: 'Moving' },
+    { key: '8', id: 'gkw_prone',        label: 'Prone' },
+    { key: '9', id: 'gkw_save_to_post', label: 'Save to Post' },
   ],
   gk_conceded_no_save: [
-    { key: '1',   id: 'gkw_no_touch',    label: 'No Touch' },
-    { key: '2',   id: 'gkw_diving',      label: 'Diving' },
-    { key: '3',   id: 'gkw_standing',    label: 'Standing' },
-    { key: '4',   id: 'gkw_to_post',     label: 'To Post' },
-    { key: '5',   id: 'gkw_off_target',  label: 'Off Target' },
-    { key: '6',   id: 'gkw_set',         label: 'Set' },
-    { key: '7',   id: 'gkw_moving',      label: 'Moving' },
-    { key: '8',   id: 'gkw_prone',       label: 'Prone' },
-    { key: '9',   id: 'gkw_save_to_post',label: 'Save to Post' },
+    { key: '1', id: 'gkw_no_touch',     label: 'No Touch' },
+    { key: '2', id: 'gkw_diving',       label: 'Diving' },
+    { key: '3', id: 'gkw_standing',     label: 'Standing' },
+    { key: '4', id: 'gkw_to_post',      label: 'To Post' },
+    { key: '5', id: 'gkw_off_target',   label: 'Off Target' },
+    { key: '6', id: 'gkw_set',          label: 'Set' },
+    { key: '7', id: 'gkw_moving',       label: 'Moving' },
+    { key: '8', id: 'gkw_prone',        label: 'Prone' },
+    { key: '9', id: 'gkw_save_to_post', label: 'Save to Post' },
   ],
 }
 
-// GK card extras (shown after selecting a GK sub-event)
 const GK_CARD_EXTRAS = [
   { key: '1', id: 'extra_event',      label: 'Extra Event' },
   { key: '2', id: 'wrong_timestamp',  label: 'Wrong Timestamp' },
@@ -67,10 +64,88 @@ const GK_CARD_EXTRAS = [
   { key: '4', id: 'wrong_extra',      label: 'Wrong Extra' },
   { key: '5', id: 'missing_extra',    label: 'Missing Extra' },
 ]
-// The ones that trigger wrong extras list
 const GK_WRONG_TRIGGER_IDS = ['wrong_extra', 'missing_extra']
-// The ones that auto-save immediately
-const GK_AUTO_SAVE_IDS = ['extra_event', 'wrong_timestamp', 'wrong_team_event']
+const GK_AUTO_SAVE_IDS     = ['extra_event', 'wrong_timestamp', 'wrong_team_event']
+
+const WRONG_EVENT_MAP = {
+  'pass':              ['Miscontrol','Dribble','Pass recovery','Pass interception','Tackle','Clearance','Shot','Fifty fifty','Interception','Ball recovery','Block'],
+  'shot':              ['Pass','Miscontrol','Clearance','Tackle','Dribble','GK (Smoother)'],
+  'reception':         ['Miscontrol','Tackle','Ball recovery'],
+  'miscontrol':        ['Dribble','Tackle','Pass','Shot','Clearance','Ball recovery','Block','Reception','Interception'],
+  'tackle':            ['Clearance','Block','Dribble','Fifty fifty','Miscontrol','Pass','Pass recovery','Pass interception','Leg stretch duel','Hold up duel','Separation duel'],
+  'interception':      ['Ball recovery','Clearance','Pass recovery','Pass interception','Block','Tackle'],
+  'ball_recovery':     ['Interception','Pass recovery','Pass interception','Block','Clearance','Fifty fifty','GK (Keeper sweeper)','GK (Collected)','Tackle'],
+  'block':             ['Tackle','Clearance','Interception','Miscontrol','Ball recovery','Pass','Pass recovery','Fifty fifty','Pass interception'],
+  'clearance':         ['Pass recovery','GK (Keeper sweeper)','GK (Punch)','Interception','Block','Fifty fifty','Tackle','Dribble','Shot','Ball recovery'],
+  'dribble':           ['Tackle','Pass','Pass recovery','Pass interception','Miscontrol','Separation duel','Leg stretch duel','Hold up duel'],
+  'foul_committed':    ['Card'],
+  'fifty_fifty':       ['Dribble','Pass recovery','Tackle','Positioning duel','Pass','Pass interception','Ball recovery','Interception'],
+  'hold_up_duel':      ['Positioning duel','Interception','Ball recovery','Shield','Leg stretch duel'],
+  'leg_stretch_duel':  ['Dribble','Tackle','Hold up duel','Positioning duel'],
+  'positioning_duel':  ['Shield','Tackle','Fifty fifty','Hold up duel'],
+  'separation_duel':   ['Dribble','Miscontrol'],
+  'shield':            ['Hold up duel','Tackle','Ball recovery'],
+  'pass_recovery':     ['Pass interception','Clearance','Ball recovery','Interception','Tackle','GK (Keeper sweeper)','Miscontrol','Dribble','Fifty fifty'],
+  'pass_interception': ['Pass recovery','Clearance','Ball recovery','Interception','Tackle','Fifty fifty','Miscontrol','Dribble','GK (Keeper sweeper)'],
+}
+
+const GK_WRONG_EVENT_MAP = {
+  'gk_collected':        ['GK (Punch)','Ball recovery'],
+  'gk_punch':            ['GK (Collected)','GK (Save)'],
+  'gk_keeper_sweeper':   ['Ball recovery','Clearance'],
+  'gk_save_attempt':     ['GK (Punch)'],
+}
+
+const MISSING_EXTRA_LIST = [
+  'Aerial won','Backheel','Deflection','Save','Dribble attempted',
+  'Launch','Miscommunication','Through ball','Injury clearance','Advantage','Penalty',
+]
+
+const WRONG_EXTRA_LIST = [
+  'Aerial won','Both hands','Set','Prone','Moving','Diving','Standing',
+  'Diving header','Drop kick','Inswinging','Outswinging','Straight',
+  'Half volley','Volley','Regular','Handball','Dangerous play','Offside',
+  'Right','Left','Right take on','Left take on',
+  'Won','Success','Second effort','Step in','Wayward','Out endline',
+  'No card','Yellow card','Second yellow','Red card',
+]
+
+const WRONG_EXTRA_CORR = {
+  'Aerial won':    ['Regular','Step in'],
+  'Both hands':    ['Right hand','Left hand'],
+  'Set':           ['Prone','Moving'],
+  'Prone':         ['Set','Moving'],
+  'Moving':        ['Set','Prone'],
+  'Diving':        ['Standing'],
+  'Standing':      ['Diving'],
+  'Diving header': ['Normal'],
+  'Drop kick':     ['Right foot','Left foot'],
+  'Inswinging':    ['Outswinging','Straight'],
+  'Outswinging':   ['Inswinging','Straight'],
+  'Straight':      ['Inswinging','Outswinging'],
+  'Half volley':   ['Volley','Normal'],
+  'Volley':        ['Half volley'],
+  'Regular':       ['Handball','Dangerous play','Offside'],
+  'Handball':      ['Regular','Offside'],
+  'Dangerous play':['Regular','Handball','Offside'],
+  'Offside':       ['Regular','Handball','Dangerous play'],
+  'Right':         ['Left','Right take on','Left take on','None'],
+  'Left':          ['Right','Right take on','Left take on','None'],
+  'Right take on': ['Right','Left','Left take on','None'],
+  'Left take on':  ['Right','Left','Right take on','None'],
+  'Won':           ['Success','Second effort'],
+  'Success':       ['Won','Second effort'],
+  'Second effort': ['Won','Success'],
+  'Step in':       ['Aerial won'],
+  'Wayward':       ['Out endline'],
+  'Out endline':   ['Wayward'],
+  'No card':       ['Yellow card','Second yellow','Red card'],
+  'Yellow card':   ['No card','Second yellow','Red card'],
+  'Second yellow': ['No card','Yellow card','Red card'],
+  'Red card':      ['No card','Yellow card','Second yellow'],
+}
+
+const AUTO_SAVE_ERROR_TYPES = ['missing_event','extra_event']
 
 const fmt = (s) => {
   if (!isFinite(s) || isNaN(s)) return '0:00.000'
@@ -85,9 +160,6 @@ const TEAM_BTNS = [
   { id: 'away', label: 'Away', key: '2', color: '#FF453A', bg: 'rgba(255,69,58,0.15)' },
 ]
 
-// ─────────────────────────────────────────────────────────────────────────────
-// SHARED UI PRIMITIVES
-// ─────────────────────────────────────────────────────────────────────────────
 function PanelHeader({ eventKey, eventLabel, videoTime, isMissing, showTeamHint, onCancel }) {
   return (
     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
@@ -166,11 +238,63 @@ function PillBtn({ label, shortcut, active, color, onClick }) {
   )
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// STEP COMPONENTS FOR GK FLOW
-// ─────────────────────────────────────────────────────────────────────────────
+function KeyedList({ items, onSelect, color, cols = 2 }) {
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: `repeat(${cols}, 1fr)`, gap: 5 }}>
+      {items.map((item, i) => {
+        const k = KEYS[i] || '?'
+        const label = typeof item === 'string' ? item : item.label
+        const c = color || 'var(--p2)'
+        return (
+          <button
+            key={i}
+            onClick={() => onSelect(item, k)}
+            style={{
+              display: 'flex', alignItems: 'center', gap: 7,
+              padding: '5px 9px', borderRadius: 7, cursor: 'pointer',
+              border: '1.5px solid var(--b-2)', background: 'var(--bg-3)',
+              transition: 'all .1s', textAlign: 'left',
+            }}
+          >
+            <span style={{
+              fontFamily: 'JetBrains Mono, monospace', fontSize: 10, fontWeight: 700,
+              color: c, minWidth: 14, flexShrink: 0,
+            }}>{k}</span>
+            <span style={{ fontSize: 11, color: 'var(--t-2)', lineHeight: 1.3 }}>{label}</span>
+          </button>
+        )
+      })}
+    </div>
+  )
+}
 
-// Step 1: Select GK sub-event
+function StepLabel({ text, color }) {
+  return (
+    <div style={{
+      fontSize: 9, fontWeight: 700, letterSpacing: 1,
+      color: color || 'var(--t-3)', marginBottom: 8, textTransform: 'uppercase',
+    }}>{text}</div>
+  )
+}
+
+function Breadcrumb({ items }) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginBottom: 10, flexWrap: 'wrap' }}>
+      {items.map((item, i) => (
+        <span key={i} style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+          {i > 0 && <span style={{ fontSize: 10, color: 'var(--t-3)' }}>→</span>}
+          <span style={{
+            fontSize: 10, padding: '2px 7px', borderRadius: 4,
+            background: i === items.length - 1 ? 'rgba(232,89,12,0.15)' : 'var(--bg-3)',
+            color: i === items.length - 1 ? 'var(--p2)' : 'var(--t-3)',
+            border: i === items.length - 1 ? '1px solid rgba(232,89,12,0.3)' : '1px solid var(--b-2)',
+          }}>{item}</span>
+        </span>
+      ))}
+    </div>
+  )
+}
+
 function GKSubEventStep({ pendingTag, onSelect, onCancel }) {
   useEffect(() => {
     function onKey(e) {
@@ -185,7 +309,7 @@ function GKSubEventStep({ pendingTag, onSelect, onCancel }) {
   return (
     <>
       <PanelHeader eventKey="G" eventLabel="Goal Keeper" videoTime={pendingTag.videoTime} onCancel={onCancel} />
-      <div style={{ fontSize: 9, fontWeight: 700, color: '#FFD60A', letterSpacing: 1, marginBottom: 8 }}>GK EVENT</div>
+      <StepLabel text="GK event" color="#FFD60A" />
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
         {GK_EXTRAS.map(ex => (
           <PillBtn key={ex.id} label={ex.label} shortcut={ex.key} active={false} color="#FFD60A" onClick={() => onSelect(ex)} />
@@ -195,7 +319,6 @@ function GKSubEventStep({ pendingTag, onSelect, onCancel }) {
   )
 }
 
-// Step 2: Select card extra (Extra Event / Wrong Timestamp / Wrong Team Event / Wrong Extra / Missing Extra)
 function GKCardStep({ pendingTag, gkSubEvent, onCardSelect, onCancel }) {
   useEffect(() => {
     function onKey(e) {
@@ -210,27 +333,45 @@ function GKCardStep({ pendingTag, gkSubEvent, onCardSelect, onCancel }) {
   return (
     <>
       <PanelHeader eventKey="G" eventLabel={`Goal Keeper — ${gkSubEvent.label}`} videoTime={pendingTag.videoTime} onCancel={onCancel} />
-      <div style={{ fontSize: 9, fontWeight: 700, color: 'var(--t-3)', letterSpacing: 1, marginBottom: 8 }}>EXTRA TYPE</div>
+      <StepLabel text="error type" />
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-        {GK_CARD_EXTRAS.map(ex => {
-          const isWrongTrigger = GK_WRONG_TRIGGER_IDS.includes(ex.id)
-          return (
-            <PillBtn
-              key={ex.id}
-              label={ex.label}
-              shortcut={ex.key}
-              active={false}
-              color={isWrongTrigger ? '#FF9F0A' : 'var(--p2)'}
-              onClick={() => onCardSelect(ex)}
-            />
-          )
-        })}
+        {GK_CARD_EXTRAS.map(ex => (
+          <PillBtn
+            key={ex.id}
+            label={ex.label}
+            shortcut={ex.key}
+            active={false}
+            color={GK_WRONG_TRIGGER_IDS.includes(ex.id) ? '#FF9F0A' : 'var(--p2)'}
+            onClick={() => onCardSelect(ex)}
+          />
+        ))}
       </div>
     </>
   )
 }
 
-// Step 3: Select wrong extras (only for Save Attempt / Conceded No Save)
+function GKWrongEventStep({ pendingTag, gkSubEvent, onSave, onCancel }) {
+  const corrections = GK_WRONG_EVENT_MAP[gkSubEvent.id] || []
+
+  useEffect(() => {
+    function onKey(e) {
+      if (e.key === 'Escape') { onCancel(); return }
+      const idx = KEYS.indexOf(e.key.toUpperCase())
+      if (idx >= 0 && idx < corrections.length) onSave(corrections[idx])
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [corrections, onSave, onCancel])
+
+  return (
+    <>
+      <PanelHeader eventKey="G" eventLabel={`GK (${gkSubEvent.label}) — Wrong Event`} videoTime={pendingTag.videoTime} onCancel={onCancel} />
+      <StepLabel text="correct event was" color="var(--p2)" />
+      <KeyedList items={corrections} onSelect={(c) => onSave(c)} color="var(--p2)" cols={2} />
+    </>
+  )
+}
+
 function GKWrongExtrasStep({ pendingTag, gkSubEvent, cardExtra, onSave, onCancel }) {
   const [selected, setSelected] = useState([])
   const wrongExtras = GK_WRONG_EXTRAS[gkSubEvent.id] || []
@@ -243,7 +384,6 @@ function GKWrongExtrasStep({ pendingTag, gkSubEvent, cardExtra, onSave, onCancel
     function onKey(e) {
       if (e.key === 'Escape') { onCancel(); return }
       if ((e.key === '1' || e.key === '2') && selected.length > 0) {
-        // Check if '1' or '2' is also a wrong extra key
         const we = wrongExtras.find(x => x.key === e.key)
         if (we && selected.length === 0) { toggle(we.id); return }
         onSave(selected, e.key === '1' ? 'home' : 'away')
@@ -259,7 +399,7 @@ function GKWrongExtrasStep({ pendingTag, gkSubEvent, cardExtra, onSave, onCancel
   return (
     <>
       <PanelHeader eventKey="G" eventLabel={`${gkSubEvent.label} — ${cardExtra.label}`} videoTime={pendingTag.videoTime} showTeamHint={selected.length > 0} onCancel={onCancel} />
-      <div style={{ fontSize: 9, fontWeight: 700, color: '#FF9F0A', letterSpacing: 1, marginBottom: 8 }}>WRONG EXTRAS</div>
+      <StepLabel text="wrong extras" color="#FF9F0A" />
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 12 }}>
         {wrongExtras.map(ex => (
           <PillBtn key={ex.id} label={ex.label} shortcut={ex.key} active={selected.includes(ex.id)} color="#FF9F0A" onClick={() => toggle(ex.id)} />
@@ -270,7 +410,6 @@ function GKWrongExtrasStep({ pendingTag, gkSubEvent, cardExtra, onSave, onCancel
   )
 }
 
-// Step 4: Team selection (for auto-save card extras)
 function GKTeamStep({ pendingTag, gkSubEvent, cardExtra, onSave, onCancel }) {
   useEffect(() => {
     function onKey(e) {
@@ -290,9 +429,6 @@ function GKTeamStep({ pendingTag, gkSubEvent, cardExtra, onSave, onCancel }) {
   )
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// EDIT MODAL
-// ─────────────────────────────────────────────────────────────────────────────
 function TagPanelEdit({ tag, onSave, onDelete, onCancel }) {
   const event = TORNADO_EVENTS.find(e => e.key?.toUpperCase() === tag.triggeredKey?.toUpperCase())
     || { label: tag.triggeredEventLabel || tag.triggeredKey, id: tag.triggeredEventId, key: tag.triggeredKey }
@@ -372,15 +508,14 @@ function TagPanelEdit({ tag, onSave, onDelete, onCancel }) {
   )
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// MAIN TAG PANEL
-// ─────────────────────────────────────────────────────────────────────────────
 export default function TagPanel({ pendingTag, onSave, onCancel, editTag, onEditSave, onEditDelete, onEditCancel }) {
-  const [selectedExtras, setSelectedExtras] = useState([])
-  // GK multi-step state
-  const [gkStep,       setGkStep]       = useState(null) // null | 'sub' | 'card' | 'wrong' | 'team'
-  const [gkSubEvent,   setGkSubEvent]   = useState(null)
-  const [gkCardExtra,  setGkCardExtra]  = useState(null)
+  const [step, setStep]               = useState('error_type')
+  const [errorTypeId, setErrorTypeId] = useState(null)
+  const [wrongEventCorr, setWrongEventCorr] = useState(null)
+  const [wrongExtra, setWrongExtra]   = useState(null)
+  const [gkStep, setGkStep]           = useState(null)
+  const [gkSubEvent, setGkSubEvent]   = useState(null)
+  const [gkCardExtra, setGkCardExtra] = useState(null)
 
   const event = pendingTag
     ? (TORNADO_EVENTS.find(e => e.key?.toUpperCase() === pendingTag.key?.toUpperCase())
@@ -390,17 +525,24 @@ export default function TagPanel({ pendingTag, onSave, onCancel, editTag, onEdit
   const isMissing = pendingTag?.isMissing
   const isGK      = event?.id === 'goal_keeper'
 
-  const generalExtras = event
-    ? EXTRAS.filter(ex => ex.events === 'all' || ex.events.includes(event.id))
-    : []
-
-  // Reset all state when new tag starts
   useEffect(() => {
-    setSelectedExtras([])
+    setStep('error_type')
+    setErrorTypeId(null)
+    setWrongEventCorr(null)
+    setWrongExtra(null)
     setGkStep(isGK ? 'sub' : null)
     setGkSubEvent(null)
     setGkCardExtra(null)
   }, [pendingTag?.key, pendingTag?.videoTime])
+
+  const ERROR_TYPES = [
+    { key: '1', id: 'wrong_event',      label: 'Wrong Event',      autoSave: false },
+    { key: '2', id: 'missing_event',    label: 'Missing Event',    autoSave: true  },
+    { key: '3', id: 'extra_event',      label: 'Extra Event',      autoSave: true  },
+    { key: '4', id: 'missing_extra',    label: 'Missing Extra',    autoSave: false },
+    { key: '5', id: 'wrong_extra',      label: 'Wrong Extra',      autoSave: false },
+    { key: '6', id: 'not_needed_extra', label: 'Not Needed Extra', autoSave: false },
+  ]
 
   function doSave(extras, team) {
     onSave({
@@ -417,55 +559,104 @@ export default function TagPanel({ pendingTag, onSave, onCancel, editTag, onEdit
     })
   }
 
-  // GK: sub-event selected
-  function handleGkSubSelect(sub) {
-    setGkSubEvent(sub)
-    setGkStep('card')
+  function doAutoSave(errorType) {
+    onSave({
+      triggeredKey:        pendingTag.key,
+      triggeredEventId:    event?.id || '',
+      triggeredEventLabel: isMissing ? 'Missing Event' : (event?.label || pendingTag.key),
+      extras:              [errorType],
+      team:                null,
+      videoTimeSec:        pendingTag.videoTime,
+      timestamp:           Date.now(),
+      isMissing:           !!isMissing,
+    })
   }
 
-  // GK: card extra selected
-  function handleGkCardSelect(cardEx) {
-    setGkCardExtra(cardEx)
-    if (GK_WRONG_TRIGGER_IDS.includes(cardEx.id)) {
-      // Only show wrong extras if this sub-event has them
-      if (GK_WRONG_EXTRAS[gkSubEvent.id]) {
-        setGkStep('wrong')
-      } else {
-        setGkStep('team')
-      }
-    } else if (GK_AUTO_SAVE_IDS.includes(cardEx.id)) {
-      setGkStep('team')
-    }
-  }
-
-  // GK: wrong extras confirmed → go to team
-  function handleGkWrongSave(wrongExtras, team) {
-    doSave([gkSubEvent.id, gkCardExtra.id, ...wrongExtras], team)
-  }
-
-  // GK: team selected after auto-save card extra
-  function handleGkTeamSave(team) {
-    doSave([gkSubEvent.id, gkCardExtra.id], team)
-  }
-
-  // Normal flow keyboard handler
   useEffect(() => {
     if (!pendingTag || isGK) return
     function onKey(e) {
       if (e.key === 'Escape') { onCancel(); return }
-      const k = e.key
-      if ((k === '1' || k === '2') && selectedExtras.length > 0) {
-        doSave(selectedExtras, k === '1' ? 'home' : 'away')
+      const k = e.key.toUpperCase()
+
+      if (step === 'error_type') {
+        const et = ERROR_TYPES.find(x => x.key === e.key)
+        if (!et) return
+        if (et.autoSave) { doAutoSave(et.id); return }
+        setErrorTypeId(et.id)
+        if (et.id === 'wrong_event')      setStep('wrong_event')
+        else if (et.id === 'missing_extra')    setStep('missing_extra')
+        else if (et.id === 'wrong_extra')      setStep('wrong_extra_pick')
+        else if (et.id === 'not_needed_extra') setStep('not_needed_extra')
         return
       }
-      const genEx = generalExtras.find(ex => ex.key === k)
-      if (genEx) {
-        setSelectedExtras(prev => prev.includes(genEx.id) ? prev.filter(x => x !== genEx.id) : [...prev, genEx.id])
+
+      if (step === 'wrong_event') {
+        const corrections = WRONG_EVENT_MAP[event?.id] || []
+        const idx = KEYS.indexOf(k)
+        if (idx >= 0 && idx < corrections.length) {
+          setWrongEventCorr(corrections[idx])
+          setStep('team')
+        }
+        return
+      }
+
+      if (step === 'missing_extra' || step === 'not_needed_extra') {
+        const idx = KEYS.indexOf(k)
+        if (idx >= 0 && idx < MISSING_EXTRA_LIST.length) {
+          setWrongEventCorr(MISSING_EXTRA_LIST[idx])
+          setStep('team')
+        }
+        return
+      }
+
+      if (step === 'wrong_extra_pick') {
+        const idx = KEYS.indexOf(k)
+        if (idx >= 0 && idx < WRONG_EXTRA_LIST.length) {
+          setWrongExtra(WRONG_EXTRA_LIST[idx])
+          setStep('wrong_extra_corr')
+        }
+        return
+      }
+
+      if (step === 'wrong_extra_corr') {
+        const corrs = WRONG_EXTRA_CORR[wrongExtra] || []
+        const idx = KEYS.indexOf(k)
+        if (idx >= 0 && idx < corrs.length) {
+          setWrongEventCorr(corrs[idx])
+          setStep('team')
+        }
+        return
+      }
+
+      if (step === 'team') {
+        if (e.key === '1') doSave([errorTypeId, wrongExtra, wrongEventCorr].filter(Boolean), 'home')
+        if (e.key === '2') doSave([errorTypeId, wrongExtra, wrongEventCorr].filter(Boolean), 'away')
+        return
       }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [pendingTag, isGK, selectedExtras, generalExtras])
+  }, [pendingTag, isGK, step, errorTypeId, wrongEventCorr, wrongExtra])
+
+  function handleGkSubSelect(sub)         { setGkSubEvent(sub); setGkStep('card') }
+  function handleGkCardSelect(cardEx) {
+    setGkCardExtra(cardEx)
+    if (cardEx.id === 'wrong_event') {
+      setGkStep('wrong_event')
+    } else if (GK_WRONG_TRIGGER_IDS.includes(cardEx.id)) {
+      setGkStep(GK_WRONG_EXTRAS[gkSubEvent.id] ? 'wrong' : 'team')
+    } else if (GK_AUTO_SAVE_IDS.includes(cardEx.id)) {
+      setGkStep('team')
+    }
+  }
+  function handleGkWrongEventSave(corr)   { doSave([gkSubEvent.id, 'wrong_event', corr], null); }
+  function handleGkWrongSave(we, team)    { doSave([gkSubEvent.id, gkCardExtra.id, ...we], team) }
+  function handleGkTeamSave(team)         { doSave([gkSubEvent.id, gkCardExtra.id], team) }
+
+  const breadcrumb = []
+  if (event) breadcrumb.push(isMissing ? 'Missing Event' : event.label)
+  if (errorTypeId) breadcrumb.push(ERROR_TYPES.find(x => x.id === errorTypeId)?.label || errorTypeId)
+  if (wrongExtra) breadcrumb.push(wrongExtra)
 
   if (editTag) return <TagPanelEdit tag={editTag} onSave={onEditSave} onDelete={onEditDelete} onCancel={onEditCancel} />
   if (!pendingTag) return null
@@ -475,21 +666,14 @@ export default function TagPanel({ pendingTag, onSave, onCancel, editTag, onEdit
       <div style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.5)', backdropFilter: 'blur(3px)', pointerEvents: 'all' }} onClick={onCancel} />
       <div className="slide-up" style={{ position: 'relative', width: '100%', zIndex: 1, background: 'var(--bg-2)', borderTop: '2px solid var(--b-1)', padding: '14px 20px 16px', pointerEvents: 'all' }} onClick={e => e.stopPropagation()}>
 
-        {/* ── GK MULTI-STEP FLOW ── */}
-        {isGK && gkStep === 'sub' && (
-          <GKSubEventStep pendingTag={pendingTag} onSelect={handleGkSubSelect} onCancel={onCancel} />
-        )}
-        {isGK && gkStep === 'card' && gkSubEvent && (
-          <GKCardStep pendingTag={pendingTag} gkSubEvent={gkSubEvent} onCardSelect={handleGkCardSelect} onCancel={onCancel} />
-        )}
-        {isGK && gkStep === 'wrong' && gkSubEvent && gkCardExtra && (
-          <GKWrongExtrasStep pendingTag={pendingTag} gkSubEvent={gkSubEvent} cardExtra={gkCardExtra} onSave={handleGkWrongSave} onCancel={onCancel} />
-        )}
-        {isGK && gkStep === 'team' && gkSubEvent && gkCardExtra && (
-          <GKTeamStep pendingTag={pendingTag} gkSubEvent={gkSubEvent} cardExtra={gkCardExtra} onSave={handleGkTeamSave} onCancel={onCancel} />
-        )}
+        {/* GK FLOW */}
+        {isGK && gkStep === 'sub' && <GKSubEventStep pendingTag={pendingTag} onSelect={handleGkSubSelect} onCancel={onCancel} />}
+        {isGK && gkStep === 'card' && gkSubEvent && <GKCardStep pendingTag={pendingTag} gkSubEvent={gkSubEvent} onCardSelect={handleGkCardSelect} onCancel={onCancel} />}
+        {isGK && gkStep === 'wrong_event' && gkSubEvent && <GKWrongEventStep pendingTag={pendingTag} gkSubEvent={gkSubEvent} onSave={handleGkWrongEventSave} onCancel={onCancel} />}
+        {isGK && gkStep === 'wrong' && gkSubEvent && gkCardExtra && <GKWrongExtrasStep pendingTag={pendingTag} gkSubEvent={gkSubEvent} cardExtra={gkCardExtra} onSave={handleGkWrongSave} onCancel={onCancel} />}
+        {isGK && gkStep === 'team' && gkSubEvent && gkCardExtra && <GKTeamStep pendingTag={pendingTag} gkSubEvent={gkSubEvent} cardExtra={gkCardExtra} onSave={handleGkTeamSave} onCancel={onCancel} />}
 
-        {/* ── NORMAL EVENT FLOW ── */}
+        {/* NORMAL FLOW */}
         {!isGK && (
           <>
             <PanelHeader
@@ -497,16 +681,94 @@ export default function TagPanel({ pendingTag, onSave, onCancel, editTag, onEdit
               eventLabel={isMissing ? 'Missing Event' : event?.label}
               videoTime={pendingTag.videoTime}
               isMissing={isMissing}
-              showTeamHint={selectedExtras.length > 0}
+              showTeamHint={step === 'team'}
               onCancel={onCancel}
             />
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 10 }}>
-              {generalExtras.map(ex => {
-                const active = selectedExtras.includes(ex.id)
-                return <PillBtn key={ex.id} label={ex.label} shortcut={ex.key} active={active} onClick={() => setSelectedExtras(prev => prev.includes(ex.id) ? prev.filter(x => x !== ex.id) : [...prev, ex.id])} />
-              })}
-            </div>
-            <TeamRow onSave={(team) => doSave(selectedExtras, team)} disabled={selectedExtras.length === 0} />
+
+            {breadcrumb.length > 1 && <Breadcrumb items={breadcrumb} />}
+
+            {step === 'error_type' && (
+              <>
+                <StepLabel text="error type" />
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                  {ERROR_TYPES.map(et => (
+                    <PillBtn
+                      key={et.id}
+                      label={et.label}
+                      shortcut={et.key}
+                      active={false}
+                      color={et.autoSave ? '#30D158' : 'var(--p2)'}
+                      onClick={() => {
+                        if (et.autoSave) { doAutoSave(et.id); return }
+                        setErrorTypeId(et.id)
+                        if (et.id === 'wrong_event')           setStep('wrong_event')
+                        else if (et.id === 'missing_extra')    setStep('missing_extra')
+                        else if (et.id === 'wrong_extra')      setStep('wrong_extra_pick')
+                        else if (et.id === 'not_needed_extra') setStep('not_needed_extra')
+                      }}
+                    />
+                  ))}
+                </div>
+              </>
+            )}
+
+            {step === 'wrong_event' && (
+              <>
+                <StepLabel text="correct event was" color="var(--p2)" />
+                <KeyedList
+                  items={WRONG_EVENT_MAP[event?.id] || []}
+                  onSelect={(c) => { setWrongEventCorr(c); setStep('team') }}
+                  color="var(--p2)"
+                  cols={2}
+                />
+              </>
+            )}
+
+            {(step === 'missing_extra' || step === 'not_needed_extra') && (
+              <>
+                <StepLabel text={step === 'missing_extra' ? 'which extra is missing' : 'which extra to remove'} color="#FF9F0A" />
+                <KeyedList
+                  items={MISSING_EXTRA_LIST}
+                  onSelect={(c) => { setWrongEventCorr(c); setStep('team') }}
+                  color="#FF9F0A"
+                  cols={2}
+                />
+              </>
+            )}
+
+            {step === 'wrong_extra_pick' && (
+              <>
+                <StepLabel text="which extra was wrong" color="#FF9F0A" />
+                <KeyedList
+                  items={WRONG_EXTRA_LIST}
+                  onSelect={(c) => { setWrongExtra(c); setStep('wrong_extra_corr') }}
+                  color="#FF9F0A"
+                  cols={2}
+                />
+              </>
+            )}
+
+            {step === 'wrong_extra_corr' && wrongExtra && (
+              <>
+                <StepLabel text={`correct ${wrongExtra} to`} color="var(--p2)" />
+                <KeyedList
+                  items={WRONG_EXTRA_CORR[wrongExtra] || []}
+                  onSelect={(c) => { setWrongEventCorr(c); setStep('team') }}
+                  color="var(--p2)"
+                  cols={1}
+                />
+              </>
+            )}
+
+            {step === 'team' && (
+              <>
+                <StepLabel text="which team made the error" />
+                <TeamRow
+                  onSave={(team) => doSave([errorTypeId, wrongExtra, wrongEventCorr].filter(Boolean), team)}
+                  disabled={false}
+                />
+              </>
+            )}
           </>
         )}
       </div>
