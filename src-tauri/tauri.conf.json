@@ -1,6 +1,6 @@
 {
   "productName": "MARK",
-  "version": "2.8.1",
+  "version": "2.8.2",
   "identifier": "com.hudlegy.mark",
   "build": {
     "frontendDist": "../dist",
@@ -11,7 +11,7 @@
   "app": {
     "windows": [
       {
-        "title": "MARK 2.8.1 — Review App",
+        "title": "MARK 2.8.2 — Review App",
         "width": 1280,
         "height": 800,
         "minWidth": 900,

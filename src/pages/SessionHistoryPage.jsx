@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { db } from '../firebase/config'
-import { collection, query, where, orderBy, getDocs } from 'firebase/firestore'
+import { collection, query, where, getDocs } from 'firebase/firestore'
 import { useAuth } from '../hooks/useAuth.jsx'
 import { invoke } from '@tauri-apps/api/core'
 import { convertFileSrc } from '@tauri-apps/api/core'
@@ -249,11 +249,17 @@ export default function SessionHistoryPage({ onBack }) {
         const q = query(
           collection(db, 'mark_sessions'),
           where('reviewerId', '==', profile.uid),
-          where('status', '==', 'completed'),
-          orderBy('completedAt', 'desc')
+          where('status', '==', 'completed')
         )
         const snap = await getDocs(q)
-        setSessions(snap.docs.map(d => ({ id: d.id, ...d.data() })))
+        const list = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+        // Sort by completedAt descending in JS — no composite index needed
+        list.sort((a, b) => {
+          const ta = a.completedAt?.toDate?.()?.getTime() || 0
+          const tb = b.completedAt?.toDate?.()?.getTime() || 0
+          return tb - ta
+        })
+        setSessions(list)
       } catch(e) {
         console.error('[MARK] load sessions:', e)
       } finally {
