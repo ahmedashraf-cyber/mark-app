@@ -47,24 +47,12 @@ export default function ReviewPage({ session, onDone, onBack, bridgeSyncStatus, 
 
   // ── Auto-start review on first video interaction ─────────────────────────
   const reviewStartedRef = useRef(false)
-  async function markReviewStart() {
+  function markReviewStart() {
     if (reviewStartedRef.current) return
     reviewStartedRef.current = true
     setReviewStarted(true)
-
-    // Read collection app's current time from posSync (already in Firestore, no round trip needed)
-    try {
-      const snap = await import('firebase/firestore').then(m =>
-        m.getDoc(m.doc(db, 'mark_sessions', session.sessionId))
-      )
-      const posSync = snap.data()?.posSync
-      const collectionTime = posSync?.currentTime ?? 0
-      setReviewStartTs(collectionTime)
-      console.log('[MARK] review started, collection app posSync time:', collectionTime)
-    } catch(e) {
-      setReviewStartTs(0)
-      console.log('[MARK] review started, posSync unavailable, using 0')
-    }
+    setReviewStartTs(0) // always starts from beginning of half
+    console.log('[MARK] review started, startTs = 0')
   }
 
   // ── Keyboard handler — active as soon as video is loaded ──────────────────
@@ -301,20 +289,21 @@ export default function ReviewPage({ session, onDone, onBack, bridgeSyncStatus, 
     const matchId = session.matchId
     const countReqTs = Date.now()
 
-    // Get collection app's current time from posSync (no round trip needed)
-    let endTs = 0
-    try {
-      const { getDoc, doc: firestoreDoc } = await import('firebase/firestore')
-      const snap = await getDoc(firestoreDoc(db, 'mark_sessions', session.sessionId))
-      endTs = snap.data()?.posSync?.currentTime ?? 0
-    } catch(e) {
-      console.warn('[MARK] could not get posSync endTs:', e)
+    // Read endTs from posSync — written by bridge every second
+    const { getDoc: gd, doc: fd } = await import('firebase/firestore')
+    const snap = await gd(fd(db, 'mark_sessions', session.sessionId))
+    const posSync = snap.data()?.posSync
+    const endTs = posSync?.currentTime ?? null
+
+    if (endTs === null) {
+      // Bridge not injected — can't auto-count
+      return -1
     }
 
-    console.log('[MARK] requesting event count:', { matchId, startTs: reviewStartTs, endTs })
+    console.log('[MARK] requesting event count:', { matchId, startTs: 0, endTs })
 
     await updateDoc(doc(db, 'mark_sessions', session.sessionId), {
-      eventCountRequest: { matchId, startTs: reviewStartTs, endTs, ts: countReqTs }
+      eventCountRequest: { matchId, startTs: 0, endTs, ts: countReqTs }
     })
 
     return new Promise((resolve) => {
@@ -608,11 +597,14 @@ export default function ReviewPage({ session, onDone, onBack, bridgeSyncStatus, 
                   </div>
                 ) : (
                   <>
-                    <p style={{fontSize:12,color:'var(--t-3)',marginBottom:10}}>
-                      {bridgeAvailable === false && reviewedEvents === ''
-                        ? 'Bridge not connected — enter the number of events you reviewed manually.'
-                        : 'Enter the number of events reviewed.'}
-                    </p>
+                    <div style={{
+                      display:'flex',alignItems:'center',gap:8,
+                      padding:'8px 12px',borderRadius:8,marginBottom:12,
+                      background:'rgba(255,159,10,0.1)',border:'1px solid rgba(255,159,10,0.3)',
+                    }}>
+                      <div style={{width:6,height:6,borderRadius:'50%',background:'#FF9F0A',flexShrink:0}}/>
+                      <span style={{fontSize:12,color:'#FF9F0A',fontWeight:600}}>Bridge not connected — enter count manually</span>
+                    </div>
                     <input
                       className="mark-input"
                       type="number" min="1" placeholder="e.g. 40"
