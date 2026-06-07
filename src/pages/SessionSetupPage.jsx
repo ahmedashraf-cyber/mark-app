@@ -2,8 +2,68 @@ import { useState, useEffect } from 'react'
 import { db } from '../firebase/config'
 import { collection, query, where, getDocs, doc, setDoc, getDoc, serverTimestamp } from 'firebase/firestore'
 import { useAuth } from '../hooks/useAuth.jsx'
-import MATCHES, { findMatch } from '../data/matches.js'
 import { CURRENT_VERSION } from '../hooks/useUpdateCheck'
+
+const SHEETS_API_KEY   = 'AIzaSyDEO-0MZ4-LOdIJ7aIyscgmLWGN5h8MpNI'
+const MATCHES_SHEET_ID = '1dPwnYhIOiLUy_aBuVijPH3xtU6kxnEu-8FF115kXjSc'
+const MATCHES_RANGE    = 'Sheet1!A1:Z'
+
+// Column name aliases — handles any capitalisation / spacing in the sheet header
+const COL = {
+  productionId: ['productionid','production id','production_id','prod id','prodid','id'],
+  stagingId:    ['stagingid','staging id','staging_id'],
+  matchName:    ['matchname','match name','match_name','name','match'],
+  homeTeam:     ['hometeam','home team','home_team','home'],
+  awayTeam:     ['awayteam','away team','away_team','away'],
+  matchDate:    ['matchdate','match date','match_date','date'],
+  competition:  ['competition','league','tournament'],
+  country:      ['country'],
+  season:       ['season'],
+  trainer:      ['trainer','assigned to','assignedto'],
+  gameWeek:     ['gameweek','game week','game_week','week','gw','round'],
+}
+
+function resolveCol(headers, aliases) {
+  for (const alias of aliases) {
+    const idx = headers.findIndex(h => h.toLowerCase().trim() === alias)
+    if (idx !== -1) return idx
+  }
+  return -1
+}
+
+async function fetchMatchesFromSheet() {
+  const url = `https://sheets.googleapis.com/v4/spreadsheets/${MATCHES_SHEET_ID}/values/${encodeURIComponent(MATCHES_RANGE)}?key=${SHEETS_API_KEY}`
+  const res  = await fetch(url)
+  if (!res.ok) throw new Error(`Sheets API error ${res.status}`)
+  const data = await res.json()
+  const rows = data.values || []
+  if (rows.length < 2) return []
+
+  // Row 0 = headers
+  const headers = rows[0].map(h => String(h).toLowerCase().trim())
+  const idx = {}
+  for (const [field, aliases] of Object.entries(COL)) {
+    idx[field] = resolveCol(headers, aliases)
+  }
+
+  const get = (row, field) => idx[field] !== -1 ? String(row[idx[field]] || '').trim() : ''
+
+  return rows.slice(1)
+    .filter(r => r.length > 0 && get(r, 'productionId'))
+    .map(r => ({
+      productionId: get(r, 'productionId'),
+      stagingId:    get(r, 'stagingId'),
+      matchName:    get(r, 'matchName'),
+      homeTeam:     get(r, 'homeTeam'),
+      awayTeam:     get(r, 'awayTeam'),
+      matchDate:    get(r, 'matchDate'),
+      competition:  get(r, 'competition'),
+      country:      get(r, 'country'),
+      season:       get(r, 'season'),
+      trainer:      get(r, 'trainer'),
+      gameWeek:     get(r, 'gameWeek') ? Number(get(r, 'gameWeek')) : null,
+    }))
+}
 
 const HALVES = [
   { id: '1H', label: '1st Half' },
@@ -21,12 +81,22 @@ export default function SessionSetupPage({ onSessionStart, lastResult, onShowHis
   const [lockedBy, setLockedBy]           = useState('')
   const [loading, setLoading]             = useState(false)
   const [error, setError]                 = useState('')
+  const [matches, setMatches]             = useState([])
+  const [matchesLoading, setMatchesLoading] = useState(true)
+  const [matchesError, setMatchesError]   = useState('')
+
+  useEffect(() => {
+    setMatchesLoading(true)
+    fetchMatchesFromSheet()
+      .then(rows => { setMatches(rows); setMatchesLoading(false) })
+      .catch(e => { setMatchesError(e.message); setMatchesLoading(false) })
+  }, [])
 
   useEffect(() => {
     if (selectedMatch && selectedHalf) checkHalfLock()
   }, [selectedMatch, selectedHalf])
 
-  const filteredMatches = MATCHES.filter(m => {
+  const filteredMatches = matches.filter(m => {
     const q = matchSearch.toLowerCase()
     return !q ||
       m.matchName.toLowerCase().includes(q) ||
@@ -173,11 +243,15 @@ export default function SessionSetupPage({ onSessionStart, lastResult, onShowHis
             <p style={{fontSize:13,color:'var(--t-3)'}}>Select the match and half you want to review</p>
           </div>
           <div>
-            <label style={{display:'block',fontSize:11,color:'var(--t-3)',fontWeight:700,marginBottom:6,letterSpacing:.5}}>MATCH — {filteredMatches.length} available</label>
+            <label style={{display:'block',fontSize:11,color:'var(--t-3)',fontWeight:700,marginBottom:6,letterSpacing:.5}}>MATCH — {matchesLoading ? 'loading…' : `${filteredMatches.length} available`}</label>
             <input className="mark-input" placeholder="Search by match name, ID, or team…" value={matchSearch} onChange={e => { setMatchSearch(e.target.value); setSelectedMatch(null); setLockStatus(null) }} autoFocus />
           </div>
           <div className="card" style={{flex:1,overflow:'auto',maxHeight:400}}>
-            {filteredMatches.length === 0 ? (
+            {matchesLoading ? (
+              <div style={{padding:24,textAlign:'center',color:'var(--t-3)',fontSize:13}}>Loading matches…</div>
+            ) : matchesError ? (
+              <div style={{padding:24,textAlign:'center',color:'#FF453A',fontSize:13}}>Failed to load matches: {matchesError}</div>
+            ) : filteredMatches.length === 0 ? (
               <div style={{padding:24,textAlign:'center',color:'var(--t-3)',fontSize:13}}>No matches match your search</div>
             ) : filteredMatches.map((m, i) => {
               const isSelected = selectedMatch?.productionId === m.productionId
