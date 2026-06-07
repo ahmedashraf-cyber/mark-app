@@ -384,7 +384,7 @@ function MatchReport({ session, tags, onBack }) {
         display: 'flex', alignItems: 'center', gap: 12,
       }}>
         <button className="btn-ghost" style={{ padding: '5px 12px', fontSize: 12 }} onClick={onBack}>
-          <- Back
+          Back
         </button>
         <div style={{ width: 1, height: 16, background: 'var(--b-2)' }}/>
         <div style={{ flex: 1 }}>
@@ -626,7 +626,7 @@ export default function SessionHistoryPage({ onBack }) {
         display: 'flex', alignItems: 'center', padding: '0 16px', gap: 12,
       }}>
         <button className="btn-ghost" style={{ padding: '5px 12px', fontSize: 12 }} onClick={onBack}>
-          <- Back
+          Back
         </button>
         <div style={{ width: 1, height: 16, background: 'var(--b-2)' }}/>
         <span style={{ fontFamily: 'Inter', fontWeight: 700, fontSize: 14, color: 'var(--t-1)' }}>Session History</span>
