@@ -1,6 +1,6 @@
 {
   "productName": "MARK",
-  "version": "2.9.6",
+  "version": "2.9.7",
   "identifier": "com.hudlegy.mark",
   "build": {
     "frontendDist": "../dist",
