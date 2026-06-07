@@ -12,7 +12,7 @@ const HALVES = [
   { id: 'ET2', label: 'Extra Time 2' },
 ]
 
-export default function SessionSetupPage({ onSessionStart, lastResult }) {
+export default function SessionSetupPage({ onSessionStart, lastResult, onShowHistory }) {
   const { profile, logout } = useAuth()
   const [matchSearch, setMatchSearch]     = useState('')
   const [selectedMatch, setSelectedMatch] = useState(null)
@@ -124,6 +124,9 @@ export default function SessionSetupPage({ onSessionStart, lastResult }) {
         </div>
         <div style={{display:'flex',alignItems:'center',gap:12}}>
           <span style={{fontSize:12,color:'var(--t-3)'}}>{profile?.email}</span>
+          <button className="btn-ghost" style={{padding:'5px 12px',fontSize:12}} onClick={onShowHistory}>
+            Session History
+          </button>
           <button className="btn-ghost" style={{padding:'5px 12px',fontSize:12}} onClick={logout}>Sign out</button>
         </div>
       </header>
@@ -134,36 +137,6 @@ export default function SessionSetupPage({ onSessionStart, lastResult }) {
           <span style={{fontSize:13,color:'#30D158',fontWeight:700}}>✅ Session complete — Quality Score: {lastResult.quality}%</span>
           <span style={{fontSize:12,color:'var(--t-3)'}}>{lastResult.tagCount} errors / {lastResult.total} events reviewed</span>
           <div style={{marginLeft:'auto',display:'flex',gap:8,alignItems:'center'}}>
-            {lastResult.sheetUrl ? (
-              <button
-                onClick={async () => {
-                  try {
-                    const { invoke } = await import('@tauri-apps/api/core')
-                    await invoke('open_file', { path: lastResult.sheetUrl })
-                  } catch(e) {
-                    window.open(lastResult.sheetUrl, '_blank')
-                  }
-                }}
-                style={{
-                  display:'flex', alignItems:'center', gap:6,
-                  padding:'5px 14px', borderRadius:7, cursor:'pointer',
-                  border:'1px solid rgba(66,133,244,0.5)',
-                  background:'rgba(66,133,244,0.12)',
-                  color:'#4285F4', fontSize:12, fontWeight:700,
-                  transition:'all .15s',
-                }}
-              >
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor">
-                  <path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-7 14H7v-2h5v2zm5-4H7v-2h10v2zm0-4H7V7h10v2z"/>
-                </svg>
-                Open Google Sheet
-              </button>
-            ) : lastResult.sheetError ? (
-              <span style={{fontSize:11,color:'#FF453A',maxWidth:340,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}
-                title={lastResult.sheetError}>
-                Sheet error: {lastResult.sheetError}
-              </span>
-            ) : null}
             {lastResult.filePath && (
               <button
                 onClick={async () => {

@@ -35,7 +35,7 @@ function getDotColor(index) {
 }
 
 // ── Detail Panel (slides down from top bar) ───────────────────────────────────
-function DetailPanel({ tag, onEdit, onDelete, onClose }) {
+function DetailPanel({ tag, onEdit, onDelete, onClose, readOnly = false }) {
   const extras = tag.extras || []
 
   useEffect(() => {
@@ -85,18 +85,20 @@ function DetailPanel({ tag, onEdit, onDelete, onClose }) {
 
       {/* Actions */}
       <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
-        <button onClick={() => onEdit(tag)} style={{
-          padding: '4px 12px', borderRadius: 6, cursor: 'pointer',
-          border: '1px solid var(--b-2)', background: 'var(--bg-3)',
-          color: 'var(--t-2)', fontSize: 11, fontWeight: 600,
-          transition: 'all .1s',
-        }}>Edit</button>
-        <button onClick={() => onDelete(tag)} style={{
-          padding: '4px 12px', borderRadius: 6, cursor: 'pointer',
-          border: '1px solid rgba(255,69,58,0.4)', background: 'rgba(255,69,58,0.08)',
-          color: '#FF453A', fontSize: 11, fontWeight: 600,
-          transition: 'all .1s',
-        }}>Delete</button>
+        {!readOnly && (
+          <>
+            <button onClick={() => onEdit(tag)} style={{
+              padding: '4px 12px', borderRadius: 6, cursor: 'pointer',
+              border: '1px solid var(--b-2)', background: 'var(--bg-3)',
+              color: 'var(--t-2)', fontSize: 11, fontWeight: 600,
+            }}>Edit</button>
+            <button onClick={() => onDelete(tag)} style={{
+              padding: '4px 12px', borderRadius: 6, cursor: 'pointer',
+              border: '1px solid rgba(255,69,58,0.4)', background: 'rgba(255,69,58,0.08)',
+              color: '#FF453A', fontSize: 11, fontWeight: 600,
+            }}>Delete</button>
+          </>
+        )}
         <button onClick={onClose} style={{
           padding: '4px 8px', borderRadius: 6, cursor: 'pointer',
           border: '1px solid var(--b-2)', background: 'transparent',
@@ -248,7 +250,7 @@ function TimelineRow({ label, tags, videoDuration, currentTime, selectedId, onCa
 // ── Main Component ────────────────────────────────────────────────────────────
 export default function TaggedEventsList({
   tags, videoDuration, currentTime, matchName,
-  onEdit, onDelete,
+  onEdit, onDelete, onSeek, readOnly = false,
 }) {
   const [selectedTag, setSelectedTag] = useState(null)
 
@@ -264,14 +266,18 @@ export default function TaggedEventsList({
 
   function handleCardClick(tag) {
     setSelectedTag(prev => prev?.id === tag.id ? null : tag)
+    // In readOnly mode, seek to the timestamp on click
+    if (onSeek) onSeek(tag.videoTimeSec || 0)
   }
 
   function handleEdit(tag) {
+    if (readOnly) return
     setSelectedTag(null)
     onEdit(tag)
   }
 
   function handleDelete(tag) {
+    if (readOnly) return
     setSelectedTag(null)
     onDelete(tag)
   }
@@ -290,6 +296,7 @@ export default function TaggedEventsList({
           onEdit={handleEdit}
           onDelete={handleDelete}
           onClose={() => setSelectedTag(null)}
+          readOnly={readOnly}
         />
       )}
 

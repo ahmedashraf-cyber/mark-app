@@ -4,6 +4,7 @@ import { checkForUpdate } from './hooks/useUpdateCheck.js'
 import LoginPage from './pages/LoginPage'
 import SessionSetupPage from './pages/SessionSetupPage'
 import ReviewPage from './pages/ReviewPage'
+import SessionHistoryPage from './pages/SessionHistoryPage'
 import UpdateBanner from './components/UpdateBanner'
 
 // Cinematic page wrapper — fades + slides in each time content changes
@@ -45,6 +46,7 @@ function PageTransition({ id, children }) {
 function AppInner() {
   const { user, loading } = useAuth()
   const [session, setSession]         = useState(null)
+  const [showHistory, setShowHistory] = useState(false)
   const [lastResult, setLastResult]   = useState(null)
   const [update, setUpdate]           = useState(null)
   const [updateDismissed, setUpdateDismissed] = useState(false)
@@ -78,7 +80,7 @@ function AppInner() {
     </PageTransition>
   )
 
-  const pageId = session ? `review-${session.sessionId}` : 'setup'
+  const pageId = session ? `review-${session.sessionId}` : showHistory ? 'history' : 'setup'
 
   return (
     <>
@@ -91,10 +93,13 @@ function AppInner() {
             onDone={(result) => { setLastResult(result); setSession(null) }}
             onBack={() => setSession(null)}
           />
+        ) : showHistory ? (
+          <SessionHistoryPage onBack={() => setShowHistory(false)} />
         ) : (
           <SessionSetupPage
             onSessionStart={(s) => setSession(s)}
             lastResult={lastResult}
+            onShowHistory={() => setShowHistory(true)}
           />
         )}
       </PageTransition>

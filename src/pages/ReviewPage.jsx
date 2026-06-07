@@ -9,7 +9,7 @@ import TagPanel from '../components/TagPanel'
 import TaggedEventsList from '../components/TaggedEventsList'
 import ErrorTimeline from '../components/ErrorTimeline'
 import EventsSidebar from '../components/EventsSidebar'
-import { exportSessionToXlsx, exportSessionToGoogleSheets } from '../utils/exportSession'
+import { exportSessionToXlsx } from '../utils/exportSession'
 
 export default function ReviewPage({ session, onDone, onBack, bridgeSyncStatus, onBridgeSyncStatus }) {
   const { profile } = useAuth()
@@ -299,19 +299,8 @@ export default function ReviewPage({ session, onDone, onBack, bridgeSyncStatus, 
         console.error('[MARK] XLSX export failed:', exportErr)
       }
 
-      // Export to Google Sheets and get the sheet URL
-      let sheetUrl = null
-      let sheetError = null
-      try {
-        sheetUrl = await exportSessionToGoogleSheets({ session, tags, quality, tagCount, total, videoPath })
-        console.log('[MARK] Google Sheet created:', sheetUrl)
-      } catch (sheetErr) {
-        sheetError = sheetErr.message
-        console.error('[MARK] Google Sheets export failed:', sheetErr)
-      }
-
       setSubmitted(true)
-      setTimeout(() => onDone({ quality, tagCount, total, filePath, sheetUrl, sheetError }), 1500)
+      setTimeout(() => onDone({ quality, tagCount, total, filePath }), 1500)
     } catch (e) {
       setSubmitting(false)
     }
