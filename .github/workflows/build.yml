@@ -35,17 +35,41 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
+      - name: Read version
+        id: pkg
+        shell: bash
+        run: echo "VERSION=$(node -p \"require('./package.json').version\")" >> $GITHUB_OUTPUT
+
+      - name: Delete existing release for this version
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="v${{ steps.pkg.outputs.VERSION }}"
+          REPO="${{ github.repository }}"
+          RELEASE=$(curl -sf -H "Authorization: Bearer $GH_TOKEN" \
+            "https://api.github.com/repos/$REPO/releases/tags/$TAG" 2>/dev/null || echo "{}")
+          ID=$(echo "$RELEASE" | python3 -c "import sys,json; print(json.load(sys.stdin).get('id',''))" 2>/dev/null || true)
+          if [ -n "$ID" ] && [ "$ID" != "" ] && [ "$ID" != "None" ]; then
+            echo "Deleting release id=$ID tag=$TAG"
+            curl -sf -X DELETE -H "Authorization: Bearer $GH_TOKEN" \
+              "https://api.github.com/repos/$REPO/releases/$ID" || true
+            git push origin --delete "$TAG" 2>/dev/null || true
+          else
+            echo "No existing release for $TAG"
+          fi
+
       - name: Build Tauri app
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tagName: latest
-          releaseName: 'MARK Latest Build'
+          tagName: v__VERSION__
+          releaseName: 'MARK v__VERSION__'
           releaseBody: |
             Download the .msi or .exe installer below.
             Requirements: Windows 10+
           releaseDraft: false
-          prerelease: true
+          prerelease: false
           tauriScript: npx tauri
           args: --target x86_64-pc-windows-msvc
