@@ -5,7 +5,7 @@ import { useAuth } from '../hooks/useAuth.jsx'
 import { CURRENT_VERSION } from '../hooks/useUpdateCheck'
 
 const SHEETS_API_KEY   = 'AIzaSyDEO-0MZ4-LOdIJ7aIyscgmLWGN5h8MpNI'
-const MATCHES_SHEET_ID = '1dPwnYhIOiLUy_aBuVijPH3xtU6kxnEu-8FF115kXjSc'
+const MATCHES_SHEET_ID = '1zoh7CmoQKPMLGBEklHXznG1Y8xBS-iuu0phRWn8-wXc'
 
 // Column aliases — exact sheet headers: Production ID, Staging ID, Game Week,
 // Competition, Country, Match Date, Match Name, Home Team, Away Team, Season, Trainer
