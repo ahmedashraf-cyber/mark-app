@@ -292,8 +292,8 @@ export default function ReviewPage({ session, onDone, onBack, bridgeSyncStatus, 
     // Read endTs from posSync — written by bridge every second
     const { getDoc: gd, doc: fd } = await import('firebase/firestore')
     const snap = await gd(fd(db, 'mark_sessions', session.sessionId))
-    const posSync = snap.data()?.posSync
-    const endTs = posSync?.currentTime ?? null
+    const collectionAppTime = snap.data()?.collectionAppTime
+    const endTs = collectionAppTime?.currentTime ?? null
 
     if (endTs === null) {
       // Bridge not injected — can't auto-count

@@ -55,6 +55,17 @@
   function connect(user){
     if(unsub)unsub();
     let lastNav=0,lastPos=0,lastSeek=0,lastCount=0;
+    let lastTimeWrite=0;
+
+    // Write collection app video time to Firestore every second while playing
+    video.addEventListener('timeupdate', () => {
+      const now = Date.now();
+      if (now - lastTimeWrite < 1000) return;
+      lastTimeWrite = now;
+      db.collection('mark_sessions').doc(sid).update({
+        collectionAppTime: { currentTime: video.currentTime, ts: now }
+      }).catch(() => {});
+    });
     unsub=db.collection('mark_sessions').doc(sid).onSnapshot(snap=>{
       if(!snap.exists)return;
       const data=snap.data();
