@@ -590,3 +590,22 @@ export default function TagPanel({ pendingTag, onSave, onCancel, editTag, onEdit
     </div>
   )
 }
+
+// ─── legacy exports for TaggedEventsList label lookups ────────────────────────
+export const EXTRAS = [
+  { key:'1', id:'wrong_event',      label:'Wrong event'      },
+  { key:'2', id:'missing_event',    label:'Missing event'    },
+  { key:'3', id:'extra_event',      label:'Extra event'      },
+  { key:'4', id:'missing_extra',    label:'Missing extra'    },
+  { key:'5', id:'wrong_extra',      label:'Wrong extra'      },
+  { key:'6', id:'not_needed_extra', label:'Not needed extra' },
+]
+
+export const GK_EXTRAS = [
+  { key:'1', id:'gk_collected',      label:'Collected'       },
+  { key:'2', id:'gk_punch',          label:'Punch'           },
+  { key:'3', id:'gk_keeper_sweeper', label:'Keeper sweeper'  },
+  { key:'4', id:'gk_save',           label:'Save'            },
+]
+
+export const GK_WRONG_EXTRAS = {}
