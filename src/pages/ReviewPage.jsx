@@ -187,6 +187,8 @@ export default function ReviewPage({ session, onDone, onBack, bridgeSyncStatus, 
       const url = await invoke('get_video_url', { path })
       console.log('[MARK] loading video via HTTP server:', url)
       setVideoPath(path)
+      // Save path so Session History can auto-load it
+      localStorage.setItem(`mark_video_path_${session.matchId}`, path)
       const v = videoRef.current
       if (v) { v.src = url; v.load(); setVideoLoaded(true) }
     } catch (e) {
