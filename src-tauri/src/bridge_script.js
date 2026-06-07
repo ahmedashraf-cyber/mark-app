@@ -6,9 +6,8 @@
   const video=document.querySelector('video');
   if(!video){console.error('[MARK] No video found');alert('[MARK] No video element found on this page.');return;}
 
-  // Mute collection app audio immediately and keep it muted — MARK's audio is the one to use
+  // Mute collection app audio immediately
   video.muted=true;
-  // Re-mute if something unmutes it (e.g. the collection app itself)
   video.addEventListener('volumechange',()=>{ if(!video.muted) video.muted=true; });
 
   const load=src=>new Promise((ok,fail)=>{const s=document.createElement('script');s.src=src;s.onload=ok;s.onerror=fail;document.head.appendChild(s);});
@@ -31,15 +30,35 @@
     $('mb_btn').onclick=go;
     $('mb_p').onkeydown=e=>{if(e.key==='Enter')go();};
   }
+
+  // Count events from Apollo cache between two timestamps for a matchId
+  function countEventsInRange(matchId, startTs, endTs) {
+    try {
+      const cache = window.apollo && window.apollo.client && window.apollo.client.cache.extract();
+      if (!cache) return -1;
+      return Object.values(cache).filter(v =>
+        v.__typename === 'Event' &&
+        v.matchId === matchId &&
+        v.payload &&
+        typeof v.payload.videoTimestamp === 'number' &&
+        v.payload.videoTimestamp >= startTs &&
+        v.payload.videoTimestamp <= endTs
+      ).length;
+    } catch(e) {
+      console.error('[MARK] countEventsInRange error:', e);
+      return -1;
+    }
+  }
+
   let unsub=null;
   function connect(user){
     if(unsub)unsub();
-    let lastNav=0,lastPos=0,lastSeek=0;
+    let lastNav=0,lastPos=0,lastSeek=0,lastCount=0;
     unsub=db.collection('mark_sessions').doc(sid).onSnapshot(snap=>{
       if(!snap.exists)return;
       const data=snap.data();
 
-      // ── Discrete nav (arrow keys) ───────────────────────────────────────
+      // Nav commands
       const c=data.navCommand;
       if(c&&c.ts>lastNav){
         lastNav=c.ts;
@@ -48,14 +67,14 @@
         else if(c.action==='backward') video.currentTime=Math.max(0,video.currentTime-step);
       }
 
-      // ── Explicit seek (scrubber drag / click) ───────────────────────────
+      // Seek command
       const sk=data.seekCommand;
       if(sk&&sk.ts>lastSeek){
         lastSeek=sk.ts;
         video.currentTime=sk.currentTime;
       }
 
-      // ── Position heartbeat (play/pause + drift correction) ──────────────
+      // Position heartbeat
       const p=data.posSync;
       if(p&&p.ts>lastPos){
         lastPos=p.ts;
@@ -64,6 +83,18 @@
         const drift=Math.abs(video.currentTime-p.currentTime);
         if(drift>1.5) video.currentTime=p.currentTime;
       }
+
+      // Event count request from MARK
+      const req=data.eventCountRequest;
+      if(req&&req.ts>lastCount){
+        lastCount=req.ts;
+        const count=countEventsInRange(req.matchId, req.startTs, req.endTs);
+        console.log('[MARK] event count request:', req, '-> count:', count);
+        db.collection('mark_sessions').doc(sid).update({
+          eventCountResponse: { count, ts: Date.now() }
+        });
+      }
+
     },e=>console.error('[MARK] snapshot error',e));
     panel.style.display='none';
     console.log('[MARK] connected & listening as',user.email);

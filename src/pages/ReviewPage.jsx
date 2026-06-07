@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { invoke, convertFileSrc } from '@tauri-apps/api/core'
 import { db } from '../firebase/config'
-import { collection, addDoc, updateDoc, doc, serverTimestamp, increment } from 'firebase/firestore'
+import { collection, addDoc, updateDoc, doc, serverTimestamp, increment, onSnapshot } from 'firebase/firestore'
 import { useAuth } from '../hooks/useAuth.jsx'
 import { useSync } from '../hooks/useSync'
 import { KEY_TO_EVENT, MISSING_EVENT_KEY, SPEED_MIN, SPEED_MAX, SPEED_STEP } from '../data/shortcuts'
@@ -39,6 +39,9 @@ export default function ReviewPage({ session, onDone, onBack, bridgeSyncStatus, 
   // Done modal
   const [showDoneModal,   setShowDoneModal]   = useState(false)
   const [reviewedEvents,  setReviewedEvents]  = useState('')
+  const [reviewStartTs,   setReviewStartTs]   = useState(0)
+  const [countingEvents,  setCountingEvents]  = useState(false)
+  const [bridgeAvailable, setBridgeAvailable] = useState(false)
   const [submitting,      setSubmitting]      = useState(false)
   const [submitted,       setSubmitted]       = useState(false)
 
@@ -206,7 +209,9 @@ export default function ReviewPage({ session, onDone, onBack, bridgeSyncStatus, 
   // immediately without any further clicks for the whole session.
   function startReview() {
     setReviewStarted(true)
-    // Grab focus on both layers so keys flow right away
+    const startTs = videoRef.current?.currentTime || 0
+    setReviewStartTs(startTs)
+    console.log('[MARK] review started at videoTs:', startTs)
     try { rootRef.current?.focus() } catch(_) {}
     import('@tauri-apps/api/window')
       .then(({ getCurrentWindow }) => getCurrentWindow().setFocus())
@@ -277,10 +282,37 @@ export default function ReviewPage({ session, onDone, onBack, bridgeSyncStatus, 
     }
   }
 
-  async function handleDoneSubmit() {
-    if (!reviewedEvents || isNaN(parseInt(reviewedEvents))) return
+  // Request event count from bridge — returns count or -1 if bridge unavailable
+  async function requestEventCount() {
+    const endTs   = videoRef.current?.currentTime || 0
+    const matchId = parseInt(session.matchId)
+    const reqTs   = Date.now()
+
+    // Write request to Firestore — bridge picks it up and responds
+    await updateDoc(doc(db, 'mark_sessions', session.sessionId), {
+      eventCountRequest: { matchId, startTs: reviewStartTs, endTs, ts: reqTs }
+    })
+
+    // Wait up to 5 seconds for bridge response
+    return new Promise((resolve) => {
+      const timeout = setTimeout(() => { unsub(); resolve(-1) }, 5000)
+      const unsub = onSnapshot(doc(db, 'mark_sessions', session.sessionId), (snap) => {
+        const resp = snap.data()?.eventCountResponse
+        if (resp && resp.ts >= reqTs) {
+          clearTimeout(timeout)
+          unsub()
+          resolve(resp.count)
+        }
+      })
+    })
+  }
+
+  async function handleDoneSubmit(manualCount) {
     setSubmitting(true)
-    const total    = parseInt(reviewedEvents)
+
+    let total = manualCount !== undefined ? manualCount : parseInt(reviewedEvents)
+    if (!total || isNaN(total)) total = 1
+
     const tagCount = tags.length
     const quality  = Math.round(100 - ((tagCount / Math.max(total, 1)) * 100))
 
@@ -293,7 +325,6 @@ export default function ReviewPage({ session, onDone, onBack, bridgeSyncStatus, 
         completedAt: serverTimestamp(),
       })
 
-      // Export to .xlsx locally
       let filePath = null
       try {
         filePath = await exportSessionToXlsx({ session, tags, quality, tagCount, total, videoPath })
@@ -305,6 +336,29 @@ export default function ReviewPage({ session, onDone, onBack, bridgeSyncStatus, 
       setTimeout(() => onDone({ quality, tagCount, total, filePath }), 1500)
     } catch (e) {
       setSubmitting(false)
+    }
+  }
+
+  async function handleDoneClick() {
+    setShowDoneModal(true)
+    setCountingEvents(true)
+
+    // Try to get count from bridge
+    try {
+      const count = await requestEventCount()
+      if (count >= 0) {
+        console.log('[MARK] bridge returned event count:', count)
+        setBridgeAvailable(true)
+        setReviewedEvents(String(count))
+      } else {
+        console.log('[MARK] bridge not available, falling back to manual')
+        setBridgeAvailable(false)
+      }
+    } catch(e) {
+      console.error('[MARK] event count request failed:', e)
+      setBridgeAvailable(false)
+    } finally {
+      setCountingEvents(false)
     }
   }
 
@@ -366,7 +420,7 @@ export default function ReviewPage({ session, onDone, onBack, bridgeSyncStatus, 
           >
             {injecting ? 'Injecting…' : '⚡ Inject Bridge'}
           </button>
-          <button className="btn-orange" style={{padding:'7px 18px',fontSize:13}} onClick={() => setShowDoneModal(true)}>
+          <button className="btn-orange" style={{padding:'7px 18px',fontSize:13}} onClick={handleDoneClick}>
             Done ✓
           </button>
         </div>
@@ -506,19 +560,30 @@ export default function ReviewPage({ session, onDone, onBack, bridgeSyncStatus, 
 
       {/* Done Modal */}
       {showDoneModal && (
-        <div style={{position:'fixed',inset:0,zIndex:1000,background:'rgba(0,0,0,0.8)',display:'flex',alignItems:'center',justifyContent:'center'}}>
-          <div className="card slide-up" style={{width:380,padding:28}}>
+        <div style={{position:'fixed',inset:0,zIndex:1000,background:'rgba(0,0,0,0.8)',backdropFilter:'blur(4px)',display:'flex',alignItems:'center',justifyContent:'center'}}>
+          <div className="card slide-up" style={{width:400,padding:28}}>
             {submitted ? (
               <div style={{textAlign:'center',padding:'20px 0'}}>
                 <div style={{fontSize:48,marginBottom:12}}>✅</div>
                 <div style={{fontFamily:'Inter',fontWeight:800,fontSize:18,color:'var(--t-1)'}}>Session Complete</div>
                 <div style={{fontSize:13,color:'var(--t-3)',marginTop:6}}>Saving results to FIELD…</div>
               </div>
+            ) : countingEvents ? (
+              <div style={{textAlign:'center',padding:'24px 0'}}>
+                <div style={{
+                  width:40,height:40,borderRadius:'50%',
+                  border:'3px solid var(--b-2)',borderTopColor:'var(--p2)',
+                  animation:'spin 0.8s linear infinite',margin:'0 auto 16px',
+                }}/>
+                <div style={{fontFamily:'Inter',fontWeight:700,fontSize:15,color:'var(--t-1)',marginBottom:6}}>Counting reviewed events…</div>
+                <div style={{fontSize:12,color:'var(--t-3)'}}>Reading from collection app</div>
+              </div>
             ) : (
               <>
                 <h3 style={{fontFamily:'Inter',fontWeight:800,fontSize:18,color:'var(--t-1)',marginBottom:6}}>Finish Review Session</h3>
-                <p style={{fontSize:13,color:'var(--t-3)',marginBottom:20}}>Enter how many events you reviewed to calculate the quality score.</p>
-                <div style={{background:'var(--bg-3)',borderRadius:10,padding:14,marginBottom:20,display:'flex',gap:20}}>
+
+                {/* Stats */}
+                <div style={{background:'var(--bg-3)',borderRadius:10,padding:14,marginBottom:20,display:'flex',gap:0}}>
                   <div style={{textAlign:'center',flex:1}}>
                     <div style={{fontSize:28,fontWeight:800,color:'var(--p2)'}}>{tags.length}</div>
                     <div style={{fontSize:11,color:'var(--t-3)'}}>Errors Tagged</div>
@@ -526,25 +591,58 @@ export default function ReviewPage({ session, onDone, onBack, bridgeSyncStatus, 
                   <div style={{width:1,background:'var(--b-1)'}}/>
                   <div style={{textAlign:'center',flex:1}}>
                     <div style={{fontSize:28,fontWeight:800,color:'var(--t-1)'}}>
-                      {reviewedEvents ? Math.round(100 - (tags.length / Math.max(parseInt(reviewedEvents),1)) * 100) : '—'}
+                      {reviewedEvents ? Math.round(100 - (tags.length / Math.max(parseInt(reviewedEvents),1)) * 100) : '—'}%
                     </div>
                     <div style={{fontSize:11,color:'var(--t-3)'}}>Quality Score</div>
                   </div>
+                  <div style={{width:1,background:'var(--b-1)'}}/>
+                  <div style={{textAlign:'center',flex:1}}>
+                    <div style={{fontSize:28,fontWeight:800,color:bridgeAvailable ? '#30D158' : 'var(--t-2)'}}>
+                      {reviewedEvents || '—'}
+                    </div>
+                    <div style={{fontSize:11,color:'var(--t-3)'}}>Events Reviewed</div>
+                  </div>
                 </div>
-                <label style={{display:'block',fontSize:11,color:'var(--t-3)',fontWeight:700,marginBottom:6,letterSpacing:.5}}>TOTAL REVIEWED EVENTS</label>
-                <input
-                  className="mark-input"
-                  type="number"
-                  min="1"
-                  placeholder="e.g. 40"
-                  value={reviewedEvents}
-                  onChange={e => setReviewedEvents(e.target.value)}
-                  autoFocus
-                  style={{marginBottom:20}}
-                />
+
+                {/* Auto-count status */}
+                {bridgeAvailable ? (
+                  <div style={{
+                    display:'flex',alignItems:'center',gap:8,
+                    padding:'8px 12px',borderRadius:8,marginBottom:16,
+                    background:'rgba(48,209,88,0.1)',border:'1px solid rgba(48,209,88,0.25)',
+                  }}>
+                    <div style={{width:6,height:6,borderRadius:'50%',background:'#30D158',boxShadow:'0 0 6px rgba(48,209,88,0.6)',flexShrink:0}}/>
+                    <span style={{fontSize:12,color:'#30D158',fontWeight:600}}>Auto-counted from collection app</span>
+                    <button onClick={() => setBridgeAvailable(false)} style={{
+                      marginLeft:'auto',fontSize:11,color:'var(--t-3)',background:'transparent',
+                      border:'none',cursor:'pointer',padding:'2px 6px',
+                    }}>Edit</button>
+                  </div>
+                ) : (
+                  <>
+                    <p style={{fontSize:12,color:'var(--t-3)',marginBottom:10}}>
+                      {bridgeAvailable === false && reviewedEvents === ''
+                        ? 'Bridge not connected — enter the number of events you reviewed manually.'
+                        : 'Enter the number of events reviewed.'}
+                    </p>
+                    <input
+                      className="mark-input"
+                      type="number" min="1" placeholder="e.g. 40"
+                      value={reviewedEvents}
+                      onChange={e => setReviewedEvents(e.target.value)}
+                      autoFocus style={{marginBottom:16}}
+                    />
+                  </>
+                )}
+
                 <div style={{display:'flex',gap:10}}>
-                  <button className="btn-ghost" style={{flex:1,padding:'10px 0',fontSize:13}} onClick={() => setShowDoneModal(false)}>Cancel</button>
-                  <button className="btn-orange" style={{flex:2,padding:'10px 0',fontSize:13}} disabled={!reviewedEvents || submitting} onClick={handleDoneSubmit}>
+                  <button className="btn-ghost" style={{flex:1,padding:'10px 0',fontSize:13}}
+                    onClick={() => { setShowDoneModal(false); setCountingEvents(false) }}>
+                    Cancel
+                  </button>
+                  <button className="btn-orange" style={{flex:2,padding:'10px 0',fontSize:13}}
+                    disabled={!reviewedEvents || submitting}
+                    onClick={() => handleDoneSubmit()}>
                     {submitting ? 'Saving…' : 'Submit & Close Session'}
                   </button>
                 </div>
