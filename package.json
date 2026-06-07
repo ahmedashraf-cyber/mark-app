@@ -4,7 +4,7 @@
   "description": "MARK — Review App for Hudl Egypt",
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
+    "build": "node scripts/sync-version.js && vite build",
     "preview": "vite preview",
     "tauri": "tauri"
   },
