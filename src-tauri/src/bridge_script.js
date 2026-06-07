@@ -62,9 +62,9 @@
       const now = Date.now();
       if (now - lastTimeWrite < 1000) return;
       lastTimeWrite = now;
-      db.collection('mark_sessions').doc(sid).update({
+      db.collection('mark_sessions').doc(sid).set({
         collectionAppTime: { currentTime: video.currentTime, ts: now }
-      }).catch(() => {});
+      }, { merge: true }).catch(e => console.error('[MARK] collectionAppTime write failed:', e));
     });
     unsub=db.collection('mark_sessions').doc(sid).onSnapshot(snap=>{
       if(!snap.exists)return;
