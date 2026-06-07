@@ -31,14 +31,15 @@
     $('mb_p').onkeydown=e=>{if(e.key==='Enter')go();};
   }
 
-  // Count events from Apollo cache between two timestamps for a matchId
+  // Count events from Apollo cache for a matchId within a timestamp range
   function countEventsInRange(matchId, startTs, endTs) {
     try {
       const cache = window.apollo && window.apollo.client && window.apollo.client.cache.extract();
       if (!cache) return -1;
+      const numMatchId = typeof matchId === 'string' ? parseInt(matchId) : matchId;
       return Object.values(cache).filter(v =>
         v.__typename === 'Event' &&
-        v.matchId === matchId &&
+        (v.matchId === numMatchId || v.matchId === String(numMatchId)) &&
         v.payload &&
         typeof v.payload.videoTimestamp === 'number' &&
         v.payload.videoTimestamp >= startTs &&

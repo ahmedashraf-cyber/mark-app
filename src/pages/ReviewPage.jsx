@@ -285,22 +285,22 @@ export default function ReviewPage({ session, onDone, onBack, bridgeSyncStatus, 
   // Request event count from bridge — returns count or -1 if bridge unavailable
   async function requestEventCount() {
     const endTs   = videoRef.current?.currentTime || 0
-    const matchId = parseInt(session.matchId)
+    const matchId = session.matchId // keep as string, bridge handles both
     const reqTs   = Date.now()
 
-    // Write request to Firestore — bridge picks it up and responds
+    console.log('[MARK] requesting event count:', { matchId, startTs: reviewStartTs, endTs })
+
     await updateDoc(doc(db, 'mark_sessions', session.sessionId), {
       eventCountRequest: { matchId, startTs: reviewStartTs, endTs, ts: reqTs }
     })
 
-    // Wait up to 5 seconds for bridge response
     return new Promise((resolve) => {
-      const timeout = setTimeout(() => { unsub(); resolve(-1) }, 5000)
-      const unsub = onSnapshot(doc(db, 'mark_sessions', session.sessionId), (snap) => {
+      const timeout = setTimeout(() => { unsubFn(); resolve(-1) }, 5000)
+      const unsubFn = onSnapshot(doc(db, 'mark_sessions', session.sessionId), (snap) => {
         const resp = snap.data()?.eventCountResponse
         if (resp && resp.ts >= reqTs) {
           clearTimeout(timeout)
-          unsub()
+          unsubFn()
           resolve(resp.count)
         }
       })
