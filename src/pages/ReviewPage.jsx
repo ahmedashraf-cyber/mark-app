@@ -434,7 +434,6 @@ export default function ReviewPage({ session, onDone, onBack, bridgeSyncStatus, 
                   userEmail = user.email || ''
                 }
                 await invoke('inject_bridge_script', {
-                  sessionId:    session.sessionId,
                   idToken,
                   refreshToken,
                   userUid,

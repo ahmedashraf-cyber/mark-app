@@ -320,23 +320,180 @@ fn patch_one_shortcut(lnk_path: &std::path::Path) -> Result<bool, String> {
     }
 }
 
+// ─── Patch Tag Once app.asar — embed the bridge script directly ───────────────
+// The asar format: [8-byte Pickle1: outer size + Pickle2 size]
+//                  [Pickle2: payload-size u32 + json-length u32 + JSON + padding]
+//                  [file data, raw concatenation in offset order]
+// We:
+//   1. Read the file
+//   2. Parse the JSON header → find app.html's offset+size
+//   3. Read app.html bytes from the data section
+//   4. Inject our bridge script before </body>
+//   5. Shift offsets of files that come AFTER app.html by the size delta
+//   6. Rebuild and write the file
+// Idempotent — checks for the marker comment and skips if already patched.
+const ASAR_MARKER: &str = "<!-- MARK_BRIDGE_INJECTED v1 -->";
+
+#[command]
+fn patch_tag_once_asar() -> Result<String, String> {
+    let asar_path = find_tag_once_asar()?;
+    patch_asar_impl(&asar_path)
+}
+
+fn find_tag_once_asar() -> Result<std::path::PathBuf, String> {
+    let candidates = [
+        std::env::var("LOCALAPPDATA").ok().map(|p|
+            std::path::PathBuf::from(p).join("Programs").join("live-collection-app").join("resources").join("app.asar")),
+        Some(std::path::PathBuf::from(r"C:\Program Files\live-collection-app\resources\app.asar")),
+        Some(std::path::PathBuf::from(r"C:\Program Files (x86)\live-collection-app\resources\app.asar")),
+    ];
+    for opt in &candidates {
+        if let Some(p) = opt {
+            if p.exists() { return Ok(p.clone()); }
+        }
+    }
+    Err("Tag Once app.asar not found in any known location".to_string())
+}
+
+fn read_asar(path: &std::path::Path) -> Result<(serde_json::Value, Vec<u8>), String> {
+    let bytes = std::fs::read(path).map_err(|e| format!("read asar: {e}"))?;
+    if bytes.len() < 16 { return Err("asar file too small".into()); }
+    let json_len = u32::from_le_bytes(bytes[12..16].try_into().unwrap()) as usize;
+    if bytes.len() < 16 + json_len { return Err("asar truncated".into()); }
+    let json_str = std::str::from_utf8(&bytes[16..16 + json_len])
+        .map_err(|e| format!("asar header not utf8: {e}"))?;
+    let header: serde_json::Value = serde_json::from_str(json_str)
+        .map_err(|e| format!("asar header not valid JSON: {e}"))?;
+    let aligned = (json_len + 3) & !3;
+    let data_start = 16 + aligned;
+    let data = bytes[data_start..].to_vec();
+    Ok((header, data))
+}
+
+fn write_asar(path: &std::path::Path, header: &serde_json::Value, data: &[u8]) -> Result<(), String> {
+    let json_str = serde_json::to_string(header).map_err(|e| format!("serialize header: {e}"))?;
+    let json_bytes = json_str.as_bytes();
+    let json_len = json_bytes.len();
+    let aligned = (json_len + 3) & !3;
+    let padding = aligned - json_len;
+
+    let mut out = Vec::with_capacity(16 + aligned + data.len());
+    out.extend_from_slice(&4u32.to_le_bytes());                       // Pickle1 payload size
+    out.extend_from_slice(&((8 + aligned) as u32).to_le_bytes());     // Pickle2 total size
+    out.extend_from_slice(&((4 + aligned) as u32).to_le_bytes());     // Pickle2 payload size
+    out.extend_from_slice(&(json_len as u32).to_le_bytes());          // JSON actual length
+    out.extend_from_slice(json_bytes);
+    out.extend(std::iter::repeat(0u8).take(padding));
+    out.extend_from_slice(data);
+
+    std::fs::write(path, out).map_err(|e| format!("write asar: {e}"))
+}
+
+fn patch_asar_impl(asar_path: &std::path::Path) -> Result<String, String> {
+    let (mut header, data) = read_asar(asar_path)?;
+
+    let files = header.get("files").and_then(|f| f.as_object())
+        .ok_or_else(|| "asar header has no 'files' object".to_string())?;
+    let app_html = files.get("app.html")
+        .ok_or_else(|| "app.html not found in asar".to_string())?;
+    let html_offset: u64 = app_html.get("offset").and_then(|o| o.as_str())
+        .ok_or_else(|| "app.html has no offset".to_string())?
+        .parse().map_err(|e| format!("invalid offset: {e}"))?;
+    let html_size: u64 = app_html.get("size").and_then(|s| s.as_u64())
+        .ok_or_else(|| "app.html has no size".to_string())?;
+
+    let html_start = html_offset as usize;
+    let html_end = html_start + html_size as usize;
+    if data.len() < html_end { return Err("asar data section truncated".into()); }
+
+    let html_str = std::str::from_utf8(&data[html_start..html_end])
+        .map_err(|e| format!("app.html not utf8: {e}"))?;
+
+    if html_str.contains(ASAR_MARKER) {
+        return Ok("already patched".to_string());
+    }
+
+    // Build injection: marker + <script>...bridge code...</script> before </body>
+    let injection = format!(
+        "    {}\n    <script>\n{}\n    </script>\n  </body>",
+        ASAR_MARKER, BRIDGE_SCRIPT
+    );
+    let new_html = html_str.replace("</body>", &injection);
+    if new_html == html_str {
+        return Err("</body> not found in app.html — Tag Once structure changed?".into());
+    }
+
+    let new_html_bytes = new_html.as_bytes();
+    let new_html_size = new_html_bytes.len() as u64;
+    let size_delta: i64 = new_html_size as i64 - html_size as i64;
+
+    // Update app.html's size in header
+    if let Some(files_obj) = header.get_mut("files").and_then(|f| f.as_object_mut()) {
+        if let Some(app_html_mut) = files_obj.get_mut("app.html").and_then(|h| h.as_object_mut()) {
+            app_html_mut.insert("size".to_string(),
+                serde_json::Value::Number(serde_json::Number::from(new_html_size)));
+        }
+    }
+
+    // Recursively shift offsets of every file with offset > html_offset
+    fn shift_offsets(node: &mut serde_json::Value, threshold: u64, delta: i64) {
+        if let Some(obj) = node.as_object_mut() {
+            // Determine if this is a file entry (has "offset")
+            let off_opt = obj.get("offset")
+                .and_then(|v| v.as_str())
+                .and_then(|s| s.parse::<u64>().ok());
+            if let Some(off) = off_opt {
+                if off > threshold {
+                    let new_off = ((off as i64) + delta) as u64;
+                    obj.insert("offset".to_string(),
+                        serde_json::Value::String(new_off.to_string()));
+                }
+            }
+            // Recurse into "files" (directory entries)
+            if let Some(files) = obj.get_mut("files") {
+                if let Some(files_obj) = files.as_object_mut() {
+                    for (_, child) in files_obj.iter_mut() {
+                        shift_offsets(child, threshold, delta);
+                    }
+                }
+            }
+        }
+    }
+    shift_offsets(&mut header, html_offset, size_delta);
+
+    // Rebuild data: bytes before html | new html | bytes after old html
+    let mut new_data = Vec::with_capacity(data.len() + size_delta.unsigned_abs() as usize);
+    new_data.extend_from_slice(&data[..html_start]);
+    new_data.extend_from_slice(new_html_bytes);
+    new_data.extend_from_slice(&data[html_end..]);
+
+    // Create backup if not already present
+    let backup_path = asar_path.with_extension("asar.markbackup");
+    if !backup_path.exists() {
+        let _ = std::fs::copy(asar_path, &backup_path);
+    }
+
+    write_asar(asar_path, &header, &new_data)?;
+
+    Ok(format!("patched (delta={:+} bytes)", size_delta))
+}
+
 // ─── Inject Bridge command ────────────────────────────────────────────────────
 #[command]
 fn inject_bridge_script(
-    session_id: String,
     id_token: String,
     refresh_token: String,
     user_uid: String,
     user_email: String,
 ) -> Result<String, String> {
     #[cfg(target_os = "windows")]
-    { return inject_bridge_windows(&session_id, &id_token, &refresh_token, &user_uid, &user_email); }
+    { return inject_bridge_windows(&id_token, &refresh_token, &user_uid, &user_email); }
     #[cfg(not(target_os = "windows"))]
-    { let _ = (session_id, id_token, refresh_token, user_uid, user_email); Ok("dev_noop".to_string()) }
+    { let _ = (id_token, refresh_token, user_uid, user_email); Ok("dev_noop".to_string()) }
 }
 
 #[cfg(target_os = "windows")]
-fn inject_bridge_windows(session_id: &str, id_token: &str, refresh_token: &str, user_uid: &str, user_email: &str) -> Result<String, String> {
+fn inject_bridge_windows(id_token: &str, refresh_token: &str, user_uid: &str, user_email: &str) -> Result<String, String> {
     use windows::Win32::Foundation::{HANDLE, HGLOBAL};
     use windows::Win32::UI::Input::KeyboardAndMouse::{
         SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT,
@@ -351,7 +508,6 @@ fn inject_bridge_windows(session_id: &str, id_token: &str, refresh_token: &str, 
         .ok_or_else(|| "Collection app window not found".to_string())?;
 
     let script = BRIDGE_SCRIPT
-        .replace("__SESSION_ID__", session_id)
         .replace("__ID_TOKEN__", id_token)
         .replace("__REFRESH_TOKEN__", refresh_token)
         .replace("__USER_UID__", user_uid)
@@ -729,6 +885,7 @@ fn main() {
             send_key_to_collection_app,
             inject_bridge_script,
             patch_tag_once_shortcuts,
+            patch_tag_once_asar,
             pick_video_file,
             get_video_url,
             open_file,

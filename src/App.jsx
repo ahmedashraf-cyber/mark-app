@@ -58,13 +58,16 @@ function AppInner() {
     checkForUpdate().then(u => { if (u) setUpdate(u) })
   }, [user])
 
-  // Patch Tag Once shortcuts to add the --unsafely-disable-devtools-self-xss-warnings
-  // flag. Runs on every MARK launch. Idempotent — silently skips shortcuts that
-  // already have the flag. Failures are non-fatal and only logged.
+  // Patch Tag Once shortcuts and app.asar so the bridge auto-runs inside Tag Once
+  // with zero clicks. Runs on every MARK launch. Both are idempotent —
+  // silently skip if already patched. Failures are non-fatal.
   useEffect(() => {
     invoke('patch_tag_once_shortcuts')
       .then(r => console.log('[MARK] shortcut patch:', r))
       .catch(e => console.warn('[MARK] shortcut patch failed:', e))
+    invoke('patch_tag_once_asar')
+      .then(r => console.log('[MARK] asar patch:', r))
+      .catch(e => console.warn('[MARK] asar patch failed:', e))
   }, [])
 
   if (loading) {
