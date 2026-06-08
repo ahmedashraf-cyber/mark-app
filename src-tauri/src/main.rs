@@ -249,13 +249,12 @@ fn collect_lnks(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>, depth:
 
 #[cfg(target_os = "windows")]
 fn patch_one_shortcut(lnk_path: &std::path::Path) -> Result<bool, String> {
-    use windows::Win32::Foundation::BOOL;
+    use windows::core::{Interface, PCWSTR, BOOL};
     use windows::Win32::System::Com::{
         CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_INPROC_SERVER,
         COINIT_APARTMENTTHREADED, IPersistFile, STGM_READWRITE,
     };
     use windows::Win32::UI::Shell::{IShellLinkW, ShellLink};
-    use windows::core::PCWSTR;
 
     const FLAG: &str = "--unsafely-disable-devtools-self-xss-warnings";
 
@@ -276,7 +275,7 @@ fn patch_one_shortcut(lnk_path: &std::path::Path) -> Result<bool, String> {
 
             // Read target path — only patch shortcuts that point at a Tag Once binary
             let mut target_buf = [0u16; 1024];
-            link.GetPath(&mut target_buf, None, 0)
+            link.GetPath(&mut target_buf, std::ptr::null_mut(), 0)
                 .map_err(|e| format!("GetPath: {e}"))?;
             let target = String::from_utf16_lossy(&target_buf[..target_buf.iter().position(|&c| c == 0).unwrap_or(target_buf.len())]);
             let target_lc = target.to_lowercase();
