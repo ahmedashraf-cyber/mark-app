@@ -3,6 +3,51 @@
   window.__MARK_BRIDGE__=true;
   console.log('[MARK] bridge starting, session=__SESSION_ID__');
   const sid='__SESSION_ID__';
+
+  // ── Auto-auth tokens passed in by MARK at inject time ─────────────────────
+  // If MARK was signed in when Inject Bridge was clicked, these placeholders
+  // are replaced with real values. If not, they stay as literal "__..." and
+  // the bridge falls back to the manual sign-in panel.
+  const __MARK_FB_API_KEY__ = 'AIzaSyB-HWh2kJgoPDwzYhZWgW6pi8uZK8u9K7U';
+  const __MARK_ID_TOKEN__ = '__ID_TOKEN__';
+  const __MARK_REFRESH_TOKEN__ = '__REFRESH_TOKEN__';
+  const __MARK_UID__ = '__USER_UID__';
+  const __MARK_EMAIL__ = '__USER_EMAIL__';
+
+  // Pre-seed Firebase persistence BEFORE the SDK loads. When firebase.auth()
+  // initializes below, it reads localStorage, finds this user, refreshes the
+  // ID token automatically via the refresh token, and fires onAuthStateChanged
+  // with a valid user. No panel ever shown when this path works.
+  function seedAuthPersistence(){
+    try {
+      if (!__MARK_REFRESH_TOKEN__ || __MARK_REFRESH_TOKEN__.startsWith('__')) return false;
+      const key = 'firebase:authUser:' + __MARK_FB_API_KEY__ + ':[DEFAULT]';
+      const userObj = {
+        uid: __MARK_UID__,
+        email: __MARK_EMAIL__,
+        emailVerified: false,
+        isAnonymous: false,
+        providerData: [{ providerId: 'password', uid: __MARK_EMAIL__, email: __MARK_EMAIL__ }],
+        stsTokenManager: {
+          refreshToken: __MARK_REFRESH_TOKEN__,
+          accessToken:  __MARK_ID_TOKEN__,
+          expirationTime: Date.now() + 3600000
+        },
+        createdAt: String(Date.now()),
+        lastLoginAt: String(Date.now()),
+        apiKey: __MARK_FB_API_KEY__,
+        appName: '[DEFAULT]'
+      };
+      localStorage.setItem(key, JSON.stringify(userObj));
+      console.log('[MARK] auth persistence seeded for', __MARK_EMAIL__);
+      return true;
+    } catch(e) {
+      console.warn('[MARK] could not seed auth persistence:', e);
+      return false;
+    }
+  }
+  const seeded = seedAuthPersistence();
+
   const video=document.querySelector('video');
   if(!video){console.error('[MARK] No video found');alert('[MARK] No video element found on this page.');return;}
 
@@ -17,7 +62,7 @@
     await load(CDN+'/firebase-auth-compat.js');
     await load(CDN+'/firebase-firestore-compat.js');
   }catch(e){alert('[MARK] Could not load Firebase (no internet?): '+e);return;}
-  if(!firebase.apps.length)firebase.initializeApp({apiKey:'AIzaSyB-HWh2kJgoPDwzYhZWgW6pi8uZK8u9K7U',authDomain:'hudl-training-ops.firebaseapp.com',projectId:'hudl-training-ops',storageBucket:'hudl-training-ops.appspot.com'});
+  if(!firebase.apps.length)firebase.initializeApp({apiKey: __MARK_FB_API_KEY__, authDomain:'hudl-training-ops.firebaseapp.com', projectId:'hudl-training-ops', storageBucket:'hudl-training-ops.appspot.com'});
   const auth=firebase.auth(),db=firebase.firestore();
   const panel=document.createElement('div');panel.id='__mark_panel__';
   Object.assign(panel.style,{position:'fixed',top:'12px',right:'12px',zIndex:'2147483647',background:'#111827',color:'#f9fafb',borderRadius:'12px',padding:'16px',fontFamily:'Inter,system-ui,sans-serif',fontSize:'12px',boxShadow:'0 8px 32px rgba(0,0,0,.6)',width:'224px',border:'1px solid #374151',lineHeight:'1.5',display:'none'});
@@ -61,7 +106,6 @@
     let lastTimeWrite=0;
 
     // Write collection app match time to Firestore every second
-    // matchTime = video.currentTime * 1000 (cache stores timestamps in milliseconds)
     video.addEventListener('timeupdate', () => {
       const now = Date.now();
       if (now - lastTimeWrite < 1000) return;
@@ -125,7 +169,12 @@
 
     },e=>console.error('[MARK] snapshot error',e));
     panel.style.display='none';
-    console.log('[MARK] connected & listening as',user.email);
+    console.log('[MARK] connected & listening as', user.email || __MARK_EMAIL__ || 'unknown');
   }
-  auth.onAuthStateChanged(u=>{if(u)connect(u);else showLogin();});
+
+  auth.onAuthStateChanged(u => {
+    if (u) { connect(u); return; }
+    if (seeded) console.warn('[MARK] auth seeded but SDK did not recover the user; showing panel');
+    showLogin();
+  });
 })();

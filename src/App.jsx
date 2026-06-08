@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
+import { invoke } from '@tauri-apps/api/core'
 import { AuthProvider, useAuth } from './hooks/useAuth.jsx'
 import { checkForUpdate } from './hooks/useUpdateCheck.js'
 import LoginPage from './pages/LoginPage'
@@ -56,6 +57,15 @@ function AppInner() {
     if (!user) return
     checkForUpdate().then(u => { if (u) setUpdate(u) })
   }, [user])
+
+  // Patch Tag Once shortcuts to add the --unsafely-disable-devtools-self-xss-warnings
+  // flag. Runs on every MARK launch. Idempotent — silently skips shortcuts that
+  // already have the flag. Failures are non-fatal and only logged.
+  useEffect(() => {
+    invoke('patch_tag_once_shortcuts')
+      .then(r => console.log('[MARK] shortcut patch:', r))
+      .catch(e => console.warn('[MARK] shortcut patch failed:', e))
+  }, [])
 
   if (loading) {
     return (
