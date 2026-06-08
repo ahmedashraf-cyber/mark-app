@@ -249,7 +249,7 @@ fn collect_lnks(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>, depth:
 
 #[cfg(target_os = "windows")]
 fn patch_one_shortcut(lnk_path: &std::path::Path) -> Result<bool, String> {
-    use windows::core::{Interface, PCWSTR, BOOL};
+    use windows::core::{Interface, PCWSTR};
     use windows::Win32::System::Com::{
         CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_INPROC_SERVER,
         COINIT_APARTMENTTHREADED, IPersistFile, STGM_READWRITE,
@@ -309,7 +309,7 @@ fn patch_one_shortcut(lnk_path: &std::path::Path) -> Result<bool, String> {
                 .map_err(|e| format!("SetArguments: {e}"))?;
 
             // Save .lnk
-            persist.Save(PCWSTR(lnk_w.as_ptr()), BOOL(1))
+            persist.Save(PCWSTR(lnk_w.as_ptr()), true)
                 .map_err(|e| format!("Save: {e}"))?;
 
             Ok(true)
