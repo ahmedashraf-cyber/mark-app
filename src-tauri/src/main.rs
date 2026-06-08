@@ -240,31 +240,41 @@ fn inject_bridge_windows(session_id: &str) -> Result<String, String> {
         let mark_hwnd = GetForegroundWindow();
         SendInput(&[vk(VK_MENU.0, false), vk(VK_MENU.0, true)], sz);
         let _ = SetForegroundWindow(collection_hwnd);
-        sleep(150);
+        sleep(300);
 
+        // Open DevTools (Alt+Ctrl+I)
         SendInput(
             &[vk(VK_MENU.0, false), vk(VK_CONTROL.0, false), vk(0x49, false),
               vk(0x49, true), vk(VK_CONTROL.0, true), vk(VK_MENU.0, true)],
             sz,
         );
-        sleep(2500);
+        sleep(4000); // generous wait for DevTools to fully open on slow machines
 
+        // Focus console panel (Ctrl+Shift+J)
         SendInput(
             &[vk(VK_CONTROL.0, false), vk(VK_SHIFT.0, false), vk(0x4A, false),
               vk(0x4A, true), vk(VK_SHIFT.0, true), vk(VK_CONTROL.0, true)],
             sz,
         );
-        sleep(800);
+        sleep(1500); // wait for console tab to activate
 
+        // Click into console input by pressing Tab to move focus to the prompt
+        // Then Escape to clear any existing text, then type
+        SendInput(&[vk(0x09, false), vk(0x09, true)], sz); // Tab
+        sleep(300);
+        SendInput(&[vk(0x1B, false), vk(0x1B, true)], sz); // Escape (clear)
+        sleep(300);
+
+        // Type "allow pasting" char by char — Chromium sees this as typed, not pasted
         let mut char_inputs: Vec<INPUT> = Vec::new();
         for c in "allow pasting".encode_utf16() {
             char_inputs.push(ch(c, false));
             char_inputs.push(ch(c, true));
         }
         SendInput(&char_inputs, sz);
-        sleep(120);
+        sleep(800); // critical: wait for Chromium to fully register the phrase before Enter
         SendInput(&[vk(VK_RETURN.0, false), vk(VK_RETURN.0, true)], sz);
-        sleep(600);
+        sleep(1200); // wait for paste permission to be granted
 
         {
             let wide: Vec<u16> = script.encode_utf16().chain(Some(0)).collect();
@@ -289,16 +299,17 @@ fn inject_bridge_windows(session_id: &str) -> Result<String, String> {
             &[vk(VK_CONTROL.0, false), vk(0x56, false), vk(0x56, true), vk(VK_CONTROL.0, true)],
             sz,
         );
-        sleep(400);
+        sleep(800);
         SendInput(&[vk(VK_RETURN.0, false), vk(VK_RETURN.0, true)], sz);
-        sleep(500);
+        sleep(1000);
 
+        // Close DevTools (Alt+Ctrl+I again)
         SendInput(
             &[vk(VK_MENU.0, false), vk(VK_CONTROL.0, false), vk(0x49, false),
               vk(0x49, true), vk(VK_CONTROL.0, true), vk(VK_MENU.0, true)],
             sz,
         );
-        sleep(300);
+        sleep(500);
 
         if !mark_hwnd.is_invalid() {
             SendInput(&[vk(VK_MENU.0, false), vk(VK_MENU.0, true)], sz);
