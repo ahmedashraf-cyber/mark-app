@@ -192,16 +192,13 @@ fn inject_bridge_script(session_id: String) -> Result<String, String> {
 
 #[cfg(target_os = "windows")]
 fn inject_bridge_windows(session_id: &str) -> Result<String, String> {
-    use windows::Win32::Foundation::{HANDLE, HGLOBAL, HWND, RECT};
+    use windows::Win32::Foundation::{HANDLE, HGLOBAL};
     use windows::Win32::UI::Input::KeyboardAndMouse::{
-        SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, INPUT_MOUSE, KEYBDINPUT, MOUSEINPUT,
+        SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT,
         KEYBD_EVENT_FLAGS, KEYEVENTF_KEYUP, KEYEVENTF_UNICODE, VIRTUAL_KEY,
-        MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP, MOUSEEVENTF_MOVE, MOUSEEVENTF_ABSOLUTE,
         VK_CONTROL, VK_MENU, VK_RETURN, VK_SHIFT,
     };
-    use windows::Win32::UI::WindowsAndMessaging::{
-        GetForegroundWindow, GetWindowRect, SetForegroundWindow, SetCursorPos,
-    };
+    use windows::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, SetForegroundWindow};
     use windows::Win32::System::DataExchange::{CloseClipboard, EmptyClipboard, OpenClipboard, SetClipboardData};
     use windows::Win32::System::Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE};
 
@@ -237,26 +234,6 @@ fn inject_bridge_windows(session_id: &str) -> Result<String, String> {
         }
     };
 
-    // Absolute mouse click at screen coordinates (65535 = full screen)
-    let click = |x: i32, y: i32| -> [INPUT; 3] {
-        let ax = (x * 65535) / unsafe { windows::Win32::UI::WindowsAndMessaging::GetSystemMetrics(windows::Win32::UI::WindowsAndMessaging::SM_CXSCREEN) };
-        let ay = (y * 65535) / unsafe { windows::Win32::UI::WindowsAndMessaging::GetSystemMetrics(windows::Win32::UI::WindowsAndMessaging::SM_CYSCREEN) };
-        [
-            INPUT {
-                r#type: INPUT_MOUSE,
-                Anonymous: INPUT_0 { mi: MOUSEINPUT { dx: ax, dy: ay, mouseData: 0, dwFlags: MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE, time: 0, dwExtraInfo: 0 } },
-            },
-            INPUT {
-                r#type: INPUT_MOUSE,
-                Anonymous: INPUT_0 { mi: MOUSEINPUT { dx: ax, dy: ay, mouseData: 0, dwFlags: MOUSEEVENTF_LEFTDOWN | MOUSEEVENTF_ABSOLUTE, time: 0, dwExtraInfo: 0 } },
-            },
-            INPUT {
-                r#type: INPUT_MOUSE,
-                Anonymous: INPUT_0 { mi: MOUSEINPUT { dx: ax, dy: ay, mouseData: 0, dwFlags: MOUSEEVENTF_LEFTUP | MOUSEEVENTF_ABSOLUTE, time: 0, dwExtraInfo: 0 } },
-            },
-        ]
-    };
-
     let sleep = |ms: u64| std::thread::sleep(std::time::Duration::from_millis(ms));
 
     unsafe {
@@ -281,19 +258,9 @@ fn inject_bridge_windows(session_id: &str) -> Result<String, String> {
         );
         sleep(1500);
 
-        // Click the console input area directly
-        // DevTools docks to the bottom half of the collection app window
-        // Console input is at roughly: window_left + 50px from left, window_bottom - 20px from bottom
-        let mut rect = RECT::default();
-        let _ = GetWindowRect(collection_hwnd, &mut rect);
-        let win_w = rect.right - rect.left;
-        let win_h = rect.bottom - rect.top;
-        // DevTools takes bottom ~40% of window; console input is at bottom of that
-        let click_x = rect.left + win_w / 2;       // horizontally centered
-        let click_y = rect.top + (win_h as f32 * 0.95) as i32; // near very bottom
-        let clicks = click(click_x, click_y);
-        SendInput(&clicks, sz);
-        sleep(500);
+        // NOTE: No mouse click here — Ctrl+Shift+J already focuses the console input,
+        // regardless of whether DevTools is docked to the bottom or to the side.
+        // The 2.9.10 mouse click broke side-docked DevTools (typing landed on the page).
 
         // Type "allow pasting" — Chromium treats Unicode-injected chars as typed
         let mut char_inputs: Vec<INPUT> = Vec::new();

@@ -35,6 +35,10 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
+      - name: Sync version to tauri.conf.json
+        run: node scripts/sync-version.js
+        shell: pwsh
+
       - name: Read version
         id: pkg
         run: |
