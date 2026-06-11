@@ -1,6 +1,7 @@
 (async function(){
   if(window.__MARK_BRIDGE__){console.log('[MARK] bridge already running');return;}
   window.__MARK_BRIDGE__=true;
+  window.__MARK_BRIDGE_VERSION__='4.3.0-ws';
   console.log('[MARK] bridge starting (v4.3.0 — localhost WebSocket)');
 
   // ── Optional auto-auth tokens (for Firebase session lookup only) ──────────
