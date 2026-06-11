@@ -397,7 +397,7 @@ fn patch_one_shortcut(lnk_path: &std::path::Path) -> Result<bool, String> {
 //   5. Shift offsets of files that come AFTER app.html by the size delta
 //   6. Rebuild and write the file
 // Idempotent — checks for the marker comment and skips if already patched.
-const ASAR_MARKER: &str = "<!-- MARK_BRIDGE_INJECTED v1 -->";
+const ASAR_MARKER: &str = "<!-- MARK_BRIDGE_INJECTED v2 -->";
 
 #[command]
 fn patch_tag_once_asar() -> Result<String, String> {
@@ -478,13 +478,23 @@ fn patch_asar_impl(asar_path: &std::path::Path) -> Result<String, String> {
         return Ok("already patched".to_string());
     }
 
+    // Strip any previous MARK bridge injection (v1 or older) before injecting v2.
+    // Prevents stacking multiple bridge scripts across upgrades.
+    let html_str_clean = if let Some(start) = html_str.find("<!-- MARK_BRIDGE_INJECTED") {
+        let before = &html_str[..start];
+        let before_trimmed = before.trim_end_matches(|c: char| c == ' ' || c == '\n' || c == '\r');
+        format!("{}\n  </body>", before_trimmed)
+    } else {
+        html_str.to_string()
+    };
+
     // Build injection: marker + <script>...bridge code...</script> before </body>
     let injection = format!(
         "    {}\n    <script>\n{}\n    </script>\n  </body>",
         ASAR_MARKER, BRIDGE_SCRIPT
     );
-    let new_html = html_str.replace("</body>", &injection);
-    if new_html == html_str {
+    let new_html = html_str_clean.replace("</body>", &injection);
+    if new_html == html_str_clean {
         return Err("</body> not found in app.html — Tag Once structure changed?".into());
     }
 
