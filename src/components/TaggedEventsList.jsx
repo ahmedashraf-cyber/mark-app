@@ -175,19 +175,19 @@ function CommentBox({ tag, onSave, onClose }) {
 }
 
 // ── Timeline Row ──────────────────────────────────────────────────────────────
-function TimelineRow({ label, tags, videoDuration, currentTime, selectedId, onCardClick, onCommentClick, homeTeam }) {
+function TimelineRow({ label, tags, allTags, videoDuration, currentTime, selectedId, onCardClick, onCommentClick, homeTeam }) {
   const rowRef = useRef(null)
 
-  // Auto-scroll to keep current position visible
+  // Auto-scroll based on all tags combined timeline
   useEffect(() => {
-    if (!rowRef.current || tags.length === 0) return
-    const CARD_W = 112
-    const GAP = 12
-    const idx = tags.findIndex(t => t.videoTimeSec > currentTime)
-    const targetIdx = idx === -1 ? tags.length - 1 : Math.max(0, idx - 1)
+    if (!rowRef.current || allTags.length === 0) return
+    const CARD_W = 100
+    const GAP = 10
+    const idx = allTags.findIndex(t => t.videoTimeSec > currentTime)
+    const targetIdx = idx === -1 ? allTags.length - 1 : Math.max(0, idx - 1)
     const targetX = targetIdx * (CARD_W + GAP) - rowRef.current.clientWidth / 2 + CARD_W / 2
     rowRef.current.scrollTo({ left: Math.max(0, targetX), behavior: 'smooth' })
-  }, [currentTime])
+  }, [currentTime, allTags])
 
   return (
     <div style={{
@@ -238,17 +238,24 @@ function TimelineRow({ label, tags, videoDuration, currentTime, selectedId, onCa
           display: 'flex', alignItems: 'center',
         }}
       >
-        {/* Sequential cards — left to right in time order, fixed spacing */}
+        {/* Shared timeline slots — one slot per event in allTags, empty if not this team */}
         <div style={{
           display: 'flex', alignItems: 'center',
           gap: 10, padding: '0 12px',
           minWidth: 'max-content', height: '100%',
         }}>
-          {tags.map(tag => {
-            const extras = tag.extras || []
-            const isSelected = tag.id === selectedId
-            const isPast = tag.videoTimeSec <= currentTime
+          {allTags.map(slot => {
+            const tag = tags.find(t => t.id === slot.id)
+            const isSelected = slot.id === selectedId
+            const isPast = slot.videoTimeSec <= currentTime
 
+            if (!tag) {
+              return (
+                <div key={slot.id} style={{ width: 100, flexShrink: 0 }} />
+              )
+            }
+
+            const extras = tag.extras || []
             return (
               <div
                 key={tag.id}
@@ -257,11 +264,11 @@ function TimelineRow({ label, tags, videoDuration, currentTime, selectedId, onCa
                 style={{
                   display: 'flex', flexDirection: 'column', alignItems: 'center',
                   gap: 3, cursor: 'pointer', flexShrink: 0,
+                  width: 100,
                   opacity: isPast ? 1 : 0.4,
                   transition: 'opacity .2s',
                 }}
               >
-                {/* Dots above */}
                 <div style={{ display: 'flex', gap: 2, minHeight: 7 }}>
                   {extras.map((eid, i) => (
                     <div key={eid} style={{
@@ -270,7 +277,6 @@ function TimelineRow({ label, tags, videoDuration, currentTime, selectedId, onCa
                     }}/>
                   ))}
                 </div>
-                {/* Card */}
                 <div
                   title={tag.triggeredEventLabel + (tag.comment ? ' — ' + tag.comment : '')}
                   style={{
@@ -286,7 +292,7 @@ function TimelineRow({ label, tags, videoDuration, currentTime, selectedId, onCa
                     fontSize: 11, fontWeight: isSelected ? 700 : 500,
                     fontFamily: 'DM Sans, sans-serif',
                     whiteSpace: 'nowrap',
-                    width: 90,
+                    width: '100%',
                     overflow: 'hidden',
                     textOverflow: 'ellipsis',
                     textAlign: 'center',
@@ -295,7 +301,6 @@ function TimelineRow({ label, tags, videoDuration, currentTime, selectedId, onCa
                   }}>
                   {tag.triggeredEventLabel}
                 </div>
-                {/* Timestamp */}
                 <div style={{ fontSize: 9, color: 'var(--t-3)', fontFamily: 'JetBrains Mono, monospace' }}>
                   {fmt(tag.videoTimeSec)}
                 </div>
@@ -327,6 +332,7 @@ export default function TaggedEventsList({
   const tagsWithComments = (tags || []).map(t => ({ ...t, comment: comments[t.id] || t.comment || '' }))
   const homeTags = tagsWithComments.filter(t => t.team === 'home')
   const awayTags = tagsWithComments.filter(t => t.team === 'away')
+  const allTagsSorted = [...tagsWithComments].sort((a, b) => (a.videoTimeSec || 0) - (b.videoTimeSec || 0))
 
   function handleCardClick(tag) {
     setSelectedTag(prev => prev?.id === tag.id ? null : tag)
@@ -381,6 +387,7 @@ export default function TaggedEventsList({
       <TimelineRow
         label={homeTeam}
         tags={homeTags}
+        allTags={allTagsSorted}
         videoDuration={videoDuration}
         currentTime={currentTime}
         selectedId={selectedTag?.id}
@@ -393,6 +400,7 @@ export default function TaggedEventsList({
       <TimelineRow
         label={awayTeam}
         tags={awayTags}
+        allTags={allTagsSorted}
         videoDuration={videoDuration}
         currentTime={currentTime}
         selectedId={selectedTag?.id}

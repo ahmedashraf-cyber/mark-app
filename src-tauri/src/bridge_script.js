@@ -1,5 +1,5 @@
 (async function(){
-  const BRIDGE_VERSION = '5.4.0-ws';
+  const BRIDGE_VERSION = '5.5.0-ws';
   if(window.__MARK_BRIDGE_VERSION__ === BRIDGE_VERSION){console.log('[MARK] bridge already running (v' + BRIDGE_VERSION + ')');return;}
   if(window.__MARK_BRIDGE_STOP__) window.__MARK_BRIDGE_STOP__();
   window.__MARK_BRIDGE__ = true;
