@@ -112,18 +112,23 @@ export function useSync(onStatusChange, sessionId) {
       // Step 1: get current video time from bridge
       ws.send(JSON.stringify({ type: 'getVideoTimeRequest', ts: reqTs }))
 
+      let videoTimeSent = false
+
       function handler(event) {
         try {
           const msg = JSON.parse(event.data)
 
-          // Step 2: got video time — now request event count
-          if (msg.type === 'getVideoTimeResponse' && msg.ts >= reqTs) {
+          // Step 2: got video time — send event count request ONCE
+          if (msg.type === 'getVideoTimeResponse' && msg.ts >= reqTs && !videoTimeSent) {
+            videoTimeSent = true
             const endTs = msg.time * 1000 // convert seconds to ms
+            console.log('[MARK] getVideoTimeResponse time=', msg.time, 'endTs=', endTs)
             ws.send(JSON.stringify({ type: 'eventCountRequest', matchId, startTs: 0, endTs, ts: Date.now() }))
           }
 
           // Step 3: got event count — done
           if (msg.type === 'eventCountResponse' && msg.ts >= reqTs) {
+            console.log('[MARK] eventCountResponse count=', msg.count)
             clearTimeout(timeout)
             ws.removeEventListener('message', handler)
             resolve(msg.count)
