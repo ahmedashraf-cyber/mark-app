@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { db } from '../firebase/config'
-import { collection, query, where, getDocs, doc, setDoc, getDoc, serverTimestamp } from 'firebase/firestore'
+import { collection, query, where, getDocs, doc, setDoc, getDoc, serverTimestamp, orderBy, limit } from 'firebase/firestore'
 import { useAuth } from '../hooks/useAuth.jsx'
 import { CURRENT_VERSION } from '../hooks/useUpdateCheck'
 
@@ -155,12 +155,29 @@ export default function SessionSetupPage({ onSessionStart, lastResult, onShowHis
   const [selectedHalf, setSelectedHalf]   = useState(null)
   const [lockStatus, setLockStatus]       = useState(null)
   const [lockedBy, setLockedBy]           = useState('')
+  const [completedSession, setCompletedSession] = useState(null)
+  const [recentSessions, setRecentSessions]     = useState([])
+  const [sessionsLoading, setSessionsLoading]   = useState(false)
   const [loading, setLoading]             = useState(false)
   const [error, setError]                 = useState('')
   const [matches, setMatches]             = useState([])
   const [matchesLoading, setMatchesLoading] = useState(true)
   const [matchesError, setMatchesError]   = useState('')
   const [debugInfo, setDebugInfo]         = useState('')
+
+  useEffect(() => {
+    if (!profile?.uid) return
+    setSessionsLoading(true)
+    getDocs(query(
+      collection(db, 'mark_sessions'),
+      where('reviewerId', '==', profile.uid),
+      where('status', '==', 'completed')
+    )).then(snap => {
+      const list = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+      list.sort((a, b) => (b.completedAt?.toDate?.()?.getTime() || 0) - (a.completedAt?.toDate?.()?.getTime() || 0))
+      setRecentSessions(list.slice(0, 10))
+    }).catch(() => {}).finally(() => setSessionsLoading(false))
+  }, [profile?.uid])
 
   useEffect(() => {
     setMatchesLoading(true)
@@ -192,18 +209,34 @@ export default function SessionSetupPage({ onSessionStart, lastResult, onShowHis
     setLockStatus('checking')
     const lockId = `${selectedMatch.productionId}_${selectedHalf.id}`
     try {
+      // Check 1: in-progress lock
       const lockDoc = await getDoc(doc(db, 'mark_locks', lockId))
       if (lockDoc.exists()) {
         const data = lockDoc.data()
-        if (data.reviewerId === profile?.uid) {
-          setLockStatus('free')
-        } else {
+        if (data.reviewerId !== profile?.uid) {
           setLockStatus('locked')
           setLockedBy(data.reviewerName || data.reviewerEmail || 'Another reviewer')
+          return
         }
-      } else {
-        setLockStatus('free')
       }
+
+      // Check 2: completed session by any reviewer
+      const completedQ = query(
+        collection(db, 'mark_sessions'),
+        where('matchId', '==', String(selectedMatch.productionId)),
+        where('half', '==', selectedHalf.id),
+        where('status', '==', 'completed')
+      )
+      const completedSnap = await getDocs(completedQ)
+      if (!completedSnap.empty) {
+        const completedData = completedSnap.docs[0].data()
+        setLockStatus('completed')
+        setLockedBy(completedData.reviewerName || completedData.reviewerEmail || 'A reviewer')
+        setCompletedSession({ id: completedSnap.docs[0].id, ...completedData })
+        return
+      }
+
+      setLockStatus('free')
     } catch (e) {
       setLockStatus('free')
     }
@@ -261,6 +294,8 @@ export default function SessionSetupPage({ onSessionStart, lastResult, onShowHis
   }
 
   const canStart = selectedMatch && selectedHalf && lockStatus === 'free' && !loading
+  // Reset completedSession when selection changes
+  // (handled inline via setCompletedSession(null) on selection change)
 
   return (
     <div className="min-h-screen flex flex-col" style={{background:'var(--bg)'}}>
@@ -339,7 +374,7 @@ export default function SessionSetupPage({ onSessionStart, lastResult, onShowHis
             ) : filteredMatches.map((m, i) => {
               const isSelected = selectedMatch?.productionId === m.productionId
               return (
-                <div key={i} onClick={() => { setSelectedMatch(m); setLockStatus(null); setSelectedHalf(null) }}
+                <div key={i} onClick={() => { setSelectedMatch(m); setLockStatus(null); setSelectedHalf(null); setCompletedSession(null) }}
                   style={{padding:'12px 16px',borderBottom:'1px solid var(--b-1)',cursor:'pointer',
                     background: isSelected ? 'rgba(232,89,12,0.12)' : 'transparent',
                     borderLeft: isSelected ? '3px solid var(--p2)' : '3px solid transparent',transition:'background .1s'}}>
@@ -362,7 +397,7 @@ export default function SessionSetupPage({ onSessionStart, lastResult, onShowHis
               {HALVES.map(h => {
                 const isSelected = selectedHalf?.id === h.id
                 return (
-                  <button key={h.id} onClick={() => { setSelectedHalf(h); setLockStatus(null) }} disabled={!selectedMatch}
+                  <button key={h.id} onClick={() => { setSelectedHalf(h); setLockStatus(null); setCompletedSession(null) }} disabled={!selectedMatch}
                     style={{padding:'10px 8px',borderRadius:10,border: isSelected ? '2px solid var(--p2)' : '2px solid var(--b-1)',
                       background: isSelected ? 'rgba(232,89,12,0.12)' : 'var(--bg-2)',color: isSelected ? 'var(--p2)' : 'var(--t-2)',
                       fontSize:13,fontWeight: isSelected ? 700 : 400,cursor: selectedMatch ? 'pointer' : 'not-allowed',
@@ -397,16 +432,89 @@ export default function SessionSetupPage({ onSessionStart, lastResult, onShowHis
                   <span style={{fontSize:12,color:'#FF453A'}}>Locked by {lockedBy}</span>
                 </div>
               )}
+              {lockStatus === 'completed' && (
+                <div>
+                  <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:8}}>
+                    <span style={{width:8,height:8,borderRadius:'50%',background:'#30D158',display:'inline-block',flexShrink:0}}/>
+                    <span style={{fontSize:12,color:'#30D158',fontWeight:700}}>Already reviewed by {lockedBy}</span>
+                  </div>
+                  {completedSession && (
+                    <div style={{fontSize:11,color:'var(--t-3)'}}>
+                      Score: <span style={{color:'var(--p2)',fontWeight:700}}>{completedSession.qualityScore || 0}%</span>
+                      {' · '}{completedSession.totalTaggedErrors || 0} errors
+                      {' · '}{completedSession.totalReviewedEvents || 0} events
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           )}
 
           {error && <div style={{fontSize:12,color:'#FF453A',background:'rgba(255,69,58,0.1)',borderRadius:8,padding:'8px 12px'}}>{error}</div>}
 
-          <button className="btn-orange" style={{padding:'14px 0',fontSize:15,marginTop:'auto'}} disabled={!canStart} onClick={handleStartSession}>
-            {loading ? 'Starting…' : 'Start Review Session →'}
-          </button>
+          {lockStatus === 'completed' ? (
+            <button className="btn-ghost" style={{padding:'14px 0',fontSize:14,marginTop:'auto'}}
+              onClick={() => completedSession && onShowHistory && onShowHistory(completedSession)}>
+              View Review →
+            </button>
+          ) : (
+            <button className="btn-orange" style={{padding:'14px 0',fontSize:15,marginTop:'auto'}} disabled={!canStart} onClick={handleStartSession}>
+              {loading ? 'Starting…' : 'Start Review Session →'}
+            </button>
+          )}
         </div>
       </div>
+
+      {/* Recent sessions section */}
+      {recentSessions.length > 0 && (
+        <div style={{borderTop:'1px solid var(--b-1)',padding:'16px 24px'}}>
+          <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:12}}>
+            <span style={{fontSize:11,fontWeight:800,color:'var(--t-3)',letterSpacing:1}}>RECENT SESSIONS</span>
+            <button className="btn-ghost" style={{fontSize:11,padding:'3px 10px'}} onClick={() => onShowHistory && onShowHistory(null)}>
+              View all →
+            </button>
+          </div>
+          <div style={{display:'flex',flexDirection:'column',gap:6}}>
+            {recentSessions.map(s => {
+              const score = s.qualityScore || 0
+              const color = score >= 80 ? '#30D158' : score >= 60 ? '#FFD60A' : '#FF453A'
+              const date = s.completedAt?.toDate?.()
+                ? s.completedAt.toDate().toLocaleDateString('en-GB',{day:'2-digit',month:'short'})
+                : ''
+              return (
+                <div key={s.id}
+                  onClick={() => onShowHistory && onShowHistory(s)}
+                  style={{
+                    display:'flex', alignItems:'center', gap:10,
+                    padding:'8px 12px', borderRadius:8, cursor:'pointer',
+                    border:'1px solid var(--b-1)', background:'var(--bg-2)',
+                    transition:'background .1s',
+                  }}
+                  onMouseEnter={e => e.currentTarget.style.background='var(--bg-3)'}
+                  onMouseLeave={e => e.currentTarget.style.background='var(--bg-2)'}
+                >
+                  <div style={{
+                    width:36,height:36,borderRadius:8,flexShrink:0,
+                    background:`${color}14`,border:`1.5px solid ${color}44`,
+                    display:'flex',alignItems:'center',justifyContent:'center',
+                  }}>
+                    <span style={{fontFamily:'Inter',fontWeight:900,fontSize:11,color}}>{score}%</span>
+                  </div>
+                  <div style={{flex:1,minWidth:0}}>
+                    <div style={{fontSize:12,fontWeight:600,color:'var(--t-1)',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>
+                      {s.matchName}
+                    </div>
+                    <div style={{fontSize:10,color:'var(--t-3)',marginTop:1}}>
+                      {s.half} · {s.totalTaggedErrors || 0} errors · {date}
+                    </div>
+                  </div>
+                  <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="var(--t-3)" strokeWidth="2.5" strokeLinecap="round"><path d="M9 18l6-6-6-6"/></svg>
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      )}
     </div>
   )
 }

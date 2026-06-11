@@ -47,6 +47,7 @@ function PageTransition({ id, children }) {
 function AppInner() {
   const { user, loading } = useAuth()
   const [session, setSession]         = useState(null)
+  const [historySession, setHistorySession] = useState(null)
   const [showHistory, setShowHistory] = useState(false)
   const [lastResult, setLastResult]   = useState(null)
   const [update, setUpdate]           = useState(null)
@@ -107,12 +108,12 @@ function AppInner() {
             onBack={() => setSession(null)}
           />
         ) : showHistory ? (
-          <SessionHistoryPage onBack={() => setShowHistory(false)} />
+          <SessionHistoryPage onBack={() => { setShowHistory(false); setHistorySession(null) }} initialSession={historySession} />
         ) : (
           <SessionSetupPage
             onSessionStart={(s) => setSession(s)}
             lastResult={lastResult}
-            onShowHistory={() => setShowHistory(true)}
+            onShowHistory={(session) => { setHistorySession(session || null); setShowHistory(true) }}
           />
         )}
       </PageTransition>

@@ -3,6 +3,7 @@ import { db } from '../firebase/config'
 import { collection, query, where, getDocs } from 'firebase/firestore'
 import { useAuth } from '../hooks/useAuth.jsx'
 import { invoke } from '@tauri-apps/api/core'
+import { exportSessionToXlsx } from '../utils/exportSession'
 import { EXTRAS, GK_EXTRAS, GK_WRONG_EXTRAS } from '../components/TagPanel'
 
 // ------ Helpers ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -508,7 +509,7 @@ function MatchReport({ session, tags, onBack }) {
 }
 
 // ------ Session Card (list view) ------------------------------------------------------------------------------------------------------------------------------------------------------
-function SessionCard({ session, onReview, loading }) {
+function SessionCard({ session, onReview, onExport, loading }) {
   const color = (session.qualityScore || 0) >= 80 ? '#30D158' : (session.qualityScore || 0) >= 60 ? '#FFD60A' : '#FF453A'
   const date  = session.completedAt?.toDate?.()
     ? session.completedAt.toDate().toLocaleDateString('en-GB', { day:'2-digit', month:'short', year:'numeric' })
@@ -544,12 +545,24 @@ function SessionCard({ session, onReview, loading }) {
           <div style={{ fontSize: 10, color: 'var(--t-3)', marginTop: 2 }}>{session.totalReviewedEvents || 0} events reviewed</div>
         </div>
 
-        <div style={{
-          width: 30, height: 30, borderRadius: 8, flexShrink: 0,
-          background: 'var(--p2)', display: 'flex', alignItems: 'center', justifyContent: 'center',
-          boxShadow: '0 2px 8px rgba(232,89,12,0.3)',
-        }}>
-          <svg width="11" height="11" viewBox="0 0 24 24" fill="white"><path d="M5 3l14 9-14 9V3z"/></svg>
+        <div style={{display:'flex',gap:6,flexShrink:0}}>
+          <button
+            onClick={e => { e.stopPropagation(); onExport(session) }}
+            title="Export CSV"
+            style={{
+              width:30, height:30, borderRadius:8, flexShrink:0,
+              background:'rgba(48,209,88,0.12)', border:'1px solid rgba(48,209,88,0.3)',
+              display:'flex', alignItems:'center', justifyContent:'center', cursor:'pointer',
+            }}>
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#30D158" strokeWidth="2.5" strokeLinecap="round"><path d="M12 3v13M6 11l6 6 6-6"/><path d="M4 20h16"/></svg>
+          </button>
+          <div style={{
+            width:30, height:30, borderRadius:8, flexShrink:0,
+            background:'var(--p2)', display:'flex', alignItems:'center', justifyContent:'center',
+            boxShadow:'0 2px 8px rgba(232,89,12,0.3)',
+          }}>
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="white"><path d="M5 3l14 9-14 9V3z"/></svg>
+          </div>
         </div>
       </div>
     </div>
@@ -557,7 +570,7 @@ function SessionCard({ session, onReview, loading }) {
 }
 
 // ------ Main Page ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-export default function SessionHistoryPage({ onBack }) {
+export default function SessionHistoryPage({ onBack, initialSession }) {
   const { profile } = useAuth()
   const [sessions,      setSessions]      = useState([])
   const [loading,       setLoading]       = useState(true)
@@ -583,6 +596,10 @@ export default function SessionHistoryPage({ onBack }) {
           return tb - ta
         })
         setSessions(list)
+        // Auto-open initialSession if provided
+        if (initialSession) {
+          handleReview(initialSession)
+        }
       } catch(e) {
         console.error('[MARK] load sessions:', e)
       } finally {
@@ -591,6 +608,24 @@ export default function SessionHistoryPage({ onBack }) {
     }
     load()
   }, [profile?.uid])
+
+  async function handleExport(session) {
+    try {
+      const q    = query(collection(db, 'mark_error_tags'), where('sessionId', '==', session.sessionId))
+      const snap = await getDocs(q)
+      const tags = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+      await exportSessionToXlsx({
+        session,
+        tags,
+        quality: session.qualityScore || 0,
+        tagCount: session.totalTaggedErrors || 0,
+        total: session.totalReviewedEvents || 0,
+        videoPath: null,
+      })
+    } catch(e) {
+      console.error('[MARK] export failed:', e)
+    }
+  }
 
   async function handleReview(session) {
     setTagsLoading(true)
@@ -633,7 +668,7 @@ export default function SessionHistoryPage({ onBack }) {
         ) : sessions.length === 0 ? (
           <div style={{ textAlign: 'center', color: 'var(--t-3)', paddingTop: 60, fontSize: 13 }}>No completed sessions yet</div>
         ) : sessions.map(s => (
-          <SessionCard key={s.id} session={s} onReview={handleReview} loading={tagsLoading} />
+          <SessionCard key={s.id} session={s} onReview={handleReview} onExport={handleExport} loading={tagsLoading} />
         ))}
         {tagsLoading && (
           <div style={{ textAlign: 'center', color: 'var(--t-3)', paddingTop: 16, fontSize: 12 }}>Loading session data...</div>
