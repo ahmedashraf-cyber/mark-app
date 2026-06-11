@@ -1,7 +1,9 @@
 (async function(){
-  if(window.__MARK_BRIDGE__){console.log('[MARK] bridge already running');return;}
-  window.__MARK_BRIDGE__=true;
-  window.__MARK_BRIDGE_VERSION__='4.3.0-ws';
+  const BRIDGE_VERSION = '4.3.0-ws';
+  if(window.__MARK_BRIDGE_VERSION__ === BRIDGE_VERSION){console.log('[MARK] bridge already running (v' + BRIDGE_VERSION + ')');return;}
+  if(window.__MARK_BRIDGE_STOP__) window.__MARK_BRIDGE_STOP__();
+  window.__MARK_BRIDGE__ = true;
+  window.__MARK_BRIDGE_VERSION__ = BRIDGE_VERSION;
   console.log('[MARK] bridge starting (v4.3.0 — localhost WebSocket)');
 
   // ── Optional auto-auth tokens (for Firebase session lookup only) ──────────
@@ -119,6 +121,15 @@
   const WS_PORT = 9001;
   let ws = null;
   let wsConnected = false;
+
+  // Stop hook — called when a newer bridge version injects over this one
+  window.__MARK_BRIDGE_STOP__ = function() {
+    try { if (ws) ws.close(); } catch(_) {}
+    ws = null;
+    wsConnected = false;
+    if (unsubActiveQuery) { unsubActiveQuery(); unsubActiveQuery = null; }
+    console.log('[MARK] old bridge stopped cleanly');
+  };
 
   function connectWs(video) {
     if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
