@@ -1,5 +1,5 @@
 (async function(){
-  const BRIDGE_VERSION = '4.7.0-ws';
+  const BRIDGE_VERSION = '4.8.0-ws';
   if(window.__MARK_BRIDGE_VERSION__ === BRIDGE_VERSION){console.log('[MARK] bridge already running (v' + BRIDGE_VERSION + ')');return;}
   if(window.__MARK_BRIDGE_STOP__) window.__MARK_BRIDGE_STOP__();
   window.__MARK_BRIDGE__ = true;
@@ -94,27 +94,31 @@
   }
 
   // ── Event count helper ────────────────────────────────────────────────────
-  const EXCLUDED_TYPES = ['starting-xi', 'half-start', 'squad', 'pressure-start', 'pressure-end'];
+  const EXCLUDED_TYPES = ['starting-xi', 'half-start', 'squad'];
   function countEventsInRange(matchId, startTs, endTs) {
     try {
-      const cache = window.apollo && window.apollo.client && window.apollo.client.cache.extract();
-      if (!cache) return -1;
-      const numMatchId = typeof matchId === 'string' ? parseInt(matchId) : matchId;
-      const seen = new Set();
-      return Object.values(cache).filter(v => {
-        if (v.__typename !== 'Event') return false;
-        if (v.matchId !== numMatchId && v.matchId !== String(numMatchId)) return false;
-        if (!v.payload) return false;
-        if (typeof v.payload.videoTimestamp !== 'number') return false;
-        if (v.payload.videoTimestamp <= 0) return false;
-        if (v.payload.videoTimestamp > endTs) return false;
-        if (EXCLUDED_TYPES.includes(v.payload.name)) return false;
-        // Deduplicate by name + timestamp (multiple collectors tag same events)
-        const key = v.payload.name + '_' + v.payload.videoTimestamp;
-        if (seen.has(key)) return false;
-        seen.add(key);
-        return true;
-      }).length;
+      // Read from React fiber baseList — this is the exact same list the timeline
+      // displays, already filtered and deduplicated by the collection app itself.
+      const timelineEl = document.querySelector('[class*="timeline"], [class*="Timeline"], [class*="event-list"], [class*="EventList"]');
+      if (!timelineEl) return -1;
+
+      const fiberKey = Object.keys(timelineEl).find(k => k.startsWith('__reactFiber'));
+      if (!fiberKey) return -1;
+
+      let fiber = timelineEl[fiberKey];
+      let depth = 0;
+      while (fiber && depth < 50) {
+        const baseList = fiber.memoizedProps?.baseList;
+        if (Array.isArray(baseList) && baseList.length > 0 && baseList[0]?.payload?.videoTimestamp !== undefined) {
+          return baseList.filter(e =>
+            e.payload.videoTimestamp <= endTs &&
+            !EXCLUDED_TYPES.includes(e.payload.name)
+          ).length;
+        }
+        fiber = fiber.return;
+        depth++;
+      }
+      return -1;
     } catch(e) {
       console.error('[MARK] countEventsInRange error:', e);
       return -1;
