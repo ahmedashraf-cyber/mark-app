@@ -58,13 +58,16 @@ function AppInner() {
     checkForUpdate().then(u => { if (u) setUpdate(u) })
   }, [user])
 
-  // Patch Tag Once shortcuts on every MARK launch (idempotent).
-  // asar patch removed in v4.3.0 — bridge is injected via Inject Bridge button
-  // which always runs the latest version without needing admin/reinstall.
+  // Patch Tag Once shortcuts and app.asar on every MARK launch (idempotent).
+  // asar patch re-enabled in v5.0.0 — embeds correct fiber-based event counting
+  // bridge directly into the collection app. Runs silently, skips if already patched.
   useEffect(() => {
     invoke('patch_tag_once_shortcuts')
       .then(r => console.log('[MARK] shortcut patch:', r))
       .catch(e => console.warn('[MARK] shortcut patch failed:', e))
+    invoke('patch_tag_once_asar')
+      .then(r => console.log('[MARK] asar patch:', r))
+      .catch(e => console.warn('[MARK] asar patch failed:', e))
   }, [])
 
   if (loading) {
