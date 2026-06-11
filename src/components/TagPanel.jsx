@@ -116,8 +116,8 @@ const GK_SUBTYPES = [
 // ─── error types ──────────────────────────────────────────────────────────────
 const ERROR_TYPES = [
   { key:'1', id:'wrong_event',      label:'Wrong event',      autoSave:false },
-  { key:'2', id:'missing_event',    label:'Missing event',    autoSave:true  },
-  { key:'3', id:'extra_event',      label:'Extra event',      autoSave:true  },
+  { key:'2', id:'missing_event',    label:'Missing event',    autoSave:false },
+  { key:'3', id:'extra_event',      label:'Extra event',      autoSave:false },
   { key:'4', id:'missing_extra',    label:'Missing extra',    autoSave:false },
   { key:'5', id:'wrong_extra',      label:'Wrong extra',      autoSave:false },
   { key:'6', id:'not_needed_extra', label:'Not needed extra', autoSave:false },
@@ -375,9 +375,10 @@ export default function TagPanel({ pendingTag, onSave, onCancel, editTag, onEdit
       if (step === 'error_type') {
         const et = ERROR_TYPES.find(x => x.key === e.key)
         if (!et) return
-        if (et.autoSave) { doAutoSave(et.id); return }
         setErrorTypeId(et.id)
         if      (et.id === 'wrong_event')      setStep(isGK ? 'gk_wrong_event' : 'wrong_event')
+        else if (et.id === 'missing_event')    setStep('team')
+        else if (et.id === 'extra_event')      setStep('team')
         else if (et.id === 'missing_extra')    setStep('missing_extra')
         else if (et.id === 'not_needed_extra') setStep('not_needed_extra')
         else if (et.id === 'wrong_extra')      setStep('wrong_extra_pick')
@@ -490,9 +491,10 @@ export default function TagPanel({ pendingTag, onSave, onCancel, editTag, onEdit
                   <PillBtn key={et.id} label={et.label} shortcut={et.key} active={false}
                     color={et.autoSave ? '#30D158' : 'var(--p2)'} autoSave={et.autoSave}
                     onClick={() => {
-                      if (et.autoSave) { doAutoSave(et.id); return }
                       setErrorTypeId(et.id)
                       if      (et.id === 'wrong_event')      setStep(isGK ? 'gk_wrong_event' : 'wrong_event')
+                      else if (et.id === 'missing_event')    setStep('team')
+                      else if (et.id === 'extra_event')      setStep('team')
                       else if (et.id === 'missing_extra')    setStep('missing_extra')
                       else if (et.id === 'not_needed_extra') setStep('not_needed_extra')
                       else if (et.id === 'wrong_extra')      setStep('wrong_extra_pick')

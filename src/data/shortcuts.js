@@ -25,7 +25,9 @@ export const TORNADO_EVENTS = [
   { key: 'L', id: 'separation_duel',   label: 'Separation Duel',   mouse: false, sheetEvent: 'Separation duel' },
   { key: 'M', id: 'leg_stretch_duel',  label: 'Leg Stretch Duel',  mouse: false, sheetEvent: 'Leg stretch duel' },
   { key: 'G', id: 'goal_keeper',       label: 'Goal Keeper',       mouse: false, sheetEvent: 'Goal Keeper' },
-  { key: 'I', id: 'pass_interception', label: 'Pass Interception', mouse: false, sheetEvent: 'Pass interception' },
+  { key: 'I', id: 'pass_interception',  label: 'Pass Interception',  mouse: false, sheetEvent: 'Pass interception' },
+  { key: 'N', id: 'pass_recovery',      label: 'Pass Recovery',       mouse: false, sheetEvent: 'Pass recovery' },
+  { key: 'U', id: 'pass_first_time',    label: 'Pass (First time)',   mouse: false, sheetEvent: 'Pass (First time)' },
   // ── Mouse-click events (no keyboard shortcut) ─────────────────────────────
   { key: null, id: 'card',              label: 'Card',              mouse: true,  sheetEvent: 'Card' },
   { key: null, id: 'error',             label: 'Error',             mouse: true,  sheetEvent: null },
