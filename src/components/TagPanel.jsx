@@ -485,7 +485,7 @@ export default function TagPanel({ pendingTag, onSave, onCancel, editTag, onEdit
                 if (et.id === 'missing_extra'    && missingList.length    === 0) return null
                 if (et.id === 'not_needed_extra' && missingList.length    === 0) return null
                 if (et.id === 'wrong_extra'      && wrongExtraKeys.length === 0) return null
-                if (et.id === 'wrong_event'      && getWrongEventList.length === 0 && !isGK) return null
+                if (et.id === 'wrong_event'      && wrongEventList.length === 0 && !isGK) return null
                 return (
                   <PillBtn key={et.id} label={et.label} shortcut={et.key} active={false}
                     color={et.autoSave ? '#30D158' : 'var(--p2)'} autoSave={et.autoSave}
@@ -508,7 +508,7 @@ export default function TagPanel({ pendingTag, onSave, onCancel, editTag, onEdit
         {(step === 'wrong_event' || step === 'gk_wrong_event') && (
           <>
             <StepLabel text="correct event was" color="var(--p2)" />
-            <KeyedList items={getWrongEventList} color="var(--p2)" cols={getWrongEventList.length > 5 ? 2 : 1}
+            <KeyedList items={wrongEventList} color="var(--p2)" cols={wrongEventList.length > 5 ? 2 : 1}
               onSelect={(c) => { setCorrection(c); setStep('team') }} />
           </>
         )}
