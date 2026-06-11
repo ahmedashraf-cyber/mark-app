@@ -32,6 +32,24 @@ body {
   user-select: none;
 }
 
+/* ── Background decoration layer ──────────────────────────────────────────── */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  opacity: 1;
+  background-image:
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='900' height='700' viewBox='0 0 900 700'%3E%3C!-- Play button top-left --%3E%3Cg opacity='0.055' transform='translate(60,80)'%3E%3Ccircle cx='70' cy='70' r='68' fill='none' stroke='%23E8590C' stroke-width='3'/%3E%3Cpolygon points='50,38 110,70 50,102' fill='%23E8590C'/%3E%3C/g%3E%3C!-- Film strip top-right --%3E%3Cg opacity='0.04' transform='translate(700,20)' fill='none' stroke='%23E8590C' stroke-width='2'%3E%3Crect x='0' y='0' width='160' height='110' rx='6'/%3E%3Crect x='8' y='8' width='20' height='20' rx='3' fill='%23E8590C' opacity='0.6'/%3E%3Crect x='8' y='82' width='20' height='20' rx='3' fill='%23E8590C' opacity='0.6'/%3E%3Crect x='132' y='8' width='20' height='20' rx='3' fill='%23E8590C' opacity='0.6'/%3E%3Crect x='132' y='82' width='20' height='20' rx='3' fill='%23E8590C' opacity='0.6'/%3E%3Cline x1='0' y1='38' x2='160' y2='38'/%3E%3Cline x1='0' y1='72' x2='160' y2='72'/%3E%3C/g%3E%3C!-- Crosshair / targeting reticle bottom-left --%3E%3Cg opacity='0.045' transform='translate(30,520)' fill='none' stroke='%23E8590C' stroke-width='2'%3E%3Ccircle cx='70' cy='70' r='50'/%3E%3Ccircle cx='70' cy='70' r='28'/%3E%3Ccircle cx='70' cy='70' r='5' fill='%23E8590C'/%3E%3Cline x1='70' y1='0' x2='70' y2='30'/%3E%3Cline x1='70' y1='110' x2='70' y2='140'/%3E%3Cline x1='0' y1='70' x2='30' y2='70'/%3E%3Cline x1='110' y1='70' x2='140' y2='70'/%3E%3C/g%3E%3C!-- Timeline scrubber bar center-bottom --%3E%3Cg opacity='0.04' transform='translate(220,620)' fill='none' stroke='%23E8590C' stroke-width='2'%3E%3Crect x='0' y='12' width='460' height='6' rx='3' fill='%23E8590C' opacity='0.3'/%3E%3Ccircle cx='160' cy='15' r='10' fill='%23E8590C' opacity='0.5'/%3E%3Cline x1='60' y1='0' x2='60' y2='30'/%3E%3Cline x1='160' y1='0' x2='160' y2='30'/%3E%3Cline x1='300' y1='0' x2='300' y2='30'/%3E%3Cline x1='400' y1='0' x2='400' y2='30'/%3E%3C/g%3E%3C!-- Tag / bookmark shape top-center --%3E%3Cg opacity='0.038' transform='translate(410,30)' fill='none' stroke='%23E8590C' stroke-width='2'%3E%3Cpath d='M0 0 L80 0 L80 60 L40 85 L0 60 Z'/%3E%3Ccircle cx='40' cy='30' r='12'/%3E%3C/g%3E%3C!-- Waveform / audio bars right-center --%3E%3Cg opacity='0.038' transform='translate(820,280)' fill='%23E8590C'%3E%3Crect x='0'  y='40' width='8' height='30'/%3E%3Crect x='14' y='20' width='8' height='70'/%3E%3Crect x='28' y='30' width='8' height='50'/%3E%3Crect x='42' y='10' width='8' height='90'/%3E%3Crect x='56' y='25' width='8' height='60'/%3E%3Crect x='70' y='35' width='8' height='40'/%3E%3C/g%3E%3C!-- Football pitch lines bottom-right --%3E%3Cg opacity='0.03' transform='translate(560,480)' fill='none' stroke='%23ffffff' stroke-width='1.5'%3E%3Crect x='0' y='0' width='300' height='190' rx='4'/%3E%3Cline x1='150' y1='0' x2='150' y2='190'/%3E%3Ccircle cx='150' cy='95' r='40'/%3E%3Ccircle cx='150' cy='95' r='3' fill='%23ffffff'/%3E%3Crect x='0' y='55' width='60' height='80' rx='2'/%3E%3Crect x='240' y='55' width='60' height='80' rx='2'/%3E%3C/g%3E%3C!-- Small dots scattered --%3E%3Ccircle cx='450' cy='200' r='2.5' fill='%23E8590C' opacity='0.12'/%3E%3Ccircle cx='180' cy='350' r='2' fill='%23E8590C' opacity='0.09'/%3E%3Ccircle cx='720' cy='450' r='3' fill='%23E8590C' opacity='0.08'/%3E%3Ccircle cx='80' cy='280' r='1.5' fill='%23E8590C' opacity='0.1'/%3E%3Ccircle cx='860' cy='180' r='2' fill='%23ffffff' opacity='0.05'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-size: cover;
+  background-position: center;
+}
+
+/* Ensure all app content sits above the background layer */
+#root { position: relative; z-index: 1; }
+
 h1, h2, h3, h4 { font-family: 'Inter', sans-serif; }
 code, .mono { font-family: 'JetBrains Mono', monospace; }
 
