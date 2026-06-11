@@ -1,16 +1,19 @@
 import { MISSING_EVENT_KEY } from '../data/shortcuts'
 
 const LEFT_EVENTS = [
-  { key: 'E',    label: 'Pass',            id: 'pass' },
-  { key: 'S',    label: 'Shot',            id: 'shot' },
+  { key: 'E',    label: 'Pass',              id: 'pass' },
+  { key: 'I',    label: 'Pass Interception', id: 'pass_interception' },
+  { key: 'N',    label: 'Pass Recovery',     id: 'pass_recovery' },
+  { key: 'U',    label: 'Pass (First time)', id: 'pass_first_time' },
+  { key: 'S',    label: 'Shot',              id: 'shot' },
   { key: 'D',    label: 'Dribble',         id: 'dribble' },
   { key: 'W',    label: 'Reception',       id: 'reception' },
   { key: 'T',    label: 'Miscontrol',      id: 'miscontrol' },
-  { key: 'P',    label: 'Pressure',        id: 'pressure' },
   { key: '0',    label: 'Fifty Fifty',     id: 'fifty_fifty' },
   { key: 'O',    label: 'Out',             id: 'out' },
   { key: 'X',    label: 'Foul Committed',  id: 'foul_committed' },
   { key: 'C',    label: 'Shield',          id: 'shield' },
+  { key: null,   label: 'Card',            id: 'card' },
   { key: null,   label: 'Error',           id: 'error' },
   { key: null,   label: 'Own Goal Against',id: 'own_goal_against' },
   { key: null,   label: 'Stoppage',        id: 'stoppage' },
@@ -30,6 +33,7 @@ const RIGHT_EVENTS = [
   { key: 'L',    label: 'Separation Duel',  id: 'separation_duel' },
   { key: 'M',    label: 'Leg Stretch Duel', id: 'leg_stretch_duel' },
   { key: 'G',    label: 'Goal Keeper',      id: 'goal_keeper' },
+  { key: 'P',    label: 'Pressure',         id: 'pressure' },
 ]
 
 const MISSING = { key: MISSING_EVENT_KEY, label: 'Missing Event' }
