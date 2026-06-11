@@ -1,6 +1,6 @@
 # MARK — Full Context
-**Version:** 2.9.8  
-**Last updated:** June 2026  
+**Version:** 4.1.0  
+**Last updated:** 2026-06-11  
 **Status:** Active, in use by Hudl Egypt reviewers
 
 ---
@@ -226,3 +226,101 @@ Identical to FIELD:
 - FIELD integration screens (Review tabs in Trainer/BSup/BM gates)
 - Attitude tracking (session behavior signals — store silently now, use later)
 - TagPanel — verify per-event extras are 100% correct with Wafaa
+
+
+---
+
+<!-- ============================================================= -->
+<!-- SESSION 2026-06-11 — v4.1.0 RELEASE · FADY ARCHIVED · 5.0.0 CANCELLED -->
+<!-- ============================================================= -->
+
+## v4.1.0 Release (2026-06-11) — PARTIAL DELIVERY · Read this carefully
+
+### What shipped and IS active in production
+
+1. **Version bumps everywhere** (Cargo.toml was 2.9.8, useUpdateCheck.js was 2.9.10, both were lagging — now all four files are aligned at 4.1.0):
+   - `package.json` → 4.1.0
+   - `src-tauri/Cargo.toml` → 4.1.0
+   - `src-tauri/tauri.conf.json` → 4.1.0
+   - `src/hooks/useUpdateCheck.js` `CURRENT_VERSION` → 4.1.0 (this drives the header bar display)
+2. **Two new parent events in `src/data/shortcuts.js`:**
+   - **Pass Interception** — key `I` (was missing entirely)
+   - **Card** — mouse-only event (was missing entirely)
+3. **`sheetEvent` field** added to every `TORNADO_EVENTS` entry — maps each MARK event to its canonical name in the official taxonomy sheet, so any consumer can look up filtered error-type/correction lists.
+4. **New file: `src/data/tagging_scenarios.js`** (~103 KB) — the full official error-correction taxonomy:
+   - 465 scenarios across 23 events × 17 error types (sourced from the updated `Untitled_spreadsheet (1).xlsx` provided 2026-06-11)
+   - Three filter helpers exported: `getErrorTypesForEvent(event)`, `getCorrectionsForScenario(event, errorType)`, `getTypeQualifiersForCorrection(event, errorType, correction)`
+   - Plus `TAGGING_SCENARIOS` (raw array) and `ALL_ERROR_TYPES` (the 17 in canonical order)
+
+### What was attempted but DOES NOT take effect
+
+`src/components/ErrorTagModal.jsx` was rewritten to consume the new `tagging_scenarios.js`. **However, `ErrorTagModal.jsx` is dead code** — it is not imported by `App.jsx`, `ReviewPage.jsx`, or any other page. The actual error-tagging UI in production is **`src/components/TagPanel.jsx`** (~27 KB), which `ReviewPage.jsx` imports and renders.
+
+`TagPanel.jsx` carries its OWN hardcoded taxonomy (constants: `ERROR_TYPES`, `WRONG_EVENT_MAP`, `WRONG_EXTRAS`, `MISSING_EXTRAS`, `EXTRAS`, `GK_SUBTYPES`, `GK_EXTRAS`, `GK_WRONG_EXTRAS`, `GK_WRONG_EVENT_MAP`, `TEAM_BTNS`, `KEYS`). It has zero references to `tagging_scenarios` or `getCorrectionsForScenario`.
+
+So as of v4.1.0:
+- The `tagging_scenarios.js` infrastructure exists in the repo but no production component consumes it
+- TagPanel still drives the actual reviewer experience using its older hardcoded data
+- Reviewers WILL see the new events Pass Interception (I) and Card in the keyboard handler, since those land in `shortcuts.js` which TagPanel imports — but they may not have full taxonomy support inside the panel itself
+
+### Next step (queued for v4.2.0)
+
+Migrate `TagPanel.jsx` to consume `tagging_scenarios.js` instead of its own hardcoded maps. Compare TagPanel's current maps against the sheet rules first — anywhere they diverge, the sheet is canonical (per 2026-06-11 decision).
+
+### Sheet conflicts deliberately skipped (preserves reviewer muscle memory)
+
+Per the explicit instruction "we will not change the current structure":
+
+| Sheet rule | What MARK keeps |
+|---|---|
+| Tackle = A | Tackle stays K |
+| Separation duel = J | Stays L |
+| Leg stretch duel = U | Stays M |
+| Fifty fifty = By mouse | Stays key 0 |
+| Pass (First time) = Q | Q stays as MISSING_EVENT_KEY — Pass (First time) not added |
+| Pass recovery = P | P stays as Pressure — Pass recovery not added |
+| Pressure start = G | Shares G with Goal Keeper — looks like an attribute, not added |
+
+### Items removed from the OLD ErrorTagModal (not in taxonomy)
+
+- "Wrong Player" — not in the sheet's 17 error types
+- "Confused With" — was effectively a duplicate of "Wrong event"
+
+These were removed from `ErrorTagModal.jsx`, but since that file is dead code the visible effect is nil. When TagPanel gets migrated, the equivalent removals will need to happen there.
+
+---
+
+## Versioning Cadence Rule (NEW, set 2026-06-11)
+
+**`4.1.0 → 4.2.0 → 4.3.0 → ... → 4.9.0 → 5.0.0 → 5.1.0 → ...`**
+
+Every build increments the MIDDLE digit. After 4.9.0, the next is 5.0.0. After 5.9.0 → 6.0.0. Apply this consistently to all four version fields. The build script `scripts/sync-version.js` keeps tauri.conf.json in sync with package.json automatically; Cargo.toml and useUpdateCheck.js currently must be bumped manually (auto-sync gap noted on 2026-06-11 when Cargo.toml was discovered at 2.9.8 while package.json was at 4.0.0 — fixed in this release).
+
+The next 5.0.0 is simply the natural successor to 4.9.0. It is NOT a reservation for a major architecture rewrite.
+
+---
+
+## Roadmap Changes (2026-06-11)
+
+### MARK 5.0.0 architecture migration — CANCELLED
+
+The local-WebSocket-bridge architecture proven in the 2026-06-09 session (see SYNC_PROBLEM_CONTEXT.md) is no longer being pursued. Production sync stays on MARK 4.x indefinitely. The Firebase-quota reduction strategy that was planned for MARK 5.0.0 is therefore also off — quota management for MARK + FIELD goes back to "stay on Firebase, watch usage, optimize FIELD reads if needed, consider Blaze upgrade when quotas force it."
+
+### Fady (PocketBase experiment) — ARCHIVED
+
+The `fady-app` repo (https://github.com/ahmedashraf-cyber/fady-app) was archived on 2026-06-11. Built up to v0.4.3 as a MARK 4.0.0 clone with PocketBase swapped in for Firebase. Key technical finding: PB's HTTP polling at 1500ms coalesces rapid arrow-key presses; only push-based realtime (Firestore's `onSnapshot`, or PB's SSE which we didn't get to) delivers every write. The architectural gap was the reason MARK has remained on Firebase.
+
+Result: no migration off Firebase. See SYNC_PROBLEM_CONTEXT.md for details.
+
+### Going forward, the team owns two repos
+
+- **mark-app** — desktop review app (Tauri 2, React 19), Firebase backend. Current version 4.1.0.
+- **flowops** — FIELD web app for training operations (HTML/JS, Firebase backend).
+
+No experiments. No third repos. No architecture migrations.
+
+### Hard scope rules (set 2026-06-11)
+
+- **Don't change the current MARK structure** — when in doubt, add new things rather than replace existing ones.
+- **The sheet is the source of truth** for the error-correction taxonomy. When TagPanel and the sheet disagree, follow the sheet. The current version of that sheet is the one provided on 2026-06-11 (`Untitled_spreadsheet (1).xlsx`, 465 rules); store any future updates in `src/data/tagging_scenarios.js` rather than hardcoding into components.
+- **Preserve the 3-step (sometimes 4-step) tagging workflow:** event → error type (filtered) → correction (filtered) → optional type qualifier.

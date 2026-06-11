@@ -1,6 +1,6 @@
 # TagPanel — Error Tagging Workflow
 **Source of truth:** `App_Shortcuts.xlsx` Sheet1 (events + extras) × Sheet2 (error corrections)  
-**Last verified:** June 2026  
+**Last verified:** 2026-06-11  
 **File:** `src/components/TagPanel.jsx`
 
 ---
@@ -159,3 +159,71 @@ All data verified against:
 | GK sub-type first | GK has 4 different sub-events with different wrong-event corrections |
 | Per-event filtering | Show only extras relevant to that event — not a global 32-item list |
 | Team selection last | Same pattern as original panel — confirms intent before save |
+
+
+---
+
+## v4.1.0 Status (2026-06-11) — Sheet-Driven Taxonomy Available But Not Yet Wired Into TagPanel
+
+The official error-correction taxonomy is now structured data in the repo at `src/data/tagging_scenarios.js`:
+
+- **465 rules** sourced from `Untitled_spreadsheet (1).xlsx` (provided 2026-06-11)
+- **23 parent events** with shortcuts (see canonical list below)
+- **17 error types** (canonical capitalization from the sheet, not snake_case)
+- **Three filter helpers** exported alongside the raw `TAGGING_SCENARIOS` array:
+  - `getErrorTypesForEvent(eventName)` — Step 2 list, filtered for the event
+  - `getCorrectionsForScenario(eventName, errorType)` — Step 3 list, filtered for (event + error type)
+  - `getTypeQualifiersForCorrection(eventName, errorType, correction)` — Step 4 list, only non-empty for corrections that have qualifiers (Goal keeper variants etc.)
+
+**As of v4.1.0, `TagPanel.jsx` still uses its own hardcoded constants** (`ERROR_TYPES`, `WRONG_EVENT_MAP`, `WRONG_EXTRAS`, `MISSING_EXTRAS`, `EXTRAS`, `GK_SUBTYPES`, `GK_EXTRAS`, `GK_WRONG_EXTRAS`, `GK_WRONG_EVENT_MAP`). The new helpers are sitting in the repo waiting to be consumed.
+
+### Why this was deferred
+
+The v4.1.0 work mistakenly rewired `ErrorTagModal.jsx` instead of `TagPanel.jsx` — `ErrorTagModal.jsx` is dead code (never imported by any page). The data file infrastructure landed correctly; the consumer migration is pending.
+
+### v4.2.0 migration plan (queued)
+
+1. Read `TagPanel.jsx`'s current hardcoded maps and tabulate what they produce for each event
+2. Diff that against `tagging_scenarios.js` to find anywhere TagPanel's data is stale or inconsistent with the latest sheet
+3. Replace the hardcoded `WRONG_EVENT_MAP`, `WRONG_EXTRAS`, etc., with calls to the helpers from `tagging_scenarios.js`
+4. Keep TagPanel's existing UI shape exactly the same (the keyed grid layout, the 1–9 → Q,W,E,R… key sequencing, the team selection step, auto-save behavior for Missing/Extra event) — only swap the data layer
+5. Delete the dead `src/components/ErrorTagModal.jsx`
+
+### Canonical event list (from the sheet, as of 2026-06-11)
+
+| Event | Shortcut |
+|---|---|
+| Ball recovery | R |
+| Block | B |
+| Card | (mouse) |
+| Clearance | F |
+| Dribble | D |
+| Fifty fifty | (sheet says mouse — MARK keeps key 0) |
+| Foul committed | X |
+| Goal Keeper | G |
+| Hold up duel | H |
+| Interception | V |
+| Leg stretch duel | (sheet says U — MARK keeps M) |
+| Miscontrol | T |
+| Pass | E |
+| Pass (First time) | (sheet says Q — MARK skipped, Q is Missing Event) |
+| Pass interception | I |
+| Pass recovery | (sheet says P — MARK skipped, P is Pressure) |
+| Positioning duel | Y |
+| Pressure start | (sheet says G — shares with Goal Keeper, likely an attribute) |
+| Reception | W |
+| Separation duel | (sheet says J — MARK keeps L) |
+| Shield | C |
+| Shot | S |
+| Tackle | (sheet says A — MARK keeps K) |
+
+### Canonical error-type list (17, in sheet order)
+
+Wrong event · Missing event · Extra event · Wrong outcome · Wrong height · Wrong direction · Wrong body part · Wrong technique · Wrong GK body state · Wrong type · Wrong kind · Wrong side · Wrong extra · Missing extra · Not needed extra · Missing Outcome · Not needed Outcome
+
+Frequency in the sheet (largest first): Wrong event 141 · Wrong body part 66 · Wrong type 60 · Wrong technique 32 · Wrong extra 30 · Missing event 20 · Extra event 20 · Wrong direction 20 · Wrong outcome 18 · Missing extra 16 · Not needed extra 16 · Wrong GK body state 12 · Wrong height 6 · Missing Outcome 2 · Not needed Outcome 2 · Wrong kind 2 · Wrong side 2.
+
+### Removed concepts (not in the official taxonomy)
+
+- "Wrong Player" — was a MARK-only option, not in the sheet. Will be removed from TagPanel during v4.2.0 migration unless explicitly kept by request.
+- "Confused With" — duplicated "Wrong event". Will be removed during migration.

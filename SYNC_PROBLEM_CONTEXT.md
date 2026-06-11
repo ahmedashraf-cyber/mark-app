@@ -1,4 +1,54 @@
 <!-- ============================================================= -->
+<!-- SESSION 2026-06-11 — FADY EXPERIMENT ARCHIVED · MARK 5.0.0 MIGRATION CANCELLED -->
+<!-- ============================================================= -->
+
+## Latest Session: 2026-06-11 — Architecture Decisions Final
+
+### TL;DR
+
+1. **Fady (the PocketBase clone of MARK 4.0.0) is archived.** The fady-app repo (https://github.com/ahmedashraf-cyber/fady-app) was set to read-only on 2026-06-11.
+2. **MARK 5.0.0 local-WebSocket-bridge migration is cancelled.** Production sync stays on the current MARK 4.x Firebase architecture indefinitely.
+3. **Going forward: MARK 4.x + FIELD only.** No experiments, no migrations.
+
+### Why Fady was archived
+
+Built fady-app to test whether PocketBase could be a drop-in replacement for Firebase in MARK. Iterated up to v0.4.3. Key technical finding from extensive testing on 2026-06-10/11:
+
+- **Polling-based sync (PocketBase HTTP polling at 1500 ms) coalesces rapid writes.** When a reviewer presses an arrow key three times quickly, MARK app writes three `navCommand` PATCHes to PocketBase, but PB stores ONE object per record — only the latest `ts` survives. Fady's bridge polled every 1.5 s and saw only the final state, so only one nav step propagated to Tag Once. Two out of three arrow presses were silently dropped.
+- **Push-based sync (Firestore `onSnapshot` listeners) does not have this problem.** Every write fires the listener within ~100 ms; rapid writes are sequenced rather than coalesced. This is the fundamental reason MARK uses Firestore and the reason the polling-port broke down.
+- **Mid-experiment Fady bug we DID fix:** the bridge cached `activeSessionId` at startup and never re-checked. When MARK created a new session, the bridge kept polling the old (now stale) session ID, so it never saw the new writes. v0.4.3 fixed this by re-querying the latest active session every poll. After this fix, Fady worked for single arrow presses but still failed on rapid sequences (the architectural issue above).
+
+PocketBase does offer SSE realtime subscriptions (the equivalent of Firestore listeners) but we did not implement that route before scrapping the experiment.
+
+### Why MARK 5.0.0 was cancelled
+
+The 2026-06-09 session in this file proved a local-WebSocket-bridge architecture as a way to drop Firestore usage ~99%. That plan is no longer being pursued. Reasons (per 2026-06-11 conversation):
+
+- Firebase quota management is solvable by upgrading to Blaze (pay-as-you-go) if needed, rather than re-architecting
+- The MARK 4.x sync architecture is stable and well-understood by the team
+- The team only wants two repos in flight (mark-app + flowops); no third, no architecture experiments
+- The "5.0.0" version number is now reserved for the natural successor to 4.9.0 — not for any architectural milestone
+
+### Sync code summary (MARK 4.x — current production, no longer changing)
+
+The full sync system lives in three files:
+
+1. **`src/firebase/config.js`** — initializes the Firebase app with `hudl-training-ops` project; exports `db`, `auth`.
+2. **`src/hooks/useSync.js`** — runs in MARK app. Exports `{ syncNavigation, syncSetPlaying, syncSeek }`. Writes three command types to the session doc:
+   - `navCommand: { action, shift, ts }` — for arrow keys (relative nav)
+   - `seekCommand: { currentTime, ts }` — for scrubber drag (absolute)
+   - `posSync: { currentTime, playing, ts }` — periodic heartbeat (every 1000 ms while playing) + on play/pause toggle
+3. **`src-tauri/src/bridge_script.js`** — injected into Tag Once via asar patch. Loads Firebase compat SDKs from CDN, signs in (auto-seeds persistence from `__ID_TOKEN__`/`__REFRESH_TOKEN__` placeholders substituted by Rust at inject time), attaches a video listener, and uses `db.collection('mark_sessions').doc(sid).onSnapshot(...)` to react to commands in real time. Also writes `collectionAppTime` back (throttled to 1/sec) so MARK app sees Tag Once's playback position. Polls for `<video>` element every 1 s in case it appears late.
+
+If MARK's sync ever misbehaves in the future, the diagnostic path is in this file — but DO NOT re-attempt the v5.0.0 WebSocket migration or any PocketBase fork.
+
+### Note on the older 2026-06-09 session below
+
+The "MARK 5.0.0 ARCHITECTURE PROVEN" block below documents a proof-of-concept that worked technically. Keep it for reference — but it is no longer a roadmap item.
+
+---
+
+<!-- ============================================================= -->
 <!-- SESSION 2026-06-09 - MARK 5.0.0 ARCHITECTURE PROVEN -->
 <!-- ============================================================= -->
 

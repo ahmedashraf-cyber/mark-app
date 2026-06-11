@@ -1,5 +1,5 @@
 # MARK — Review App
-> **v2.9.8** · Tauri 2 + React 19 · Windows desktop · Hudl Egypt
+> **v4.1.0** · Tauri 2 + React 19 · Windows desktop · Hudl Egypt
 
 MARK is a Windows desktop app for Batch Trainers at Hudl Egypt. Reviewers watch match video, tag collector errors using the same keyboard shortcuts as the Statsbomb collection app, and quality scores feed automatically into [FIELD](https://ahmedashraf-cyber.github.io/flowops/index.html).
 
