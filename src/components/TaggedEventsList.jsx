@@ -142,7 +142,11 @@ function CommentBox({ tag, onSave, onClose }) {
         ref={inputRef}
         value={text}
         onChange={e => setText(e.target.value)}
-        onKeyDown={e => { if (e.key === 'Enter') { onSave(tag.id, text); onClose() } }}
+        onKeyDown={e => {
+          e.stopPropagation()
+          if (e.key === 'Enter') { onSave(tag.id, text); onClose() }
+          if (e.key === 'Escape') { onClose() }
+        }}
         placeholder="Add a note… (Enter to save)"
         style={{
           flex: 1, padding: '5px 10px', borderRadius: 6,
@@ -174,23 +178,22 @@ function CommentBox({ tag, onSave, onClose }) {
 function TimelineRow({ label, tags, videoDuration, currentTime, selectedId, onCardClick, onCommentClick, homeTeam }) {
   const rowRef = useRef(null)
 
-  // Auto-scroll to card closest to currentTime
+  // Auto-scroll to keep current position visible
   useEffect(() => {
-    if (!rowRef.current || tags.length === 0 || !videoDuration) return
-    const closest = tags.reduce((prev, curr) =>
-      Math.abs(curr.videoTimeSec - currentTime) < Math.abs(prev.videoTimeSec - currentTime) ? curr : prev
-    )
-    const pct = closest.videoTimeSec / videoDuration
-    const row = rowRef.current
-    const targetX = pct * row.scrollWidth - row.clientWidth / 2
-    row.scrollTo({ left: Math.max(0, targetX), behavior: 'smooth' })
-  }, [currentTime, videoDuration])
+    if (!rowRef.current || tags.length === 0) return
+    const CARD_W = 112
+    const GAP = 12
+    const idx = tags.findIndex(t => t.videoTimeSec > currentTime)
+    const targetIdx = idx === -1 ? tags.length - 1 : Math.max(0, idx - 1)
+    const targetX = targetIdx * (CARD_W + GAP) - rowRef.current.clientWidth / 2 + CARD_W / 2
+    rowRef.current.scrollTo({ left: Math.max(0, targetX), behavior: 'smooth' })
+  }, [currentTime])
 
   return (
     <div style={{
       display: 'flex', alignItems: 'center',
       borderBottom: '1px solid var(--b-1)',
-      minHeight: 56,
+      minHeight: 76,
     }}>
       {/* Team badge */}
       <div style={{
@@ -228,89 +231,78 @@ function TimelineRow({ label, tags, videoDuration, currentTime, selectedId, onCa
       <div
         ref={rowRef}
         style={{
-          flex: 1, position: 'relative',
+          flex: 1,
           overflowX: 'auto', overflowY: 'visible',
-          height: 56,
+          height: 76,
           scrollbarWidth: 'none',
+          display: 'flex', alignItems: 'center',
         }}
       >
-        {/* The line */}
+        {/* Sequential cards — left to right in time order, fixed spacing */}
         <div style={{
-          position: 'absolute',
-          left: 0, right: 0,
-          top: '65%',
-          height: 1,
-          background: 'var(--b-2)',
-          minWidth: '100%',
-        }}/>
+          display: 'flex', alignItems: 'center',
+          gap: 10, padding: '0 12px',
+          minWidth: 'max-content', height: '100%',
+        }}>
+          {tags.map(tag => {
+            const extras = tag.extras || []
+            const isSelected = tag.id === selectedId
+            const isPast = tag.videoTimeSec <= currentTime
 
-        {/* Cards */}
-        {tags.map(tag => {
-          const pct = videoDuration > 0 ? (tag.videoTimeSec / videoDuration) * 100 : 0
-          const extras = tag.extras || []
-          const isSelected = tag.id === selectedId
-
-          return (
-            <div
-              key={tag.id}
-              onClick={() => onCardClick(tag)}
-              onContextMenu={(e) => { e.preventDefault(); onCommentClick(tag) }}
-              style={{
-                position: 'absolute',
-                left: `${pct}%`,
-                top: '50%',
-                transform: 'translate(-50%, -50%)',
-                display: 'flex', flexDirection: 'column', alignItems: 'center',
-                cursor: 'pointer',
-                zIndex: isSelected ? 10 : 5,
-              }}
-            >
-              {/* Dots above card */}
-              {extras.length > 0 && (
-                <div style={{
-                  display: 'flex', gap: 2, marginBottom: 3,
-                  position: 'absolute', top: -14,
-                  left: '50%', transform: 'translateX(-50%)',
-                }}>
+            return (
+              <div
+                key={tag.id}
+                onClick={() => onCardClick(tag)}
+                onContextMenu={(e) => { e.preventDefault(); onCommentClick(tag) }}
+                style={{
+                  display: 'flex', flexDirection: 'column', alignItems: 'center',
+                  gap: 3, cursor: 'pointer', flexShrink: 0,
+                  opacity: isPast ? 1 : 0.4,
+                  transition: 'opacity .2s',
+                }}
+              >
+                {/* Dots above */}
+                <div style={{ display: 'flex', gap: 2, minHeight: 7 }}>
                   {extras.map((eid, i) => (
                     <div key={eid} style={{
                       width: 5, height: 5, borderRadius: '50%',
                       background: getDotColor(i),
-                      boxShadow: `0 0 3px ${getDotColor(i)}88`,
                     }}/>
                   ))}
                 </div>
-              )}
-
-              {/* Card */}
-              <div
-                title={tag.triggeredEventLabel + (tag.comment ? '\n💬 ' + tag.comment : '')}
-                style={{
-                  padding: '3px 8px',
-                  borderRadius: 5,
-                  border: isSelected
-                    ? '1.5px solid var(--p2)'
-                    : tag.comment
-                      ? '1.5px solid #30D158'
-                      : '1.5px solid var(--b-2)',
-                  background: isSelected ? 'var(--p2)' : 'var(--bg-2)',
-                  color: isSelected ? '#fff' : 'var(--t-1)',
-                  fontSize: 11, fontWeight: isSelected ? 700 : 500,
-                  fontFamily: 'DM Sans, sans-serif',
-                  whiteSpace: 'nowrap',
-                  maxWidth: 68,
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  boxShadow: isSelected
-                    ? '0 0 8px rgba(232,89,12,0.5)'
-                    : tag.comment ? '0 0 5px rgba(48,209,88,0.3)' : 'none',
-                  transition: 'all .12s',
-                }}>
-                {tag.triggeredEventLabel}
+                {/* Card */}
+                <div
+                  title={tag.triggeredEventLabel + (tag.comment ? ' — ' + tag.comment : '')}
+                  style={{
+                    padding: '4px 8px',
+                    borderRadius: 5,
+                    border: isSelected
+                      ? '1.5px solid var(--p2)'
+                      : tag.comment
+                        ? '1.5px solid #30D158'
+                        : '1.5px solid var(--b-2)',
+                    background: isSelected ? 'var(--p2)' : 'var(--bg-2)',
+                    color: isSelected ? '#fff' : 'var(--t-1)',
+                    fontSize: 11, fontWeight: isSelected ? 700 : 500,
+                    fontFamily: 'DM Sans, sans-serif',
+                    whiteSpace: 'nowrap',
+                    width: 90,
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    textAlign: 'center',
+                    boxShadow: isSelected ? '0 0 8px rgba(232,89,12,0.5)' : 'none',
+                    transition: 'all .12s',
+                  }}>
+                  {tag.triggeredEventLabel}
+                </div>
+                {/* Timestamp */}
+                <div style={{ fontSize: 9, color: 'var(--t-3)', fontFamily: 'JetBrains Mono, monospace' }}>
+                  {fmt(tag.videoTimeSec)}
+                </div>
               </div>
-            </div>
-          )
-        })}
+            )
+          })}
+        </div>
       </div>
     </div>
   )
