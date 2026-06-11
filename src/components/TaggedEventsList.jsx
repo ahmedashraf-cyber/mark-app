@@ -109,8 +109,69 @@ function DetailPanel({ tag, onEdit, onDelete, onClose, readOnly = false }) {
   )
 }
 
+// ── Comment Box ──────────────────────────────────────────────────────────────
+function CommentBox({ tag, onSave, onClose }) {
+  const [text, setText] = useState(tag.comment || '')
+  const inputRef = useRef(null)
+
+  useEffect(() => {
+    inputRef.current?.focus()
+    function onKey(e) { if (e.key === 'Escape') onClose() }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onClose])
+
+  return (
+    <div style={{
+      position: 'absolute', top: 0, left: 0, right: 0, zIndex: 200,
+      background: 'rgba(10,10,18,0.97)', backdropFilter: 'blur(8px)',
+      borderBottom: '1px solid var(--b-1)',
+      padding: '10px 16px',
+      display: 'flex', alignItems: 'center', gap: 10,
+      animation: 'slideDown .15s ease',
+    }}>
+      <span style={{
+        fontFamily: 'JetBrains Mono, monospace', fontSize: 11, fontWeight: 700,
+        background: 'var(--p2)', color: '#fff',
+        borderRadius: 5, padding: '2px 7px', flexShrink: 0,
+      }}>{tag.triggeredKey || '•'}</span>
+      <span style={{ fontFamily: 'Inter', fontWeight: 700, fontSize: 13, color: 'var(--t-1)', flexShrink: 0 }}>
+        {tag.triggeredEventLabel}
+      </span>
+      <input
+        ref={inputRef}
+        value={text}
+        onChange={e => setText(e.target.value)}
+        onKeyDown={e => { if (e.key === 'Enter') { onSave(tag.id, text); onClose() } }}
+        placeholder="Add a note… (Enter to save)"
+        style={{
+          flex: 1, padding: '5px 10px', borderRadius: 6,
+          border: '1px solid var(--b-2)', background: 'var(--bg-3)',
+          color: 'var(--t-1)', fontSize: 12, fontFamily: 'DM Sans, sans-serif',
+          outline: 'none',
+        }}
+      />
+      <button onClick={() => { onSave(tag.id, text); onClose() }} style={{
+        padding: '5px 12px', borderRadius: 6, cursor: 'pointer',
+        border: '1px solid rgba(48,209,88,0.4)', background: 'rgba(48,209,88,0.1)',
+        color: '#30D158', fontSize: 11, fontWeight: 600, flexShrink: 0,
+      }}>Save</button>
+      {text && <button onClick={() => { onSave(tag.id, ''); onClose() }} style={{
+        padding: '5px 10px', borderRadius: 6, cursor: 'pointer',
+        border: '1px solid rgba(255,69,58,0.3)', background: 'rgba(255,69,58,0.08)',
+        color: '#FF453A', fontSize: 11, fontWeight: 600, flexShrink: 0,
+      }}>Clear</button>}
+      <button onClick={onClose} style={{
+        padding: '5px 8px', borderRadius: 6, cursor: 'pointer',
+        border: '1px solid var(--b-2)', background: 'transparent',
+        color: 'var(--t-3)', fontSize: 11, flexShrink: 0,
+      }}>✕</button>
+    </div>
+  )
+}
+
 // ── Timeline Row ──────────────────────────────────────────────────────────────
-function TimelineRow({ label, tags, videoDuration, currentTime, selectedId, onCardClick, homeTeam }) {
+function TimelineRow({ label, tags, videoDuration, currentTime, selectedId, onCardClick, onCommentClick, homeTeam }) {
   const rowRef = useRef(null)
 
   // Auto-scroll to card closest to currentTime
@@ -193,6 +254,7 @@ function TimelineRow({ label, tags, videoDuration, currentTime, selectedId, onCa
             <div
               key={tag.id}
               onClick={() => onCardClick(tag)}
+              onContextMenu={(e) => { e.preventDefault(); onCommentClick(tag) }}
               style={{
                 position: 'absolute',
                 left: `${pct}%`,
@@ -221,22 +283,29 @@ function TimelineRow({ label, tags, videoDuration, currentTime, selectedId, onCa
               )}
 
               {/* Card */}
-              <div style={{
-                padding: '3px 8px',
-                borderRadius: 5,
-                border: isSelected
-                  ? '1.5px solid var(--p2)'
-                  : '1.5px solid var(--b-2)',
-                background: isSelected
-                  ? 'var(--p2)'
-                  : 'var(--bg-2)',
-                color: isSelected ? '#fff' : 'var(--t-1)',
-                fontSize: 11, fontWeight: isSelected ? 700 : 500,
-                fontFamily: 'DM Sans, sans-serif',
-                whiteSpace: 'nowrap',
-                boxShadow: isSelected ? '0 0 8px rgba(232,89,12,0.5)' : 'none',
-                transition: 'all .12s',
-              }}>
+              <div
+                title={tag.triggeredEventLabel + (tag.comment ? '\n💬 ' + tag.comment : '')}
+                style={{
+                  padding: '3px 8px',
+                  borderRadius: 5,
+                  border: isSelected
+                    ? '1.5px solid var(--p2)'
+                    : tag.comment
+                      ? '1.5px solid #30D158'
+                      : '1.5px solid var(--b-2)',
+                  background: isSelected ? 'var(--p2)' : 'var(--bg-2)',
+                  color: isSelected ? '#fff' : 'var(--t-1)',
+                  fontSize: 11, fontWeight: isSelected ? 700 : 500,
+                  fontFamily: 'DM Sans, sans-serif',
+                  whiteSpace: 'nowrap',
+                  maxWidth: 68,
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  boxShadow: isSelected
+                    ? '0 0 8px rgba(232,89,12,0.5)'
+                    : tag.comment ? '0 0 5px rgba(48,209,88,0.3)' : 'none',
+                  transition: 'all .12s',
+                }}>
                 {tag.triggeredEventLabel}
               </div>
             </div>
@@ -253,6 +322,8 @@ export default function TaggedEventsList({
   onEdit, onDelete, onSeek, readOnly = false,
 }) {
   const [selectedTag, setSelectedTag] = useState(null)
+  const [commentTag, setCommentTag] = useState(null)
+  const [comments, setComments] = useState({}) // tagId -> comment string
 
   // Parse team names from matchName — split on ' vs '
   const [homeTeam, awayTeam] = useMemo(() => {
@@ -261,13 +332,18 @@ export default function TaggedEventsList({
     return [parts[0]?.trim() || 'Home', parts[1]?.trim() || 'Away']
   }, [matchName])
 
-  const homeTags = (tags || []).filter(t => t.team === 'home')
-  const awayTags = (tags || []).filter(t => t.team === 'away')
+  const tagsWithComments = (tags || []).map(t => ({ ...t, comment: comments[t.id] || t.comment || '' }))
+  const homeTags = tagsWithComments.filter(t => t.team === 'home')
+  const awayTags = tagsWithComments.filter(t => t.team === 'away')
 
   function handleCardClick(tag) {
     setSelectedTag(prev => prev?.id === tag.id ? null : tag)
     // In readOnly mode, seek to the timestamp on click
     if (onSeek) onSeek(tag.videoTimeSec || 0)
+  }
+
+  function handleSaveComment(tagId, text) {
+    setComments(prev => ({ ...prev, [tagId]: text }))
   }
 
   function handleEdit(tag) {
@@ -289,8 +365,17 @@ export default function TaggedEventsList({
       position: 'relative',
       overflow: 'hidden',
     }}>
+      {/* Comment box — slides down on right-click */}
+      {commentTag && (
+        <CommentBox
+          tag={commentTag}
+          onSave={handleSaveComment}
+          onClose={() => setCommentTag(null)}
+        />
+      )}
+
       {/* Detail panel — slides down when card selected */}
-      {selectedTag && (
+      {selectedTag && !commentTag && (
         <DetailPanel
           tag={selectedTag}
           onEdit={handleEdit}
@@ -308,6 +393,7 @@ export default function TaggedEventsList({
         currentTime={currentTime}
         selectedId={selectedTag?.id}
         onCardClick={handleCardClick}
+        onCommentClick={(tag) => { setSelectedTag(null); setCommentTag(tag) }}
         homeTeam={homeTeam}
       />
 
@@ -319,6 +405,7 @@ export default function TaggedEventsList({
         currentTime={currentTime}
         selectedId={selectedTag?.id}
         onCardClick={handleCardClick}
+        onCommentClick={(tag) => { setSelectedTag(null); setCommentTag(tag) }}
         homeTeam={homeTeam}
       />
 
