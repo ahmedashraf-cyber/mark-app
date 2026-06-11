@@ -2,6 +2,9 @@
 
 use std::sync::{Arc, Mutex};
 use tauri::command;
+use futures_util::{SinkExt, StreamExt};
+use tokio::net::TcpListener;
+use tokio_tungstenite::accept_async;
 
 const BRIDGE_SCRIPT: &str = include_str!("bridge_script.js");
 
@@ -133,6 +136,68 @@ async fn start_video_server(video_path: Arc<Mutex<Option<String>>>) -> u16 {
     });
 
     port
+}
+
+// ─── WebSocket sync server (localhost:9001) ───────────────────────────────────
+// Receives sync commands from MARK's useSync.js and broadcasts them to the
+// bridge running inside the collection app. Zero Firebase usage for sync.
+// All 55 reviewers run their own independent instance — no shared server.
+
+use std::sync::atomic::{AtomicUsize, Ordering};
+use tokio::sync::broadcast;
+
+static CLIENT_ID: AtomicUsize = AtomicUsize::new(0);
+
+async fn start_ws_server() {
+    let (tx, _rx) = broadcast::channel::<String>(256);
+    let tx = std::sync::Arc::new(tx);
+
+    let listener = match TcpListener::bind("127.0.0.1:9001").await {
+        Ok(l) => l,
+        Err(e) => {
+            eprintln!("[MARK WS] Could not bind to port 9001: {e}");
+            return;
+        }
+    };
+    println!("[MARK WS] sync server listening on ws://127.0.0.1:9001");
+
+    loop {
+        let (stream, addr) = match listener.accept().await {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        let tx_clone = tx.clone();
+        let mut rx = tx.subscribe();
+
+        tokio::spawn(async move {
+            let id = CLIENT_ID.fetch_add(1, Ordering::SeqCst);
+            println!("[MARK WS] client {} connected from {}", id, addr);
+
+            let ws_stream = match accept_async(stream).await {
+                Ok(ws) => ws,
+                Err(e) => { eprintln!("[MARK WS] handshake error: {e}"); return; }
+            };
+
+            let (mut write, mut read) = ws_stream.split();
+
+            // Spawn a task to forward broadcast messages TO this client (bridge)
+            let fwd = tokio::spawn(async move {
+                while let Ok(msg) = rx.recv().await {
+                    let _ = write.send(tokio_tungstenite::tungstenite::Message::Text(msg.into())).await;
+                }
+            });
+
+            // Read messages FROM this client (MARK's useSync) and broadcast to all
+            while let Some(Ok(msg)) = read.next().await {
+                if let tokio_tungstenite::tungstenite::Message::Text(text) = msg {
+                    let _ = tx_clone.send(text.to_string());
+                }
+            }
+
+            println!("[MARK WS] client {} disconnected", id);
+            fwd.abort();
+        });
+    }
 }
 
 // ─── Tauri command: set video path and return server URL ──────────────────────
@@ -873,6 +938,9 @@ fn main() {
     let rt = tokio::runtime::Runtime::new().unwrap();
     let port = rt.block_on(start_video_server(video_path_for_server));
     *port_holder_for_main.lock().unwrap() = port;
+
+    // Start localhost WebSocket sync server on port 9001
+    rt.spawn(start_ws_server());
 
     std::thread::spawn(move || {
         rt.block_on(std::future::pending::<()>());

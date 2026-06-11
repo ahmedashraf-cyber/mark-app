@@ -1,22 +1,16 @@
 (async function(){
   if(window.__MARK_BRIDGE__){console.log('[MARK] bridge already running');return;}
   window.__MARK_BRIDGE__=true;
-  console.log('[MARK] bridge starting');
+  console.log('[MARK] bridge starting (v4.3.0 — localhost WebSocket)');
 
-  // ── Optional auto-auth tokens (substituted by MARK at inject time) ────────
-  // When the bridge is embedded via asar patch, these stay as literal "__..."
-  // strings. The script detects this and shows the manual sign-in panel only
-  // for the first sign-in on this PC — Firebase persists the auth after that.
+  // ── Optional auto-auth tokens (for Firebase session lookup only) ──────────
   const __MARK_FB_API_KEY__ = 'AIzaSyB-HWh2kJgoPDwzYhZWgW6pi8uZK8u9K7U';
   const __MARK_ID_TOKEN__ = '__ID_TOKEN__';
   const __MARK_REFRESH_TOKEN__ = '__REFRESH_TOKEN__';
   const __MARK_UID__ = '__USER_UID__';
   const __MARK_EMAIL__ = '__USER_EMAIL__';
 
-  // Pre-seed Firebase persistence BEFORE the SDK loads. When firebase.auth()
-  // initializes below, it reads localStorage, finds this user, refreshes the
-  // ID token automatically via the refresh token, and fires onAuthStateChanged
-  // with a valid user. No panel ever shown when this path works.
+  // Pre-seed Firebase persistence for the session lookup (auth only)
   function seedAuthPersistence(){
     try {
       if (!__MARK_REFRESH_TOKEN__ || __MARK_REFRESH_TOKEN__.startsWith('__')) return false;
@@ -47,12 +41,11 @@
   }
   seedAuthPersistence();
 
-  // Wait for document body
   if (!document.body) {
     await new Promise(r => document.addEventListener('DOMContentLoaded', r, { once: true }));
   }
 
-  // Load Firebase SDKs from CDN
+  // Load Firebase SDKs — used ONLY for session lookup (one read per half)
   const load = src => new Promise((ok, fail) => {
     const s = document.createElement('script');
     s.src = src; s.onload = ok; s.onerror = fail;
@@ -119,70 +112,100 @@
     }
   }
 
-  // ── Session listener ──────────────────────────────────────────────────────
+  // ── localhost WebSocket connection ────────────────────────────────────────
+  // All sync commands (navCommand, posSync, seekCommand) arrive here.
+  // Firebase is NOT used for sync — zero writes per keypress.
+  const WS_PORT = 9001;
+  let ws = null;
+  let wsConnected = false;
+
+  function connectWs(video) {
+    if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
+    ws = new WebSocket('ws://127.0.0.1:' + WS_PORT);
+    ws.onopen = () => {
+      wsConnected = true;
+      console.log('[MARK] bridge WebSocket connected to localhost:' + WS_PORT);
+      // Update panel to show connected
+      updatePanelStatus('connected');
+    };
+    ws.onclose = () => {
+      wsConnected = false;
+      console.log('[MARK] bridge WebSocket closed — retrying in 2s');
+      updatePanelStatus('disconnected');
+      setTimeout(() => connectWs(video), 2000);
+    };
+    ws.onerror = () => {
+      wsConnected = false;
+    };
+    ws.onmessage = (event) => {
+      try {
+        const msg = JSON.parse(event.data);
+        handleSyncMessage(msg, video);
+      } catch(e) {
+        console.error('[MARK] bad WebSocket message:', e);
+      }
+    };
+  }
+
+  // Tracks last timestamps to ignore duplicate/out-of-order messages
+  let lastNav = 0, lastPos = 0, lastSeek = 0;
+
+  function handleSyncMessage(msg, video) {
+    if (!video) return;
+
+    if (msg.type === 'navCommand' && msg.ts > lastNav) {
+      lastNav = msg.ts;
+      const step = msg.shift ? 0.04 : 0.4;
+      if (msg.action === 'forward')       video.currentTime = Math.max(0, video.currentTime + step);
+      else if (msg.action === 'backward') video.currentTime = Math.max(0, video.currentTime - step);
+    }
+
+    else if (msg.type === 'seekCommand' && msg.ts > lastSeek) {
+      lastSeek = msg.ts;
+      video.currentTime = msg.currentTime;
+    }
+
+    else if (msg.type === 'posSync' && msg.ts > lastPos) {
+      lastPos = msg.ts;
+      if (msg.playing && video.paused) video.play();
+      else if (!msg.playing && !video.paused) video.pause();
+      const drift = Math.abs(video.currentTime - msg.currentTime);
+      if (drift > 1.5) video.currentTime = msg.currentTime;
+    }
+
+    else if (msg.type === 'eventCountRequest') {
+      const count = countEventsInRange(msg.matchId, msg.startTs, msg.endTs);
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'eventCountResponse', count, ts: Date.now() }));
+      }
+    }
+
+    else if (msg.type === 'getVideoTimeRequest') {
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'getVideoTimeResponse', time: video.currentTime, ts: Date.now() }));
+      }
+    }
+  }
+
+  // ── Status panel (replaces old Firebase-connected panel) ─────────────────
+  function updatePanelStatus(status) {
+    if (panel.style.display === 'none') return; // don't show if auth is done
+    const dot = panel.querySelector('#ws_dot');
+    const label = panel.querySelector('#ws_label');
+    if (!dot || !label) return;
+    if (status === 'connected') {
+      dot.style.background = '#30D158';
+      label.textContent = 'Sync connected';
+    } else {
+      dot.style.background = '#FF453A';
+      label.textContent = 'Sync disconnected';
+    }
+  }
+
+  // ── Session listener (Firebase — ONE read per half to find session) ────────
   let attachedVideo = null;
   let unsubActiveQuery = null;
-  let unsubSessionDoc = null;
   let currentSid = null;
-
-  function listenToSession(sid, video) {
-    let lastNav = 0, lastPos = 0, lastSeek = 0, lastCount = 0;
-    let lastTimeWrite = 0, lastTimeReq = 0;
-
-    const onTimeUpdate = () => {
-      const now = Date.now();
-      if (now - lastTimeWrite < 1000) return;
-      lastTimeWrite = now;
-      db.collection('mark_sessions').doc(sid).set({
-        collectionAppTime: { currentTime: video.currentTime * 1000, ts: now }
-      }, { merge: true }).catch(e => console.error('[MARK] collectionAppTime write failed:', e));
-    };
-    video.addEventListener('timeupdate', onTimeUpdate);
-
-    const unsub = db.collection('mark_sessions').doc(sid).onSnapshot(snap => {
-      if (!snap.exists) return;
-      const data = snap.data();
-
-      const c = data.navCommand;
-      if (c && c.ts > lastNav) {
-        lastNav = c.ts;
-        const step = c.shift ? 0.04 : 0.4;
-        if (c.action === 'forward')       video.currentTime = Math.max(0, video.currentTime + step);
-        else if (c.action === 'backward') video.currentTime = Math.max(0, video.currentTime - step);
-      }
-
-      const sk = data.seekCommand;
-      if (sk && sk.ts > lastSeek) { lastSeek = sk.ts; video.currentTime = sk.currentTime; }
-
-      const p = data.posSync;
-      if (p && p.ts > lastPos) {
-        lastPos = p.ts;
-        if (p.playing && video.paused) video.play();
-        else if (!p.playing && !video.paused) video.pause();
-        const drift = Math.abs(video.currentTime - p.currentTime);
-        if (drift > 1.5) video.currentTime = p.currentTime;
-      }
-
-      const tvReq = data.getVideoTimeRequest;
-      if (tvReq && tvReq.ts > lastTimeReq) {
-        lastTimeReq = tvReq.ts;
-        db.collection('mark_sessions').doc(sid).update({
-          getVideoTimeResponse: { time: video.currentTime, ts: Date.now() }
-        });
-      }
-
-      const req = data.eventCountRequest;
-      if (req && req.ts > lastCount) {
-        lastCount = req.ts;
-        const count = countEventsInRange(req.matchId, req.startTs, req.endTs);
-        db.collection('mark_sessions').doc(sid).update({
-          eventCountResponse: { count, ts: Date.now() }
-        });
-      }
-    }, e => console.error('[MARK] snapshot error:', e));
-
-    return () => { video.removeEventListener('timeupdate', onTimeUpdate); unsub(); };
-  }
 
   function attachVideo(video, user) {
     if (attachedVideo === video) return;
@@ -191,9 +214,12 @@
     video.addEventListener('volumechange', () => { if (!video.muted) video.muted = true; });
     console.log('[MARK] video attached');
 
+    // Connect WebSocket to localhost
+    connectWs(video);
+
     if (unsubActiveQuery) unsubActiveQuery();
 
-    // Find the user's most recent active session
+    // ONE Firestore query to find the active session — then we're done with Firebase for sync
     unsubActiveQuery = db.collection('mark_sessions')
       .where('reviewerId', '==', user.uid)
       .onSnapshot(snap => {
@@ -207,20 +233,17 @@
         });
 
         if (!best) {
-          if (unsubSessionDoc) { unsubSessionDoc(); unsubSessionDoc = null; }
           currentSid = null;
           return;
         }
-        if (best.id === currentSid && unsubSessionDoc) return;
-
-        if (unsubSessionDoc) unsubSessionDoc();
+        if (best.id === currentSid) return;
         currentSid = best.id;
         console.log('[MARK] connected to session', currentSid);
-        unsubSessionDoc = listenToSession(currentSid, video);
+        // Session found — WebSocket already connected, sync is live
       }, e => console.error('[MARK] active session query error:', e));
   }
 
-  // Poll for the video element (handles late-arriving DOM + navigation between matches)
+  // Poll for the video element
   setInterval(() => {
     if (!auth.currentUser) return;
     const v = document.querySelector('video');
