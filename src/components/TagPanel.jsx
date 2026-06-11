@@ -1,134 +1,108 @@
 import { useState, useEffect } from 'react'
 import { TORNADO_EVENTS, MISSING_EVENT_KEY } from '../data/shortcuts'
+import { TAGGING_SCENARIOS } from '../data/tagging_scenarios'
 
 // ─── key sequence for lists ───────────────────────────────────────────────────
 const KEYS = '1234567890QWERTYUIOPASDFGHJKLZXCVBNM'
 
-// ─── per-event: missing / not-needed extras ───────────────────────────────────
-const MISSING_EXTRAS = {
-  pass:              ['Through ball','Backheel','Injury clearance','Launch','Miscommunication'],
-  shot:              ['Aerial won','Backheel'],
-  miscontrol:        ['Aerial won'],
-  tackle:            ['Dribble attempted'],
-  interception:      ['Miscommunication'],
-  ball_recovery:     ['Miscommunication'],
-  block:             ['Deflection','Save','Miscommunication'],
-  clearance:         ['Aerial won','Miscommunication'],
-  pass_recovery:     ['Through ball','Backheel','Injury clearance','Launch','Miscommunication'],
-  pass_interception: ['Through ball','Backheel','Injury clearance','Launch','Miscommunication'],
-  foul_committed:    ['Advantage','Penalty'],
-  goal_keeper:       ['Miscommunication'],
+// MARK 4.2.0 — data sources migrated to tagging_scenarios.js
+// MISSING_EXTRAS, WRONG_EXTRAS, WRONG_EVENT_MAP are now computed (memoized) from
+// the sheet-derived taxonomy. GK_WRONG_EVENT_MAP stays hardcoded because the sheet
+// doesn't split Goal Keeper into MARK's 4 sub-types.
+
+// MARK event id -> sheet event name (lookup via shortcuts.js)
+function sheetEventFor(eventId) {
+  const e = TORNADO_EVENTS.find(x => x.id === eventId)
+  return e ? e.sheetEvent : null
 }
 
-// ─── per-event: wrong extras → corrections ────────────────────────────────────
-const WRONG_EXTRAS = {
-  pass: {
-    'Inswinging':  ['Outswinging','Straight'],
-    'Outswinging': ['Inswinging','Straight'],
-    'Straight':    ['Inswinging','Outswinging'],
-  },
-  shot: {
-    'Aerial won':    ['Regular','Step in'],
-    'Diving header': ['Normal'],
-    'Volley':        ['Half volley'],
-    'Half volley':   ['Volley','Normal'],
-    'Set':           ['Prone','Moving'],
-    'Prone':         ['Set','Moving'],
-    'Moving':        ['Set','Prone'],
-    'Open play':     ['First time'],
-    'First time':    ['Open play'],
-  },
-  miscontrol: {
-    'Regular':    ['Handball','Dangerous play','Offside'],
-    'Aerial won': ['Regular','Step in'],
-  },
-  tackle: {
-    'Won':          ['Success','Second effort'],
-    'Success':      ['Won','Second effort'],
-    'Right':        ['Left','Right take on','Left take on','None'],
-    'Left':         ['Right','Right take on','Left take on','None'],
-    'Right take on':['Right','Left','Left take on','None'],
-    'Left take on': ['Right','Left','Right take on','None'],
-  },
-  dribble: {
-    'Right':        ['Left','Right take on','Left take on','None'],
-    'Left':         ['Right','Right take on','Left take on','None'],
-    'Right take on':['Right','Left','Left take on','None'],
-    'Left take on': ['Right','Left','Right take on','None'],
-  },
-  interception: {
-    'Step in': ['Aerial won'],
-    'Won':     ['Success','Second effort'],
-    'Success': ['Won','Second effort'],
-  },
-  clearance: {
-    'Regular':    ['Handball','Dangerous play','Offside'],
-    'Aerial won': ['Regular','Step in'],
-  },
-  pass_interception: {
-    'Step in': ['Aerial won'],
-  },
-  fifty_fifty: {
-    'Won':     ['Success','Second effort'],
-    'Success': ['Won','Second effort'],
-  },
-  foul_committed: {
-    'Regular':       ['Handball','Dangerous play','Offside'],
-    'Handball':      ['Regular','Offside'],
-    'Dangerous play':['Regular','Handball','Offside'],
-    'Offside':       ['Regular','Handball','Dangerous play'],
-    'No card':       ['Yellow card','Second yellow','Red card'],
-    'Yellow card':   ['No card','Second yellow','Red card'],
-    'Second yellow': ['No card','Yellow card','Red card'],
-    'Red card':      ['No card','Yellow card','Second yellow'],
-  },
-  goal_keeper: {
-    'Both hands':    ['Right hand','Left hand'],
-    'Diving':        ['Standing'],
-    'Standing':      ['Diving'],
-    'Set':           ['Prone','Moving'],
-    'Prone':         ['Set','Moving'],
-    'Moving':        ['Set','Prone'],
-    'Won':           ['Success','Second effort'],
-    'Success':       ['Won','Second effort'],
-    'Second effort': ['Won','Success'],
-  },
-  stoppage: {
-    'Injury': ['Review','Other'],
-    'Review': ['Injury','Other'],
-    'Other':  ['Injury','Review'],
-  },
+// 10 attribute-level error types the sheet defines separately but MARK collapses
+// into a single "Wrong extra" step (preserves existing reviewer UX).
+const ATTR_ERROR_TYPES = new Set([
+  'Wrong extra','Wrong outcome','Wrong direction','Wrong body part',
+  'Wrong technique','Wrong height','Wrong type','Wrong kind',
+  'Wrong side','Wrong GK body state',
+])
+
+// Build the Wrong-Event correction list for a sheet event.
+// Flattens "Goal keeper + Type qualifier" into "GK (Type)" to match MARK display.
+function buildWrongEventList(sheetEv) {
+  if (!sheetEv) return []
+  const out = []
+  const seen = new Set()
+  for (const s of TAGGING_SCENARIOS) {
+    if (s.event !== sheetEv) continue
+    if (s.errorType !== 'Wrong event') continue
+    if (!s.correction || s.correction === 'Null') continue
+    let label = s.correction
+    if (s.correction === 'Goal keeper' && s.typeQualifier) label = 'GK (' + s.typeQualifier + ')'
+    if (seen.has(label)) continue
+    out.push(label); seen.add(label)
+  }
+  return out
 }
 
-// ─── wrong event corrections (unchanged from confirmed data) ──────────────────
-const WRONG_EVENT_MAP = {
-  pass:              ['Miscontrol','Dribble','Pass recovery','Pass interception','Tackle','Clearance','Shot','Fifty fifty','Interception','Ball recovery','Block'],
-  shot:              ['Pass','Miscontrol','Clearance','Tackle','Dribble','GK (Smoother)'],
-  reception:         ['Miscontrol','Tackle','Ball recovery'],
-  miscontrol:        ['Dribble','Tackle','Pass','Shot','Clearance','Ball recovery','Block','Reception','Interception'],
-  tackle:            ['Clearance','Block','Dribble','Fifty fifty','Miscontrol','Pass','Pass recovery','Pass interception','Leg stretch duel','Hold up duel','Separation duel'],
-  interception:      ['Ball recovery','Clearance','Pass recovery','Pass interception','Block','Tackle'],
-  ball_recovery:     ['Interception','Pass recovery','Pass interception','Block','Clearance','Fifty fifty','GK (Keeper sweeper)','GK (Collected)','Tackle'],
-  block:             ['Tackle','Clearance','Interception','Miscontrol','Ball recovery','Pass','Pass recovery','Fifty fifty','Pass interception'],
-  clearance:         ['Pass recovery','GK (Keeper sweeper)','GK (Punch)','Interception','Block','Fifty fifty','Tackle','Dribble','Shot','Ball recovery'],
-  dribble:           ['Tackle','Pass','Pass recovery','Pass interception','Miscontrol','Separation duel','Leg stretch duel','Hold up duel'],
-  foul_committed:    ['Card'],
-  fifty_fifty:       ['Dribble','Pass recovery','Tackle','Positioning duel','Pass','Pass interception','Ball recovery','Interception'],
-  hold_up_duel:      ['Positioning duel','Interception','Ball recovery','Shield','Leg stretch duel'],
-  leg_stretch_duel:  ['Dribble','Tackle','Hold up duel','Positioning duel'],
-  positioning_duel:  ['Shield','Tackle','Fifty fifty','Hold up duel'],
-  separation_duel:   ['Dribble','Miscontrol'],
-  shield:            ['Hold up duel','Tackle','Ball recovery'],
-  pass_recovery:     ['Pass interception','Clearance','Ball recovery','Interception','Tackle','GK (Keeper sweeper)','Miscontrol','Dribble','Fifty fifty'],
-  pass_interception: ['Pass recovery','Clearance','Ball recovery','Interception','Tackle','Fifty fifty','Miscontrol','Dribble','GK (Keeper sweeper)'],
-  goal_keeper:       null, // handled via GK sub-type flow
+// Build the missing/not-needed extras list (combined — current MARK uses one list for both steps).
+function buildMissingExtrasList(sheetEv) {
+  if (!sheetEv) return []
+  const out = []
+  const seen = new Set()
+  for (const s of TAGGING_SCENARIOS) {
+    if (s.event !== sheetEv) continue
+    if (s.errorType !== 'Missing extra') continue
+    if (!s.correction || s.correction === 'Null') continue
+    if (seen.has(s.correction)) continue
+    out.push(s.correction); seen.add(s.correction)
+  }
+  for (const s of TAGGING_SCENARIOS) {
+    if (s.event !== sheetEv) continue
+    if (s.errorType !== 'Not needed extra') continue
+    if (!s.tagged || s.tagged === 'Null') continue
+    if (seen.has(s.tagged)) continue
+    out.push(s.tagged); seen.add(s.tagged)
+  }
+  return out
 }
 
+// Build the wrong-extras map { tagged: [corrections] } across all 10 attribute-error types.
+function buildWrongExtrasMap(sheetEv) {
+  if (!sheetEv) return {}
+  const map = {}
+  for (const s of TAGGING_SCENARIOS) {
+    if (s.event !== sheetEv) continue
+    if (!ATTR_ERROR_TYPES.has(s.errorType)) continue
+    if (!s.tagged || s.tagged === 'Null') continue
+    if (!s.correction || s.correction === 'Null') continue
+    if (!map[s.tagged]) map[s.tagged] = []
+    if (!map[s.tagged].includes(s.correction)) map[s.tagged].push(s.correction)
+  }
+  return map
+}
+
+// Memoized lookups by MARK event id.
+const _weC = {}, _meC = {}, _wxC = {}
+function getWrongEventList(eventId) {
+  if (_weC[eventId] !== undefined) return _weC[eventId]
+  _weC[eventId] = buildWrongEventList(sheetEventFor(eventId))
+  return _weC[eventId]
+}
+function getMissingExtrasList(eventId) {
+  if (_meC[eventId] !== undefined) return _meC[eventId]
+  _meC[eventId] = buildMissingExtrasList(sheetEventFor(eventId))
+  return _meC[eventId]
+}
+function getWrongExtrasMap(eventId) {
+  if (_wxC[eventId] !== undefined) return _wxC[eventId]
+  _wxC[eventId] = buildWrongExtrasMap(sheetEventFor(eventId))
+  return _wxC[eventId]
+}
+
+// GK_WRONG_EVENT_MAP — MARK-specific, hardcoded. Sheet doesn't model GK subtypes the same way.
 const GK_WRONG_EVENT_MAP = {
-  gk_collected:      ['GK (Punch)','Ball recovery'],
-  gk_punch:          ['GK (Collected)','GK (Save)'],
+  gk_collected: ['GK (Punch)','Ball recovery'],
+  gk_punch: ['GK (Collected)','GK (Save)'],
   gk_keeper_sweeper: ['Ball recovery','Clearance'],
-  gk_save:           ['GK (Punch)'],
+  gk_save: ['GK (Punch)'],
 }
 
 // ─── GK sub-types ─────────────────────────────────────────────────────────────
@@ -411,7 +385,7 @@ export default function TagPanel({ pendingTag, onSave, onCancel, editTag, onEdit
       }
 
       if (step === 'wrong_event') {
-        const list = WRONG_EVENT_MAP[eventId] || []
+        const list = getWrongEventList(eventId) || []
         const idx  = KEYS.indexOf(k)
         if (idx >= 0 && idx < list.length) { setCorrection(list[idx]); setStep('team') }
         return
@@ -425,14 +399,14 @@ export default function TagPanel({ pendingTag, onSave, onCancel, editTag, onEdit
       }
 
       if (step === 'missing_extra' || step === 'not_needed_extra') {
-        const list = MISSING_EXTRAS[eventId] || []
+        const list = getMissingExtrasList(eventId) || []
         const idx  = KEYS.indexOf(k)
         if (idx >= 0 && idx < list.length) { setSelectedExtra(list[idx]); setStep('team') }
         return
       }
 
       if (step === 'wrong_extra_pick') {
-        const map  = WRONG_EXTRAS[eventId] || {}
+        const map  = getWrongExtrasMap(eventId) || {}
         const list = Object.keys(map)
         const idx  = KEYS.indexOf(k)
         if (idx >= 0 && idx < list.length) { setSelectedExtra(list[idx]); setStep('wrong_extra_corr') }
@@ -440,7 +414,7 @@ export default function TagPanel({ pendingTag, onSave, onCancel, editTag, onEdit
       }
 
       if (step === 'wrong_extra_corr') {
-        const map   = WRONG_EXTRAS[eventId] || {}
+        const map   = getWrongExtrasMap(eventId) || {}
         const corrs = map[selectedExtra] || []
         const idx   = KEYS.indexOf(k)
         if (idx >= 0 && idx < corrs.length) { setCorrection(corrs[idx]); setStep('team') }
@@ -466,12 +440,12 @@ export default function TagPanel({ pendingTag, onSave, onCancel, editTag, onEdit
   if (errorTypeId)   crumbs.push(ERROR_TYPES.find(x => x.id === errorTypeId)?.label || '')
   if (selectedExtra) crumbs.push(selectedExtra)
 
-  const wrongExtraMap  = WRONG_EXTRAS[eventId] || {}
+  const wrongExtraMap  = getWrongExtrasMap(eventId) || {}
   const wrongExtraKeys = Object.keys(wrongExtraMap)
-  const missingList    = MISSING_EXTRAS[eventId] || []
+  const missingList    = getMissingExtrasList(eventId) || []
   const wrongEventList = isGK
     ? (GK_WRONG_EVENT_MAP[gkSubType?.id] || [])
-    : (WRONG_EVENT_MAP[eventId] || [])
+    : (getWrongEventList(eventId) || [])
 
   return (
     <div style={{ position:'fixed', inset:0, zIndex:1000, display:'flex', alignItems:'flex-end', pointerEvents:'none' }}>
@@ -511,7 +485,7 @@ export default function TagPanel({ pendingTag, onSave, onCancel, editTag, onEdit
                 if (et.id === 'missing_extra'    && missingList.length    === 0) return null
                 if (et.id === 'not_needed_extra' && missingList.length    === 0) return null
                 if (et.id === 'wrong_extra'      && wrongExtraKeys.length === 0) return null
-                if (et.id === 'wrong_event'      && wrongEventList.length === 0 && !isGK) return null
+                if (et.id === 'wrong_event'      && getWrongEventList.length === 0 && !isGK) return null
                 return (
                   <PillBtn key={et.id} label={et.label} shortcut={et.key} active={false}
                     color={et.autoSave ? '#30D158' : 'var(--p2)'} autoSave={et.autoSave}
@@ -534,7 +508,7 @@ export default function TagPanel({ pendingTag, onSave, onCancel, editTag, onEdit
         {(step === 'wrong_event' || step === 'gk_wrong_event') && (
           <>
             <StepLabel text="correct event was" color="var(--p2)" />
-            <KeyedList items={wrongEventList} color="var(--p2)" cols={wrongEventList.length > 5 ? 2 : 1}
+            <KeyedList items={getWrongEventList} color="var(--p2)" cols={getWrongEventList.length > 5 ? 2 : 1}
               onSelect={(c) => { setCorrection(c); setStep('team') }} />
           </>
         )}

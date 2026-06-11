@@ -1,6 +1,6 @@
 # MARK — Full Context
-**Version:** 4.1.0  
-**Last updated:** 2026-06-11  
+**Version:** 4.2.0  
+**Last updated:** 2026-06-11 (v4.2.0)  
 **Status:** Active, in use by Hudl Egypt reviewers
 
 ---
@@ -324,3 +324,51 @@ No experiments. No third repos. No architecture migrations.
 - **Don't change the current MARK structure** — when in doubt, add new things rather than replace existing ones.
 - **The sheet is the source of truth** for the error-correction taxonomy. When TagPanel and the sheet disagree, follow the sheet. The current version of that sheet is the one provided on 2026-06-11 (`Untitled_spreadsheet (1).xlsx`, 465 rules); store any future updates in `src/data/tagging_scenarios.js` rather than hardcoding into components.
 - **Preserve the 3-step (sometimes 4-step) tagging workflow:** event → error type (filtered) → correction (filtered) → optional type qualifier.
+
+
+---
+
+<!-- ============================================================= -->
+<!-- SESSION 2026-06-11 — v4.2.0 RELEASE · TAGPANEL MIGRATION COMPLETE -->
+<!-- ============================================================= -->
+
+## v4.2.0 Release (2026-06-11) — TagPanel Now Consumes Sheet Data
+
+### What shipped
+
+This is the follow-up to v4.1.0 that actually completes the user-facing migration. v4.1.0 added the data file but ErrorTagModal (the consumer it touched) turned out to be dead code. v4.2.0 fixes that by migrating **TagPanel.jsx** — the real production component — to consume `tagging_scenarios.js`.
+
+**Changes to `src/components/TagPanel.jsx`:**
+
+- Removed hardcoded `MISSING_EXTRAS`, `WRONG_EXTRAS`, `WRONG_EVENT_MAP` constants (~2.4 KB of stale data)
+- Added new import: `import { TAGGING_SCENARIOS } from '../data/tagging_scenarios'`
+- Added three computed (memoized) helpers at module load:
+  - `getWrongEventList(eventId)` — pulls from sheet's "Wrong event" rules, flattens Goal keeper + Type qualifier into "GK (Type)" so the display matches MARK's existing convention
+  - `getMissingExtrasList(eventId)` — combines sheet's "Missing extra" and "Not needed extra" rules (TagPanel uses one list for both UI steps)
+  - `getWrongExtrasMap(eventId)` — `{ tagged: [corrections] }` map built across 10 attribute-error sheet types (Wrong extra + Wrong outcome + Wrong direction + Wrong body part + Wrong technique + Wrong height + Wrong type + Wrong kind + Wrong side + Wrong GK body state), which MARK collapses into the single "Wrong extra" workflow step
+- `GK_WRONG_EVENT_MAP` stays HARDCODED — the sheet doesn't split Goal Keeper into MARK's 4 sub-types (gk_collected, gk_punch, gk_keeper_sweeper, gk_save) the same way, so we kept MARK's existing data here
+
+**Workflow, keys, breadcrumbs, autosave, team selection — all unchanged.** Only the data source changed.
+
+**Version bumps everywhere:**
+- `package.json` 4.1.0 → 4.2.0
+- `src-tauri/Cargo.toml` 4.1.0 → 4.2.0
+- `src-tauri/tauri.conf.json` 4.1.0 → 4.2.0
+- `src/hooks/useUpdateCheck.js` `CURRENT_VERSION` 4.1.0 → 4.2.0
+
+### What the reviewer will see in v4.2.0
+
+- Header bar reads "MARK · Review App · v4.2.0"
+- Pass Interception (key `I`) — was already wired into TagPanel's hardcoded data before v4.1.0; still works
+- All correction lists across all events now reflect the master spreadsheet (`Untitled_spreadsheet (1).xlsx`, 465 rules). Any divergence between the previous hardcoded data and the sheet is reconciled in favor of the sheet.
+- Any future updates to the taxonomy can be done by regenerating `src/data/tagging_scenarios.js` from the sheet — no more touching component code for data changes.
+
+### Still pending (queued for v4.3.0 or later)
+
+- **Card (mouse-only)** event has no UI trigger in MARK currently — `shortcuts.js` lists it as `{ key: null, mouse: true }`, but the review page only handles keyboard events. To make Card usable, a clickable button needs to be added somewhere in the review UI. The taxonomy data for Card is already in `tagging_scenarios.js`.
+- **Dead code cleanup** — `src/components/ErrorTagModal.jsx` is now confirmed unused and can be deleted in a follow-up commit.
+- **GK_WRONG_EVENT_MAP** — currently hardcoded inside TagPanel. If the team wants this data driven by the sheet too, the sheet's Goal Keeper rules need to encode the GK subtype dimension explicitly (e.g., via a "Source GK action" column), or a side-table can live in `tagging_scenarios.js`.
+
+### Versioning cadence rule (reminder)
+
+`4.2.0 → 4.3.0 → 4.4.0 → ... → 4.9.0 → 5.0.0 → 5.1.0 → ...`

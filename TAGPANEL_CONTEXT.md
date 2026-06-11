@@ -227,3 +227,28 @@ Frequency in the sheet (largest first): Wrong event 141 · Wrong body part 66 ·
 
 - "Wrong Player" — was a MARK-only option, not in the sheet. Will be removed from TagPanel during v4.2.0 migration unless explicitly kept by request.
 - "Confused With" — duplicated "Wrong event". Will be removed during migration.
+
+
+---
+
+## v4.2.0 Update (2026-06-11) — Migration Complete
+
+The TagPanel migration planned in the v4.1.0 notes was completed in v4.2.0.
+
+**`src/components/TagPanel.jsx` now consumes `src/data/tagging_scenarios.js`** via three memoized helpers:
+
+```js
+import { TAGGING_SCENARIOS } from '../data/tagging_scenarios'
+
+function getWrongEventList(eventId)   // -> [...] for "Wrong event" step
+function getMissingExtrasList(eventId) // -> [...] for "Missing extra" + "Not needed extra" steps
+function getWrongExtrasMap(eventId)    // -> { tagged: [corrections] } for "Wrong extra" step
+```
+
+What was hardcoded before (`MISSING_EXTRAS`, `WRONG_EXTRAS`, `WRONG_EVENT_MAP` constants) is now derived from the master spreadsheet. The 10 attribute-level error types the sheet defines (Wrong extra, Wrong outcome, Wrong direction, Wrong body part, Wrong technique, Wrong height, Wrong type, Wrong kind, Wrong side, Wrong GK body state) are merged into a single map to preserve MARK's existing "Wrong extra" workflow.
+
+**`GK_WRONG_EVENT_MAP` remains hardcoded** inside TagPanel because the sheet doesn't model the 4 GK sub-types (Collected, Punch, Keeper sweeper, Save) the same way MARK does. If this needs to be sheet-driven later, the sheet would need a "Source GK action" dimension.
+
+**Card event** still doesn't have a mouse trigger in the UI — see the v4.3.0 queue in MARK_CONTEXT.md.
+
+**ErrorTagModal.jsx** is confirmed unused; pending deletion.
