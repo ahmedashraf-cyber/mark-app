@@ -1,5 +1,5 @@
 (async function(){
-  const BRIDGE_VERSION = '4.3.0-ws';
+  const BRIDGE_VERSION = '4.7.0-ws';
   if(window.__MARK_BRIDGE_VERSION__ === BRIDGE_VERSION){console.log('[MARK] bridge already running (v' + BRIDGE_VERSION + ')');return;}
   if(window.__MARK_BRIDGE_STOP__) window.__MARK_BRIDGE_STOP__();
   window.__MARK_BRIDGE__ = true;
@@ -94,21 +94,27 @@
   }
 
   // ── Event count helper ────────────────────────────────────────────────────
-  const EXCLUDED_TYPES = ['starting-xi', 'half-start', 'squad'];
+  const EXCLUDED_TYPES = ['starting-xi', 'half-start', 'squad', 'pressure-start', 'pressure-end'];
   function countEventsInRange(matchId, startTs, endTs) {
     try {
       const cache = window.apollo && window.apollo.client && window.apollo.client.cache.extract();
       if (!cache) return -1;
       const numMatchId = typeof matchId === 'string' ? parseInt(matchId) : matchId;
-      return Object.values(cache).filter(v =>
-        v.__typename === 'Event' &&
-        (v.matchId === numMatchId || v.matchId === String(numMatchId)) &&
-        v.payload &&
-        typeof v.payload.videoTimestamp === 'number' &&
-        v.payload.videoTimestamp > 0 &&
-        v.payload.videoTimestamp <= endTs &&
-        !EXCLUDED_TYPES.includes(v.payload.name)
-      ).length;
+      const seen = new Set();
+      return Object.values(cache).filter(v => {
+        if (v.__typename !== 'Event') return false;
+        if (v.matchId !== numMatchId && v.matchId !== String(numMatchId)) return false;
+        if (!v.payload) return false;
+        if (typeof v.payload.videoTimestamp !== 'number') return false;
+        if (v.payload.videoTimestamp <= 0) return false;
+        if (v.payload.videoTimestamp > endTs) return false;
+        if (EXCLUDED_TYPES.includes(v.payload.name)) return false;
+        // Deduplicate by name + timestamp (multiple collectors tag same events)
+        const key = v.payload.name + '_' + v.payload.videoTimestamp;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      }).length;
     } catch(e) {
       console.error('[MARK] countEventsInRange error:', e);
       return -1;
