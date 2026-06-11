@@ -95,5 +95,45 @@ export function useSync(onStatusChange, sessionId) {
     if (heartbeatRef.current) clearInterval(heartbeatRef.current)
   }, [])
 
-  return { syncNavigation, syncSetPlaying, syncSeek }
+  // Request event count from bridge via WebSocket.
+  // Bridge responds with { type: 'eventCountResponse', count, ts }
+  // Also first gets video time via getVideoTimeRequest -> getVideoTimeResponse
+  const requestEventCount = useCallback((matchId) => {
+    return new Promise((resolve) => {
+      const ws = getWs(onStatusChange)
+      if (!ws || ws.readyState !== WebSocket.OPEN) { resolve(-1); return }
+
+      const reqTs = Date.now()
+      const timeout = setTimeout(() => {
+        ws.removeEventListener('message', handler)
+        resolve(-1)
+      }, 5000)
+
+      // Step 1: get current video time from bridge
+      ws.send(JSON.stringify({ type: 'getVideoTimeRequest', ts: reqTs }))
+
+      function handler(event) {
+        try {
+          const msg = JSON.parse(event.data)
+
+          // Step 2: got video time — now request event count
+          if (msg.type === 'getVideoTimeResponse' && msg.ts >= reqTs) {
+            const endTs = msg.time * 1000 // convert seconds to ms
+            ws.send(JSON.stringify({ type: 'eventCountRequest', matchId, startTs: 0, endTs, ts: Date.now() }))
+          }
+
+          // Step 3: got event count — done
+          if (msg.type === 'eventCountResponse' && msg.ts >= reqTs) {
+            clearTimeout(timeout)
+            ws.removeEventListener('message', handler)
+            resolve(msg.count)
+          }
+        } catch(e) {}
+      }
+
+      ws.addEventListener('message', handler)
+    })
+  }, [sessionId, onStatusChange])
+
+  return { syncNavigation, syncSetPlaying, syncSeek, requestEventCount }
 }

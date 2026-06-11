@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { invoke, convertFileSrc } from '@tauri-apps/api/core'
 import { db, auth } from '../firebase/config'
-import { collection, addDoc, updateDoc, doc, serverTimestamp, increment, onSnapshot } from 'firebase/firestore'
+import { collection, addDoc, updateDoc, doc, serverTimestamp, increment } from 'firebase/firestore'
 import { useAuth } from '../hooks/useAuth.jsx'
 import { useSync } from '../hooks/useSync'
 import { KEY_TO_EVENT, MISSING_EVENT_KEY, SPEED_MIN, SPEED_MAX, SPEED_STEP } from '../data/shortcuts'
@@ -13,7 +13,7 @@ import { exportSessionToXlsx } from '../utils/exportSession'
 
 export default function ReviewPage({ session, onDone, onBack, bridgeSyncStatus, onBridgeSyncStatus }) {
   const { profile } = useAuth()
-  const { syncNavigation, syncSetPlaying, syncSeek } = useSync(onBridgeSyncStatus, session.sessionId)
+  const { syncNavigation, syncSetPlaying, syncSeek, requestEventCount } = useSync(onBridgeSyncStatus, session.sessionId)
 
   const videoRef  = useRef(null)
   const rootRef   = useRef(null)
@@ -285,37 +285,8 @@ export default function ReviewPage({ session, onDone, onBack, bridgeSyncStatus, 
   }
 
   // Request event count from bridge — returns count or -1 if bridge unavailable
-  async function requestEventCount() {
-    const matchId = session.matchId
-    const countReqTs = Date.now()
-
-    // Read endTs from posSync — written by bridge every second
-    const { getDoc: gd, doc: fd } = await import('firebase/firestore')
-    const snap = await gd(fd(db, 'mark_sessions', session.sessionId))
-    const collectionAppTime = snap.data()?.collectionAppTime
-    const endTs = collectionAppTime?.currentTime ?? null
-
-    if (endTs === null) {
-      // Bridge not injected — can't auto-count
-      return -1
-    }
-
-    console.log('[MARK] requesting event count:', { matchId, startTs: 0, endTs })
-
-    await updateDoc(doc(db, 'mark_sessions', session.sessionId), {
-      eventCountRequest: { matchId, startTs: 0, endTs, ts: countReqTs }
-    })
-
-    return new Promise((resolve) => {
-      const timeout = setTimeout(() => { unsubFn(); resolve(-1) }, 5000)
-      const unsubFn = onSnapshot(doc(db, 'mark_sessions', session.sessionId), (snap) => {
-        const resp = snap.data()?.eventCountResponse
-        if (resp && resp.ts >= countReqTs) {
-          clearTimeout(timeout); unsubFn(); resolve(resp.count)
-        }
-      })
-    })
-  }
+  // requestEventCount is now handled via WebSocket in useSync.js
+  // bridge responds with video time + event count — zero Firebase usage
 
   async function handleDoneSubmit(manualCount) {
     setSubmitting(true)
@@ -355,7 +326,7 @@ export default function ReviewPage({ session, onDone, onBack, bridgeSyncStatus, 
 
     // Try to get count from bridge
     try {
-      const count = await requestEventCount()
+      const count = await requestEventCount(session.matchId)
       if (count >= 0) {
         console.log('[MARK] bridge returned event count:', count)
         setBridgeAvailable(true)
