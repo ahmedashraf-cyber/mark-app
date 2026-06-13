@@ -158,6 +158,7 @@ export default function SessionSetupPage({ onSessionStart, lastResult, onShowHis
   const [completedSession, setCompletedSession] = useState(null)
   const [recentSessions, setRecentSessions]     = useState([])
   const [sessionsLoading, setSessionsLoading]   = useState(false)
+  const [reviewMode, setReviewMode]             = useState(null) // null | 'scout' | 'audit'
   const [loading, setLoading]             = useState(false)
   const [error, setError]                 = useState('')
   const [matches, setMatches]             = useState([])
@@ -286,6 +287,7 @@ export default function SessionSetupPage({ onSessionStart, lastResult, onShowHis
         homeTeam:  selectedMatch.homeTeam,
         awayTeam:  selectedMatch.awayTeam,
         matchDate: selectedMatch.matchDate,
+        mode:      reviewMode || 'scout',
       })
     } catch (e) {
       setError('Failed to start session: ' + e.message)
@@ -352,6 +354,73 @@ export default function SessionSetupPage({ onSessionStart, lastResult, onShowHis
       )}
 
       <div style={{flex:1,overflow:'auto',padding:32,display:'flex',gap:24,maxWidth:1000,margin:'0 auto',width:'100%'}}>
+        {/* Mode selector */}
+        {!reviewMode && (
+          <div className="scale-in" style={{display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',flex:1,gap:20,padding:'40px 20px'}}>
+            <div style={{textAlign:'center',marginBottom:8}}>
+              <div style={{fontFamily:'Inter',fontWeight:800,fontSize:20,color:'var(--t-1)',marginBottom:6}}>Select Review Mode</div>
+              <div style={{fontSize:12,color:'var(--t-3)'}}>How will you review this half?</div>
+            </div>
+            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:14,width:'100%',maxWidth:560}}>
+              {[
+                {
+                  mode:'scout',
+                  icon:'🎯',
+                  title:'Scout',
+                  sub:'Tag errors as you watch',
+                  desc:'Watch the video and tag collection errors directly in MARK using keyboard shortcuts.',
+                  color:'var(--p2)',
+                },
+                {
+                  mode:'audit',
+                  icon:'🔍',
+                  title:'Audit',
+                  sub:'Correct errors in collection app',
+                  desc:'Edit events directly in the collection app. MARK captures your corrections and calculates the quality score.',
+                  color:'#0A84FF',
+                },
+              ].map(m => (
+                <div key={m.mode} onClick={() => setReviewMode(m.mode)}
+                  className="card"
+                  style={{
+                    padding:'20px 18px',cursor:'pointer',
+                    border:`1px solid rgba(255,255,255,0.06)`,
+                    transition:'all .2s var(--ease-out-expo)',
+                  }}
+                  onMouseEnter={e => { e.currentTarget.style.borderColor = m.color; e.currentTarget.style.boxShadow = `0 8px 24px ${m.color}22` }}
+                  onMouseLeave={e => { e.currentTarget.style.borderColor = 'rgba(255,255,255,0.06)'; e.currentTarget.style.boxShadow = 'none' }}
+                >
+                  <div style={{fontSize:28,marginBottom:10}}>{m.icon}</div>
+                  <div style={{fontFamily:'Inter',fontWeight:800,fontSize:16,color:'var(--t-1)',marginBottom:3}}>{m.title}</div>
+                  <div style={{fontSize:11,fontWeight:600,color:m.color,marginBottom:8}}>{m.sub}</div>
+                  <div style={{fontSize:11,color:'var(--t-3)',lineHeight:1.6}}>{m.desc}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {reviewMode && (
+          <div style={{padding:'8px 0 0',display:'flex',alignItems:'center',gap:8,paddingLeft:'0px'}}>
+            <button className="btn-ghost" style={{padding:'4px 10px',fontSize:11}} onClick={() => setReviewMode(null)}>
+              ← Change mode
+            </button>
+            <div style={{
+              display:'flex',alignItems:'center',gap:6,padding:'3px 10px',borderRadius:20,
+              background: reviewMode==='audit' ? 'rgba(10,132,255,0.1)' : 'rgba(232,89,12,0.1)',
+              border: `1px solid ${reviewMode==='audit' ? 'rgba(10,132,255,0.3)' : 'rgba(232,89,12,0.3)'}`,
+            }}>
+              <span style={{fontSize:12}}>{reviewMode==='audit' ? '🔍' : '🎯'}</span>
+              <span style={{fontSize:11,fontWeight:700,color: reviewMode==='audit' ? '#0A84FF' : 'var(--p2)'}}>
+                {reviewMode==='audit' ? 'Audit mode' : 'Scout mode'}
+              </span>
+            </div>
+          </div>
+        )}
+
+        {reviewMode && (
+          <div style={{display:'flex',gap:16,flex:1,overflow:'hidden'}}>
+
         {/* Left — Match list */}
         <div style={{flex:1,display:'flex',flexDirection:'column',gap:16}}>
           <div>
@@ -459,11 +528,12 @@ export default function SessionSetupPage({ onSessionStart, lastResult, onShowHis
             </button>
           ) : (
             <button className="btn-orange" style={{padding:'14px 0',fontSize:15,marginTop:'auto'}} disabled={!canStart} onClick={handleStartSession}>
-              {loading ? 'Starting…' : 'Start Review Session →'}
+              {loading ? 'Starting…' : reviewMode==='audit' ? 'Start Audit Session →' : 'Start Scout Session →'}
             </button>
           )}
         </div>
-      </div>
+          </div>
+        )}
 
       {/* Recent sessions section */}
       {recentSessions.length > 0 && (

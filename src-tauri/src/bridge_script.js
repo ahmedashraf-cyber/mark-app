@@ -1,5 +1,5 @@
 (async function(){
-  const BRIDGE_VERSION = '5.7.0-ws';
+  const BRIDGE_VERSION = '6.0.0-ws';
   if(window.__MARK_BRIDGE_VERSION__ === BRIDGE_VERSION){console.log('[MARK] bridge already running (v' + BRIDGE_VERSION + ')');return;}
   if(window.__MARK_BRIDGE_STOP__) window.__MARK_BRIDGE_STOP__();
   window.__MARK_BRIDGE__ = true;
@@ -205,6 +205,87 @@
     else if (msg.type === 'getVideoTimeRequest') {
       if (ws && ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({ type: 'getVideoTimeResponse', time: video.currentTime, ts: Date.now() }));
+      }
+    }
+
+    else if (msg.type === 'getQAResults') {
+      // QA Audit mode — read Apollo cache for base events + amendments up to current video time
+      try {
+        const endTs = video.currentTime * 1000; // ms
+        const matchId = msg.matchId;
+        const cache = window.apollo && window.apollo.client && window.apollo.client.cache.extract();
+        if (!cache) {
+          ws.send(JSON.stringify({ type: 'qaResultsResponse', error: 'Apollo cache not available', ts: Date.now() }));
+          return;
+        }
+
+        const numMatchId = typeof matchId === 'string' ? parseInt(matchId) : matchId;
+        const EXCLUDED = ['starting-xi', 'half-start', 'squad'];
+
+        // Base events up to video time — deduplicated by key
+        const seenBase = new Set();
+        const baseEvents = Object.values(cache).filter(v => {
+          if (v.__typename !== 'Event') return false;
+          if (v.matchId !== numMatchId && v.matchId !== String(numMatchId)) return false;
+          if (v.category !== 'base') return false;
+          if (!v.payload || typeof v.payload.videoTimestamp !== 'number') return false;
+          if (v.payload.videoTimestamp <= 0 || v.payload.videoTimestamp > endTs) return false;
+          if (EXCLUDED.includes(v.payload.name)) return false;
+          if (seenBase.has(v.key)) return false;
+          seenBase.add(v.key);
+          return true;
+        }).map(v => ({
+          id: v.id,
+          key: v.key,
+          name: v.payload.name,
+          videoTimestamp: v.payload.videoTimestamp,
+          teamId: v.payload.teamId,
+          author: v.author,
+          capturedTime: v.capturedTime,
+        }));
+
+        // All amendments up to video time
+        const amendments = Object.values(cache).filter(v => {
+          if (v.__typename !== 'Event') return false;
+          if (v.matchId !== numMatchId && v.matchId !== String(numMatchId)) return false;
+          if (v.category !== 'amendment') return false;
+          return true;
+        }).map(v => ({
+          id: v.id,
+          key: v.key,
+          type: v.type,
+          author: v.author,
+          capturedTime: v.capturedTime,
+          payload: v.payload,
+          originalName: null, // will be resolved by MARK using baseEvents
+        }));
+
+        // Resolve original event name for each amendment
+        const baseByKey = {};
+        baseEvents.forEach(e => { baseByKey[e.key] = e; });
+        amendments.forEach(a => {
+          if (baseByKey[a.key]) a.originalName = baseByKey[a.key].name;
+        });
+
+        // Get collector + reviewer ids
+        const collectorId = baseEvents.length > 0 ? baseEvents[0].author : null;
+        const reviewerAmendments = amendments.filter(a => a.author !== collectorId);
+        const reviewerId = reviewerAmendments.length > 0 ? reviewerAmendments[0].author : null;
+
+        ws.send(JSON.stringify({
+          type: 'qaResultsResponse',
+          matchId: numMatchId,
+          videoTime: video.currentTime,
+          baseEvents,
+          amendments,
+          collectorId,
+          reviewerId,
+          ts: Date.now(),
+        }));
+
+      } catch(e) {
+        console.error('[MARK] getQAResults error:', e);
+        ws.send(JSON.stringify({ type: 'qaResultsResponse', error: e.message, ts: Date.now() }));
       }
     }
   }

@@ -1,0 +1,464 @@
+import { useState, useRef, useEffect, useCallback } from 'react'
+import { invoke } from '@tauri-apps/api/core'
+import { db } from '../firebase/config'
+import { collection, addDoc, serverTimestamp, getDocs, query, where } from 'firebase/firestore'
+import { useAuth } from '../hooks/useAuth.jsx'
+import { useSync } from '../hooks/useSync.jsx'
+
+// ── Helpers ────────────────────────────────────────────────────────────────────
+const fmt = (s) => {
+  if (!isFinite(s) || isNaN(s)) return '0:00'
+  const m   = Math.floor(s / 60)
+  const sec = Math.floor(s % 60)
+  return `${m}:${sec.toString().padStart(2, '0')}`
+}
+
+// ── Bridge status pill ─────────────────────────────────────────────────────────
+function BridgePill({ status }) {
+  const connected = status === 'connected'
+  return (
+    <div style={{
+      display: 'flex', alignItems: 'center', gap: 6,
+      padding: '4px 10px', borderRadius: 20,
+      background: connected ? 'rgba(48,209,88,0.1)' : 'rgba(255,255,255,0.05)',
+      border: `1px solid ${connected ? 'rgba(48,209,88,0.3)' : 'rgba(255,255,255,0.1)'}`,
+      transition: 'all .3s',
+    }}>
+      <div style={{
+        width: 6, height: 6, borderRadius: '50%',
+        background: connected ? '#30D158' : 'var(--t-3)',
+        boxShadow: connected ? '0 0 6px rgba(48,209,88,0.6)' : 'none',
+        transition: 'all .3s',
+      }}/>
+      <span style={{ fontSize: 11, fontWeight: 600, color: connected ? '#30D158' : 'var(--t-3)', fontFamily: 'DM Sans' }}>
+        {connected ? 'Bridge connected' : 'Bridge disconnected'}
+      </span>
+    </div>
+  )
+}
+
+// ── Score ring ─────────────────────────────────────────────────────────────────
+function ScoreRing({ score, size = 120 }) {
+  const r     = (size / 2) - 10
+  const circ  = 2 * Math.PI * r
+  const offset = circ - (score / 100) * circ
+  const color = score >= 80 ? '#30D158' : score >= 60 ? '#FFD60A' : '#FF453A'
+
+  return (
+    <div style={{ position: 'relative', width: size, height: size }}>
+      <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
+        <circle cx={size/2} cy={size/2} r={r} fill="none" stroke="var(--b-2)" strokeWidth="8"/>
+        <circle cx={size/2} cy={size/2} r={r} fill="none"
+          stroke={color} strokeWidth="8"
+          strokeDasharray={circ} strokeDashoffset={offset}
+          strokeLinecap="round"
+          style={{ transform: 'rotate(-90deg)', transformOrigin: '50% 50%', transition: 'stroke-dashoffset 1.2s cubic-bezier(0.16,1,0.3,1)' }}
+        />
+      </svg>
+      <div style={{
+        position: 'absolute', inset: 0,
+        display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+      }}>
+        <span style={{ fontFamily: 'Inter', fontWeight: 900, fontSize: size * 0.22, color, lineHeight: 1 }}>{score}</span>
+        <span style={{ fontSize: 9, color: 'var(--t-3)', fontWeight: 700, letterSpacing: 1.5 }}>QUALITY</span>
+      </div>
+    </div>
+  )
+}
+
+// ── Amendment type badge ───────────────────────────────────────────────────────
+const AMEND_META = {
+  deletion: { label: 'Deleted',       color: '#FF453A', icon: '✕' },
+  extras:   { label: 'Extras fixed',  color: '#FFD60A', icon: '◈' },
+  base:     { label: 'Event changed', color: '#E8590C', icon: '⟳' },
+  camera:   { label: 'Camera fixed',  color: '#BF5AF2', icon: '⊙' },
+}
+function AmendBadge({ type }) {
+  const m = AMEND_META[type] || { label: type, color: 'var(--t-3)', icon: '•' }
+  return (
+    <span style={{
+      fontSize: 10, fontWeight: 700, padding: '2px 7px', borderRadius: 5,
+      background: `${m.color}14`, color: m.color, border: `1px solid ${m.color}33`,
+      fontFamily: 'DM Sans',
+    }}>{m.icon} {m.label}</span>
+  )
+}
+
+// ── Quick summary card ─────────────────────────────────────────────────────────
+function QuickSummary({ results, score, onFullReport }) {
+  const types = {}
+  results.amendments.forEach(a => { types[a.type] = (types[a.type] || 0) + 1 })
+  const uniqueEdited = new Set(results.amendments.map(a => a.key)).size
+
+  return (
+    <div className="scale-in" style={{
+      background: 'var(--bg-2)', border: '1px solid var(--b-1)',
+      borderRadius: 16, padding: '20px 24px',
+      display: 'flex', gap: 24, alignItems: 'center',
+      boxShadow: '0 8px 32px rgba(0,0,0,0.4)',
+    }}>
+      {/* Score */}
+      <ScoreRing score={score} size={110}/>
+
+      {/* Stats */}
+      <div style={{ flex: 1 }}>
+        <div style={{ display: 'flex', gap: 24, marginBottom: 14 }}>
+          {[
+            { label: 'Events reviewed', value: results.baseEvents.length },
+            { label: 'Edits made',      value: uniqueEdited, color: '#FF453A' },
+            { label: 'Up to',           value: fmt(results.videoTime) },
+          ].map(s => (
+            <div key={s.label}>
+              <div style={{ fontFamily: 'Inter', fontWeight: 800, fontSize: 22, color: s.color || 'var(--t-1)', lineHeight: 1 }}>
+                {s.value}
+              </div>
+              <div style={{ fontSize: 10, color: 'var(--t-3)', marginTop: 3, fontWeight: 600, letterSpacing: 0.5 }}>
+                {s.label.toUpperCase()}
+              </div>
+            </div>
+          ))}
+        </div>
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+          {Object.entries(types).map(([type, count]) => (
+            <span key={type} style={{ fontSize: 11, color: 'var(--t-2)' }}>
+              <AmendBadge type={type}/> <span style={{ marginLeft: 3 }}>×{count}</span>
+            </span>
+          ))}
+        </div>
+      </div>
+
+      {/* Full report button */}
+      <button className="btn-orange" style={{ padding: '12px 20px', fontSize: 13, flexShrink: 0 }}
+        onClick={onFullReport}>
+        Full Report →
+      </button>
+    </div>
+  )
+}
+
+// ── Main AuditPage ─────────────────────────────────────────────────────────────
+export default function AuditPage({ session, onBack, onFullReport }) {
+  const { profile } = useAuth()
+  const videoRef    = useRef(null)
+  const [videoLoaded,    setVideoLoaded]    = useState(false)
+  const [playing,        setPlaying]        = useState(false)
+  const [currentTime,    setCurrentTime]    = useState(0)
+  const [duration,       setDuration]       = useState(0)
+  const [bridgeStatus,   setBridgeStatus]   = useState('disconnected')
+  const [loading,        setLoading]        = useState(false)
+  const [results,        setResults]        = useState(null)
+  const [score,          setScore]          = useState(null)
+  const [error,          setError]          = useState('')
+  const [saved,          setSaved]          = useState(false)
+
+  const { requestQAResults } = useSync(setBridgeStatus, session.sessionId)
+
+  // Load video from saved path
+  useEffect(() => {
+    const key = `mark_video_path_${session.matchId}`
+    const saved = localStorage.getItem(key)
+    if (saved) {
+      invoke('get_video_url', { path: saved })
+        .then(url => { videoRef.current.src = url; videoRef.current.load(); setVideoLoaded(true) })
+        .catch(() => {})
+    }
+  }, [session.matchId])
+
+  async function loadVideo() {
+    try {
+      const path = await invoke('pick_video_file')
+      if (!path) return
+      localStorage.setItem(`mark_video_path_${session.matchId}`, path)
+      const url = await invoke('get_video_url', { path })
+      videoRef.current.src = url
+      videoRef.current.load()
+      setVideoLoaded(true)
+    } catch(e) { setError('Failed to load video') }
+  }
+
+  async function handleInjectBridge() {
+    try { await invoke('inject_bridge_script') } catch(e) { console.warn('[MARK] inject:', e) }
+  }
+
+  async function handleGetResults() {
+    if (bridgeStatus !== 'connected') {
+      setError('Bridge not connected — click ⚡ Inject Bridge first')
+      return
+    }
+    setLoading(true)
+    setError('')
+    try {
+      const data = await requestQAResults(session.matchId)
+      if (!data) { setError('No data returned — make sure collection app is open on this match'); setLoading(false); return }
+
+      // Calculate score
+      const uniqueEdited = new Set(data.amendments.map(a => a.key)).size
+      const total = data.baseEvents.length
+      const q = total > 0 ? Math.round(((total - uniqueEdited) / total) * 100) : 0
+
+      setResults(data)
+      setScore(q)
+
+      // Save to Firebase
+      if (!saved) {
+        await saveToFirebase(data, q)
+        setSaved(true)
+      }
+    } catch(e) {
+      setError('Error getting results: ' + e.message)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  async function saveToFirebase(data, q) {
+    try {
+      const uniqueEdited = new Set(data.amendments.map(a => a.key)).size
+      const types = {}
+      data.amendments.forEach(a => { types[a.type] = (types[a.type] || 0) + 1 })
+
+      await addDoc(collection(db, 'mark_audit_sessions'), {
+        sessionId:          session.sessionId,
+        matchId:            session.matchId,
+        matchName:          session.matchName,
+        half:               session.half,
+        reviewerId:         profile.uid,
+        reviewerEmail:      profile.email,
+        reviewerName:       profile.displayName || profile.email.split('@')[0],
+        collectorId:        data.collectorId,
+        qaReviewerId:       data.reviewerId,
+        videoTime:          data.videoTime,
+        totalBaseEvents:    data.baseEvents.length,
+        totalAmendments:    data.amendments.length,
+        uniqueEditedEvents: uniqueEdited,
+        qualityScore:       q,
+        amendmentTypes:     types,
+        status:             'completed',
+        completedAt:        serverTimestamp(),
+      })
+
+      // Save amendment details
+      for (const a of data.amendments) {
+        await addDoc(collection(db, 'mark_audit_amendments'), {
+          sessionId:    session.sessionId,
+          matchId:      session.matchId,
+          amendmentId:  a.id,
+          key:          a.key,
+          type:         a.type,
+          originalName: a.originalName,
+          author:       a.author,
+          capturedTime: a.capturedTime,
+          payload:      a.payload || {},
+        })
+      }
+    } catch(e) { console.error('[MARK] save audit:', e) }
+  }
+
+  function togglePlay() {
+    const v = videoRef.current
+    if (!v) return
+    if (v.paused) { v.play(); setPlaying(true) }
+    else { v.pause(); setPlaying(false) }
+  }
+
+  function seekTo(pct) {
+    if (!videoRef.current || !duration) return
+    videoRef.current.currentTime = pct * duration
+  }
+
+  return (
+    <div style={{ height: '100vh', display: 'flex', flexDirection: 'column', background: 'var(--bg)', overflow: 'hidden' }}>
+
+      {/* ── Top bar ── */}
+      <header style={{
+        flexShrink: 0, height: 52,
+        background: 'var(--bg-2)', borderBottom: '1px solid var(--b-1)',
+        display: 'flex', alignItems: 'center', padding: '0 16px', gap: 12,
+      }}>
+        <button className="btn-ghost" style={{ padding: '5px 12px', fontSize: 12 }} onClick={onBack}>
+          ← Back
+        </button>
+        <div style={{ width: 1, height: 16, background: 'var(--b-2)' }}/>
+
+        {/* Session info */}
+        <div style={{ flex: 1 }}>
+          <span style={{ fontFamily: 'Inter', fontWeight: 800, fontSize: 14, color: 'var(--t-1)' }}>
+            {session.matchName}
+          </span>
+          <span style={{ fontSize: 11, color: 'var(--t-3)', marginLeft: 10 }}>
+            {session.half} · Audit
+          </span>
+        </div>
+
+        {/* Bridge status */}
+        <BridgePill status={bridgeStatus}/>
+
+        {/* Inject bridge */}
+        <button className="btn-ghost" style={{ padding: '5px 14px', fontSize: 12, display: 'flex', alignItems: 'center', gap: 6 }}
+          onClick={handleInjectBridge}>
+          <span style={{ fontSize: 14 }}>⚡</span> Inject Bridge
+        </button>
+
+        {/* Get results */}
+        <button
+          className="btn-orange"
+          style={{
+            padding: '8px 18px', fontSize: 13,
+            opacity: loading ? 0.7 : 1,
+            display: 'flex', alignItems: 'center', gap: 8,
+          }}
+          disabled={loading}
+          onClick={handleGetResults}
+        >
+          {loading ? (
+            <>
+              <svg style={{ animation: 'spin 1s linear infinite' }} width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5">
+                <circle cx="12" cy="12" r="10" strokeOpacity=".3"/>
+                <path d="M12 2a10 10 0 0 1 10 10"/>
+              </svg>
+              Reading results…
+            </>
+          ) : (
+            <>
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round">
+                <path d="M9 19l-7-7 7-7"/><path d="M15 5l7 7-7 7"/>
+              </svg>
+              Get Audit Results
+            </>
+          )}
+        </button>
+      </header>
+
+      {/* ── Main content ── */}
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+
+        {/* Video area */}
+        <div style={{ background: '#000', position: 'relative', flexShrink: 0 }}>
+          <video
+            ref={videoRef}
+            style={{ width: '100%', maxHeight: results ? 220 : 340, objectFit: 'contain', display: 'block', transition: 'max-height .4s cubic-bezier(0.16,1,0.3,1)' }}
+            onTimeUpdate={e => setCurrentTime(e.target.currentTime)}
+            onDurationChange={e => { if (isFinite(e.target.duration)) setDuration(e.target.duration) }}
+            onPlay={() => setPlaying(true)}
+            onPause={() => setPlaying(false)}
+          />
+
+          {/* Video controls overlay */}
+          <div style={{
+            position: 'absolute', bottom: 0, left: 0, right: 0,
+            background: 'linear-gradient(transparent, rgba(0,0,0,0.85))',
+            padding: '20px 16px 10px',
+            display: 'flex', alignItems: 'center', gap: 10,
+          }}>
+            {/* Play/pause */}
+            <button onClick={togglePlay} style={{
+              width: 28, height: 28, borderRadius: 8, border: 'none',
+              background: videoLoaded ? 'var(--p2)' : 'rgba(255,255,255,0.15)',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              cursor: videoLoaded ? 'pointer' : 'not-allowed', flexShrink: 0,
+              boxShadow: videoLoaded ? '0 2px 8px rgba(232,89,12,0.4)' : 'none',
+            }} disabled={!videoLoaded}>
+              {playing
+                ? <svg width="9" height="9" viewBox="0 0 24 24" fill="white"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
+                : <svg width="9" height="9" viewBox="0 0 24 24" fill="white"><path d="M5 3l14 9-14 9V3z"/></svg>
+              }
+            </button>
+
+            {/* Time */}
+            <span style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: 'rgba(255,255,255,0.8)', flexShrink: 0 }}>
+              {fmt(currentTime)}
+            </span>
+
+            {/* Scrubber */}
+            <div
+              style={{ flex: 1, height: 4, background: 'rgba(255,255,255,0.15)', borderRadius: 2, cursor: videoLoaded ? 'pointer' : 'default', position: 'relative' }}
+              onClick={e => { if (!videoLoaded) return; const r = e.currentTarget.getBoundingClientRect(); seekTo((e.clientX - r.left) / r.width) }}
+            >
+              <div style={{
+                height: '100%', borderRadius: 2, background: 'var(--p2)',
+                width: duration > 0 ? `${(currentTime / duration) * 100}%` : '0%',
+                transition: 'width .1s linear',
+                boxShadow: '0 0 6px rgba(232,89,12,0.6)',
+              }}/>
+              {/* Scrubber thumb */}
+              {duration > 0 && (
+                <div style={{
+                  position: 'absolute', top: '50%', transform: 'translateY(-50%)',
+                  left: `${(currentTime / duration) * 100}%`,
+                  width: 12, height: 12, borderRadius: '50%',
+                  background: 'var(--p2)', marginLeft: -6,
+                  boxShadow: '0 0 8px rgba(232,89,12,0.8)',
+                }}/>
+              )}
+            </div>
+
+            <span style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: 'rgba(255,255,255,0.4)', flexShrink: 0 }}>
+              {fmt(duration)}
+            </span>
+
+            {/* Load video button if not loaded */}
+            {!videoLoaded && (
+              <button className="btn-ghost" style={{ padding: '4px 12px', fontSize: 11, flexShrink: 0 }} onClick={loadVideo}>
+                + Load Video
+              </button>
+            )}
+          </div>
+        </div>
+
+        {/* Error message */}
+        {error && (
+          <div className="slide-down" style={{
+            margin: '12px 16px 0', padding: '8px 14px', borderRadius: 8,
+            background: 'rgba(255,69,58,0.1)', border: '1px solid rgba(255,69,58,0.3)',
+            fontSize: 12, color: '#FF453A',
+          }}>{error}</div>
+        )}
+
+        {/* Results area */}
+        <div style={{ flex: 1, overflowY: 'auto', padding: '16px' }}>
+          {!results && !loading && (
+            <div style={{ textAlign: 'center', paddingTop: 40 }}>
+              <div style={{
+                width: 56, height: 56, borderRadius: 16, background: 'rgba(232,89,12,0.08)',
+                border: '1px solid rgba(232,89,12,0.2)',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                margin: '0 auto 14px',
+              }}>
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="var(--p2)" strokeWidth="2" strokeLinecap="round">
+                  <path d="M9 19l-7-7 7-7"/><path d="M15 5l7 7-7 7"/>
+                </svg>
+              </div>
+              <div style={{ fontFamily: 'Inter', fontWeight: 700, fontSize: 14, color: 'var(--t-2)', marginBottom: 6 }}>
+                Ready to audit
+              </div>
+              <div style={{ fontSize: 12, color: 'var(--t-3)', lineHeight: 1.6, maxWidth: 320, margin: '0 auto' }}>
+                Make sure the collection app is open on this match and the bridge is injected.
+                When done reviewing, click <strong style={{ color: 'var(--p2)' }}>Get Audit Results</strong>.
+              </div>
+            </div>
+          )}
+
+          {results && score !== null && (
+            <QuickSummary
+              results={results}
+              score={score}
+              onFullReport={() => onFullReport(results, score, session)}
+            />
+          )}
+
+          {saved && (
+            <div className="fade-in" style={{
+              marginTop: 10, textAlign: 'center', fontSize: 11, color: '#30D158',
+              display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5,
+            }}>
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#30D158" strokeWidth="2.5" strokeLinecap="round">
+                <path d="M20 6L9 17l-5-5"/>
+              </svg>
+              Results saved to Firebase
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}

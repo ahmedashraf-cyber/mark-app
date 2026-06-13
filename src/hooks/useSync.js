@@ -140,5 +140,33 @@ export function useSync(onStatusChange, sessionId) {
     })
   }, [sessionId, onStatusChange])
 
-  return { syncNavigation, syncSetPlaying, syncSeek, requestEventCount }
+  // Request full QA audit results from bridge
+  const requestQAResults = useCallback((matchId) => {
+    return new Promise((resolve) => {
+      const ws = getWs(onStatusChange)
+      if (!ws || ws.readyState !== WebSocket.OPEN) { resolve(null); return }
+
+      const reqTs = Date.now()
+      const timeout = setTimeout(() => {
+        ws.removeEventListener('message', handler)
+        resolve(null)
+      }, 8000)
+
+      ws.send(JSON.stringify({ type: 'getQAResults', matchId, ts: reqTs }))
+
+      function handler(event) {
+        try {
+          const msg = JSON.parse(event.data)
+          if (msg.type === 'qaResultsResponse' && msg.ts >= reqTs) {
+            clearTimeout(timeout)
+            ws.removeEventListener('message', handler)
+            resolve(msg.error ? null : msg)
+          }
+        } catch(e) {}
+      }
+      ws.addEventListener('message', handler)
+    })
+  }, [sessionId, onStatusChange])
+
+  return { syncNavigation, syncSetPlaying, syncSeek, requestEventCount, requestQAResults }
 }

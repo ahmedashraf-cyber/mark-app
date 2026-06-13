@@ -6,6 +6,8 @@ import LoginPage from './pages/LoginPage'
 import SessionSetupPage from './pages/SessionSetupPage'
 import ReviewPage from './pages/ReviewPage'
 import SessionHistoryPage from './pages/SessionHistoryPage'
+import AuditPage from './pages/AuditPage'
+import AuditReportPage from './pages/AuditReportPage'
 import UpdateBanner from './components/UpdateBanner'
 
 // Cinematic page wrapper — fades + slides in each time content changes
@@ -53,6 +55,9 @@ function AppInner() {
   const [update, setUpdate]           = useState(null)
   const [updateDismissed, setUpdateDismissed] = useState(false)
   const [bridgeSyncStatus, setBridgeSyncStatus] = useState('disconnected')
+  const [auditResults,   setAuditResults]   = useState(null)
+  const [auditScore,     setAuditScore]     = useState(null)
+  const [showAuditReport, setShowAuditReport] = useState(false)
 
   useEffect(() => {
     if (!user) return
@@ -94,12 +99,29 @@ function AppInner() {
     </PageTransition>
   )
 
-  const pageId = session ? `review-${session.sessionId}` : showHistory ? 'history' : 'setup'
+  const pageId = showAuditReport ? 'audit-report' : session?.mode === 'audit' ? `audit-${session.sessionId}` : session ? `review-${session.sessionId}` : showHistory ? 'history' : 'setup'
 
   return (
     <>
       <PageTransition id={pageId}>
-        {session ? (
+        {showAuditReport && auditResults ? (
+          <AuditReportPage
+            results={auditResults}
+            score={auditScore}
+            session={session}
+            onBack={() => setShowAuditReport(false)}
+          />
+        ) : session?.mode === 'audit' ? (
+          <AuditPage
+            session={session}
+            onBack={() => setSession(null)}
+            onFullReport={(results, score, sess) => {
+              setAuditResults(results)
+              setAuditScore(score)
+              setShowAuditReport(true)
+            }}
+          />
+        ) : session ? (
           <ReviewPage
             session={session}
             bridgeSyncStatus={bridgeSyncStatus}
