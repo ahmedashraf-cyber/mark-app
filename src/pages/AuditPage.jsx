@@ -140,37 +140,82 @@ function QuickSummary({ results, score, onFullReport }) {
 function AmendmentsTable({ results, session }) {
   const { baseEvents, amendments } = results
 
+  // Build profile lookup from Apollo cache
+  const profileMap = {}
+  try {
+    const cache = window.apollo?.client?.cache?.extract() || {}
+    Object.values(cache).forEach(v => {
+      if (v.__typename === 'Profile' && v.legacyId) {
+        profileMap[v.legacyId] = `${v.firstName} ${v.lastName}`
+      }
+    })
+  } catch(e) {}
+
+  // Build refinement lookup (collector's original values) by key+type
+  const refinementMap = {}
+  try {
+    const cache = window.apollo?.client?.cache?.extract() || {}
+    Object.values(cache).forEach(v => {
+      if (v.__typename === 'Event' && v.category === 'refinement') {
+        const k = `${v.key}_${v.type}`
+        if (!refinementMap[k]) refinementMap[k] = v.payload || {}
+      }
+    })
+  } catch(e) {}
+
   // Build base event lookup
   const baseByKey = {}
   baseEvents.forEach(e => { baseByKey[e.key] = e })
 
-  // Deduplicate amendments by key — group multiple changes per event
+  // Deduplicate amendments by key
   const byKey = {}
   amendments.forEach(a => {
     if (!byKey[a.key]) byKey[a.key] = []
     byKey[a.key].push(a)
   })
 
-  // Build rows — one per unique edited event
+  // Helper: extract clean value from fields object (values only, no keys)
+  function cleanFields(fields) {
+    if (!fields) return '—'
+    return Object.entries(fields)
+      .filter(([k, v]) => k !== 'extras' && v !== null && v !== undefined && String(v) !== '')
+      .map(([, v]) => Array.isArray(v) ? v.join(', ') : String(v))
+      .join(' · ') || '—'
+  }
+
+  // Build rows
   const rows = Object.entries(byKey).map(([key, amends]) => {
     const base = baseByKey[key]
     const types = [...new Set(amends.map(a => a.type))]
-    const latestAmend = amends.sort((a, b) => (b.capturedTime || '').localeCompare(a.capturedTime || ''))[0]
-    // Extract before/after values from amendment payload
-    const beforeAfter = amends.map(a => {
-      const p = a.payload || {}
-      const fields = p.fields || {}
-      if (a.type === 'deletion') return { before: base?.name || '?', after: 'Deleted' }
-      if (a.type === 'base') return { before: base?.name || '?', after: p.name || Object.values(fields).join(', ') || '?' }
-      if (a.type === 'extras' || a.type === 'location') {
-        const vals = Object.entries(fields).map(([k,v]) => `${k}: ${v}`).join(', ')
-        return { before: '?', after: vals || '?' }
-      }
-      if (a.type === 'camera') return { before: '?', after: p.name || Object.values(fields).join(', ') || '?' }
-      return { before: '?', after: JSON.stringify(fields).slice(0,40) }
-    })
-    const before = beforeAfter.map(x => x.before).filter((v,i,a) => a.indexOf(v)===i).join(' | ')
-    const after  = beforeAfter.map(x => x.after).filter((v,i,a) => a.indexOf(v)===i).join(' | ')
+    const latestAmend = [...amends].sort((a, b) =>
+      (b.capturedTime || '').localeCompare(a.capturedTime || '')
+    )[0]
+
+    // Before: from refinement (collector's original), After: from amendment
+    let before = '—'
+    let after = '—'
+
+    const mainAmend = amends[0]
+    if (mainAmend.type === 'deletion') {
+      before = base?.name || '—'
+      after = 'Deleted'
+    } else if (mainAmend.type === 'base') {
+      before = base?.name || '—'
+      after = mainAmend.payload?.name || cleanFields(mainAmend.payload?.fields)
+    } else if (mainAmend.type === 'extras' || mainAmend.type === 'location') {
+      const refKey = `${key}_${mainAmend.type}`
+      const ref = refinementMap[refKey]
+      before = ref ? cleanFields(ref.fields) : '—'
+      after = cleanFields(mainAmend.payload?.fields)
+    } else if (mainAmend.type === 'camera') {
+      before = '—'
+      after = mainAmend.payload?.name || cleanFields(mainAmend.payload?.fields)
+    }
+
+    const collectorId = base?.author || '—'
+    const reviewerAuthorId = latestAmend?.author
+    const reviewerName = profileMap[reviewerAuthorId] || `#${reviewerAuthorId}`
+    const collectorDisplay = `#${collectorId}`
 
     return {
       key,
@@ -180,10 +225,9 @@ function AmendmentsTable({ results, session }) {
       types,
       before,
       after,
-      collectorId:  base?.author || '—',
-      reviewerId:   latestAmend?.author || '—',
+      collectorId:  collectorDisplay,
+      reviewerName,
       capturedTime: latestAmend?.capturedTime || '',
-      payload:      latestAmend?.payload || {},
     }
   }).sort((a, b) => {
     const ta = baseByKey[a.key]?.videoTimestamp || 0
@@ -204,7 +248,7 @@ function AmendmentsTable({ results, session }) {
       r.before || '—',
       r.after  || '—',
       r.collectorId,
-      r.reviewerId,
+      r.reviewerName,
       r.capturedTime,
     ])
     const csv = [headers, ...csvRows]
@@ -291,7 +335,7 @@ function AmendmentsTable({ results, session }) {
               <span style={{ fontSize:10, color:'#FF453A', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }} title={r.before}>{r.before || '—'}</span>
               <span style={{ fontSize:10, color:'#30D158', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }} title={r.after}>{r.after || '—'}</span>
               <span style={{ fontSize:10, color:'var(--t-3)', fontFamily:'JetBrains Mono, monospace' }}>{r.collectorId}</span>
-              <span style={{ fontSize:10, color:'var(--t-3)', fontFamily:'JetBrains Mono, monospace' }}>{r.reviewerId}</span>
+              <span style={{ fontSize:10, color:'var(--t-2)', fontWeight:500 }}>{r.reviewerName}</span>
               <span style={{ fontSize:9, color:'var(--t-3)' }}>
                 {r.capturedTime ? new Date(r.capturedTime).toLocaleTimeString('en-GB', {hour:'2-digit',minute:'2-digit'}) : '—'}
               </span>
