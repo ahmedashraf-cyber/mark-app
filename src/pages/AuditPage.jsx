@@ -136,6 +136,152 @@ function QuickSummary({ results, score, onFullReport }) {
   )
 }
 
+// ── Amendments Table ──────────────────────────────────────────────────────────
+function AmendmentsTable({ results, session }) {
+  const { baseEvents, amendments } = results
+
+  // Build base event lookup
+  const baseByKey = {}
+  baseEvents.forEach(e => { baseByKey[e.key] = e })
+
+  // Deduplicate amendments by key — group multiple changes per event
+  const byKey = {}
+  amendments.forEach(a => {
+    if (!byKey[a.key]) byKey[a.key] = []
+    byKey[a.key].push(a)
+  })
+
+  // Build rows — one per unique edited event
+  const rows = Object.entries(byKey).map(([key, amends]) => {
+    const base = baseByKey[key]
+    const types = [...new Set(amends.map(a => a.type))]
+    const latestAmend = amends.sort((a, b) => (b.capturedTime || '').localeCompare(a.capturedTime || ''))[0]
+    return {
+      key,
+      eventName:    base?.name || '—',
+      timestamp:    base?.videoTimestamp ? fmt(base.videoTimestamp / 1000) : '—',
+      teamId:       base?.teamId || '—',
+      types,
+      collectorId:  base?.author || '—',
+      reviewerId:   latestAmend?.author || '—',
+      capturedTime: latestAmend?.capturedTime || '',
+      payload:      latestAmend?.payload || {},
+    }
+  }).sort((a, b) => {
+    const ta = baseByKey[a.key]?.videoTimestamp || 0
+    const tb = baseByKey[b.key]?.videoTimestamp || 0
+    return ta - tb
+  })
+
+  function downloadCSV() {
+    const headers = ['Match ID','Match Name','Half','Timestamp','Event Name','Team','Change Types','Collector ID','Reviewer ID','Captured Time']
+    const csvRows = rows.map(r => [
+      session.matchId,
+      session.matchName,
+      session.half,
+      r.timestamp,
+      r.eventName,
+      r.teamId,
+      r.types.join(' + '),
+      r.collectorId,
+      r.reviewerId,
+      r.capturedTime,
+    ])
+    const csv = [headers, ...csvRows]
+      .map(r => r.map(v => `"${String(v).replace(/"/g, '""')}"`).join(','))
+      .join('
+')
+    const blob = new Blob([csv], { type: 'text/csv' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `amendments_${session.matchId}_${session.half}_${Date.now()}.csv`
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
+  if (rows.length === 0) return null
+
+  const AMEND_COLORS = {
+    deletion: '#FF453A', extras: '#FFD60A', base: '#E8590C',
+    camera: '#BF5AF2', location: '#0A84FF',
+  }
+
+  return (
+    <div className="fade-in" style={{ marginTop: 14 }}>
+      {/* Header */}
+      <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:10 }}>
+        <div style={{ fontSize:10, fontWeight:800, color:'var(--t-3)', letterSpacing:1.2 }}>
+          AMENDMENTS — {rows.length} EVENTS EDITED
+        </div>
+        <button
+          className="btn-ghost"
+          style={{ padding:'4px 12px', fontSize:11, display:'flex', alignItems:'center', gap:6 }}
+          onClick={downloadCSV}
+        >
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+            <path d="M12 3v13M6 11l6 6 6-6"/><path d="M4 20h16"/>
+          </svg>
+          Download CSV
+        </button>
+      </div>
+
+      {/* Table */}
+      <div style={{ borderRadius:10, border:'1px solid var(--b-1)', overflow:'hidden' }}>
+        {/* Header row */}
+        <div style={{
+          display:'grid',
+          gridTemplateColumns:'60px 1fr 70px 120px 80px 80px 80px',
+          padding:'7px 14px',
+          background:'var(--bg-3)',
+          borderBottom:'1px solid var(--b-1)',
+        }}>
+          {['TIME','EVENT','TEAM','CHANGE','COLLECTOR','REVIEWER','CAPTURED'].map(h => (
+            <span key={h} style={{ fontSize:9, fontWeight:800, color:'var(--t-3)', letterSpacing:1 }}>{h}</span>
+          ))}
+        </div>
+
+        {/* Data rows */}
+        <div style={{ maxHeight:280, overflowY:'auto' }}>
+          {rows.map((r, i) => (
+            <div key={r.key} style={{
+              display:'grid',
+              gridTemplateColumns:'60px 1fr 70px 120px 80px 80px 80px',
+              padding:'7px 14px',
+              borderBottom:'1px solid var(--b-1)',
+              background: i % 2 === 0 ? 'transparent' : 'rgba(255,255,255,0.01)',
+              borderLeft:`2px solid ${AMEND_COLORS[r.types[0]] || 'var(--b-2)'}`,
+              transition:'background .1s',
+            }}
+              onMouseEnter={e => e.currentTarget.style.background='rgba(255,255,255,0.03)'}
+              onMouseLeave={e => e.currentTarget.style.background= i%2===0?'transparent':'rgba(255,255,255,0.01)'}
+            >
+              <span style={{ fontSize:11, fontFamily:'JetBrains Mono, monospace', color:'var(--p2)' }}>{r.timestamp}</span>
+              <span style={{ fontSize:11, color:'var(--t-1)', fontWeight:600, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{r.eventName}</span>
+              <span style={{ fontSize:10, color:'var(--t-3)' }}>{r.teamId}</span>
+              <div style={{ display:'flex', gap:3, flexWrap:'wrap' }}>
+                {r.types.map((t, j) => (
+                  <span key={j} style={{
+                    fontSize:9, fontWeight:700, padding:'1px 6px', borderRadius:4,
+                    background:`${AMEND_COLORS[t] || 'var(--t-3)'}14`,
+                    color: AMEND_COLORS[t] || 'var(--t-3)',
+                    border:`1px solid ${AMEND_COLORS[t] || 'var(--t-3)'}30`,
+                  }}>{t}</span>
+                ))}
+              </div>
+              <span style={{ fontSize:10, color:'var(--t-3)', fontFamily:'JetBrains Mono, monospace' }}>{r.collectorId}</span>
+              <span style={{ fontSize:10, color:'var(--t-3)', fontFamily:'JetBrains Mono, monospace' }}>{r.reviewerId}</span>
+              <span style={{ fontSize:9, color:'var(--t-3)' }}>
+                {r.capturedTime ? new Date(r.capturedTime).toLocaleTimeString('en-GB', {hour:'2-digit',minute:'2-digit'}) : '—'}
+              </span>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // ── Main AuditPage ─────────────────────────────────────────────────────────────
 export default function AuditPage({ session, onBack, onFullReport }) {
   const { profile } = useAuth()
@@ -153,16 +299,7 @@ export default function AuditPage({ session, onBack, onFullReport }) {
 
   const { requestQAResults } = useSync(setBridgeStatus, session.sessionId)
 
-  // Load video from saved path
-  useEffect(() => {
-    const key = `mark_video_path_${session.matchId}`
-    const saved = localStorage.getItem(key)
-    if (saved) {
-      invoke('get_video_url', { path: saved })
-        .then(url => { videoRef.current.src = url; videoRef.current.load(); setVideoLoaded(true) })
-        .catch(() => {})
-    }
-  }, [session.matchId])
+  // Video is loaded manually by the reviewer — no auto-load
 
   async function loadVideo() {
     try {
@@ -439,11 +576,14 @@ export default function AuditPage({ session, onBack, onFullReport }) {
           )}
 
           {results && score !== null && (
-            <QuickSummary
-              results={results}
-              score={score}
-              onFullReport={() => onFullReport(results, score, session)}
-            />
+            <>
+              <QuickSummary
+                results={results}
+                score={score}
+                onFullReport={() => onFullReport(results, score, session)}
+              />
+              <AmendmentsTable results={results} session={session} />
+            </>
           )}
 
           {saved && (
