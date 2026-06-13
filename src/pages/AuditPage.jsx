@@ -3,7 +3,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { db } from '../firebase/config'
 import { collection, addDoc, serverTimestamp, getDocs, query, where } from 'firebase/firestore'
 import { useAuth } from '../hooks/useAuth.jsx'
-import { useSync } from '../hooks/useSync.jsx'
+import { useSync } from '../hooks/useSync.js'
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 const fmt = (s) => {
