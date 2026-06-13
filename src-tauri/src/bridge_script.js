@@ -1,5 +1,5 @@
 (async function(){
-  const BRIDGE_VERSION = '6.9.0-ws';
+  const BRIDGE_VERSION = '6.10.0-ws';
   if(window.__MARK_BRIDGE_VERSION__ === BRIDGE_VERSION){console.log('[MARK] bridge already running (v' + BRIDGE_VERSION + ')');return;}
   if(window.__MARK_BRIDGE_STOP__) window.__MARK_BRIDGE_STOP__();
   window.__MARK_BRIDGE__ = true;
@@ -265,11 +265,11 @@
                 return true;
               });
 
-              // Match base events to viewed timestamps (within 2000ms)
+              // Match base events to viewed timestamps (within 500ms — avg gap is 674ms)
               baseEvents = allBase.filter(e => {
                 const ts = e.payload.videoTimestamp;
                 for (const vt of viewedTs) {
-                  if (Math.abs(vt - ts) <= 2000) return true;
+                  if (Math.abs(vt - ts) <= 500) return true;
                 }
                 return false;
               }).map(v => ({
