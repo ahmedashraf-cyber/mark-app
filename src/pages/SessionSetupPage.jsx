@@ -534,6 +534,7 @@ export default function SessionSetupPage({ onSessionStart, lastResult, onShowHis
         </div>
           </div>
         )}
+      </div>
 
       {/* Recent sessions section */}
       {recentSessions.length > 0 && (
