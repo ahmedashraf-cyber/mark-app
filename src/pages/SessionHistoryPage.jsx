@@ -510,60 +510,122 @@ function MatchReport({ session, tags, onBack }) {
 
 // ------ Session Card (list view) ------------------------------------------------------------------------------------------------------------------------------------------------------
 function SessionCard({ session, onReview, onExport, loading }) {
-  const color = (session.qualityScore || 0) >= 80 ? '#30D158' : (session.qualityScore || 0) >= 60 ? '#FFD60A' : '#FF453A'
-  const date  = session.completedAt?.toDate?.()
+  const score  = session.qualityScore || 0
+  const color  = score >= 80 ? '#30D158' : score >= 60 ? '#FFD60A' : '#FF453A'
+  const isAudit = session.type === 'audit'
+  const date   = session.completedAt?.toDate?.()
     ? session.completedAt.toDate().toLocaleDateString('en-GB', { day:'2-digit', month:'short', year:'numeric' })
     : ''
 
+  // Mini arc for score
+  const r = 16, circ = 2 * Math.PI * r
+  const offset = circ - (score / 100) * circ
+
   return (
-    <div className="card" style={{ padding: '14px 16px', cursor: 'pointer', marginBottom: 8 }}
-      onClick={() => !loading && onReview(session)}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-        {/* Quality indicator */}
+    <div
+      onClick={() => !loading && onReview(session)}
+      style={{
+        display:'flex', alignItems:'center', gap:14,
+        padding:'14px 20px', cursor:'pointer',
+        borderBottom:'1px solid var(--b-1)',
+        transition:'background .12s',
+        position:'relative',
+      }}
+      onMouseEnter={e => e.currentTarget.style.background='rgba(255,255,255,0.025)'}
+      onMouseLeave={e => e.currentTarget.style.background='transparent'}
+    >
+      {/* Left accent bar */}
+      <div style={{
+        position:'absolute', left:0, top:'20%', bottom:'20%', width:2,
+        background:color, borderRadius:2, opacity:0.6,
+      }}/>
+
+      {/* Score ring */}
+      <div style={{ position:'relative', width:44, height:44, flexShrink:0 }}>
+        <svg width="44" height="44" viewBox="0 0 44 44">
+          <circle cx="22" cy="22" r={r} fill="none" stroke="var(--b-2)" strokeWidth="3"/>
+          <circle cx="22" cy="22" r={r} fill="none"
+            stroke={color} strokeWidth="3"
+            strokeDasharray={circ} strokeDashoffset={offset}
+            strokeLinecap="round"
+            style={{ transform:'rotate(-90deg)', transformOrigin:'50% 50%' }}
+          />
+        </svg>
         <div style={{
-          width: 44, height: 44, borderRadius: 10, flexShrink: 0,
-          background: `${color}18`, border: `1.5px solid ${color}44`,
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          position:'absolute', inset:0,
+          display:'flex', alignItems:'center', justifyContent:'center',
         }}>
-          <span style={{ fontFamily: 'Inter', fontWeight: 900, fontSize: 13, color }}>{session.qualityScore || 0}%</span>
+          <span style={{ fontFamily:'Inter', fontWeight:900, fontSize:10, color, lineHeight:1 }}>{score}%</span>
         </div>
+      </div>
 
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontFamily: 'Inter', fontWeight: 700, fontSize: 14, color: 'var(--t-1)', marginBottom: 3, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+      {/* Match info */}
+      <div style={{ flex:1, minWidth:0 }}>
+        <div style={{ display:'flex', alignItems:'center', gap:7, marginBottom:4 }}>
+          <span style={{ fontFamily:'Inter', fontWeight:700, fontSize:13, color:'var(--t-1)', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
             {session.matchName}
-          </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 11, color: 'var(--t-3)' }}>
-            <span style={{ fontFamily: 'JetBrains Mono, monospace', color: 'var(--p2)', fontWeight: 700 }}>{session.matchId}</span>
-            <span>--</span>
-            <span>{session.half}</span>
-            {date && <><span>--</span><span>{date}</span></>}
-          </div>
+          </span>
+          <span style={{
+            fontSize:8, fontWeight:800, padding:'1px 6px', borderRadius:4, flexShrink:0,
+            background:isAudit?'rgba(10,132,255,0.12)':'rgba(232,89,12,0.1)',
+            color:isAudit?'#0A84FF':'var(--p2)',
+            border:`1px solid ${isAudit?'rgba(10,132,255,0.2)':'rgba(232,89,12,0.2)'}`,
+            letterSpacing:0.5,
+          }}>{isAudit?'AUDIT':'SCOUT'}</span>
         </div>
+        <div style={{ display:'flex', alignItems:'center', gap:6, fontSize:10, color:'var(--t-3)' }}>
+          <span style={{ fontFamily:'JetBrains Mono, monospace', color:'var(--p2)', fontWeight:600, fontSize:9 }}>{session.matchId}</span>
+          <span style={{ color:'var(--b-2)' }}>·</span>
+          <span>{session.half}</span>
+          <span style={{ color:'var(--b-2)' }}>·</span>
+          <span>{date}</span>
+        </div>
+      </div>
 
-        <div style={{ textAlign: 'right', flexShrink: 0 }}>
-          <div style={{ fontSize: 12, color: 'var(--t-2)', fontWeight: 600 }}>{session.totalTaggedErrors || 0} errors</div>
-          <div style={{ fontSize: 10, color: 'var(--t-3)', marginTop: 2 }}>{session.totalReviewedEvents || 0} events reviewed</div>
+      {/* Stats */}
+      <div style={{ display:'flex', gap:20, flexShrink:0, alignItems:'center' }}>
+        <div style={{ textAlign:'right' }}>
+          <div style={{ fontFamily:'Inter', fontWeight:800, fontSize:16, color, lineHeight:1 }}>{session.totalTaggedErrors || 0}</div>
+          <div style={{ fontSize:9, color:'var(--t-3)', fontWeight:600, letterSpacing:0.5, marginTop:2 }}>ERRORS</div>
         </div>
+        <div style={{ textAlign:'right' }}>
+          <div style={{ fontFamily:'Inter', fontWeight:700, fontSize:16, color:'var(--t-2)', lineHeight:1 }}>{session.totalReviewedEvents || 0}</div>
+          <div style={{ fontSize:9, color:'var(--t-3)', fontWeight:600, letterSpacing:0.5, marginTop:2 }}>REVIEWED</div>
+        </div>
+      </div>
 
-        <div style={{display:'flex',gap:6,flexShrink:0}}>
-          <button
-            onClick={e => { e.stopPropagation(); onExport(session) }}
-            title="Export CSV"
-            style={{
-              width:30, height:30, borderRadius:8, flexShrink:0,
-              background:'rgba(48,209,88,0.12)', border:'1px solid rgba(48,209,88,0.3)',
-              display:'flex', alignItems:'center', justifyContent:'center', cursor:'pointer',
-            }}>
-            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#30D158" strokeWidth="2.5" strokeLinecap="round"><path d="M12 3v13M6 11l6 6 6-6"/><path d="M4 20h16"/></svg>
-          </button>
-          <div style={{
-            width:30, height:30, borderRadius:8, flexShrink:0,
-            background:'var(--p2)', display:'flex', alignItems:'center', justifyContent:'center',
-            boxShadow:'0 2px 8px rgba(232,89,12,0.3)',
-          }}>
-            <svg width="11" height="11" viewBox="0 0 24 24" fill="white"><path d="M5 3l14 9-14 9V3z"/></svg>
-          </div>
-        </div>
+      {/* Actions */}
+      <div style={{ display:'flex', gap:6, flexShrink:0 }}>
+        <button
+          onClick={e => { e.stopPropagation(); onExport(session) }}
+          title="Export CSV"
+          style={{
+            width:32, height:32, borderRadius:8,
+            background:'rgba(48,209,88,0.08)', border:'1px solid rgba(48,209,88,0.2)',
+            display:'flex', alignItems:'center', justifyContent:'center', cursor:'pointer',
+            transition:'all .15s',
+          }}
+          onMouseEnter={e => e.currentTarget.style.background='rgba(48,209,88,0.16)'}
+          onMouseLeave={e => e.currentTarget.style.background='rgba(48,209,88,0.08)'}
+        >
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#30D158" strokeWidth="2.5" strokeLinecap="round">
+            <path d="M12 3v13M6 11l6 6 6-6"/><path d="M4 20h16"/>
+          </svg>
+        </button>
+        <button
+          onClick={e => { e.stopPropagation(); onReview(session) }}
+          style={{
+            width:32, height:32, borderRadius:8,
+            background:'var(--p2)', border:'none',
+            display:'flex', alignItems:'center', justifyContent:'center', cursor:'pointer',
+            boxShadow:'0 2px 8px rgba(232,89,12,0.25)',
+            transition:'all .15s',
+          }}
+          onMouseEnter={e => { e.currentTarget.style.transform='scale(1.08)'; e.currentTarget.style.boxShadow='0 4px 12px rgba(232,89,12,0.4)' }}
+          onMouseLeave={e => { e.currentTarget.style.transform='scale(1)'; e.currentTarget.style.boxShadow='0 2px 8px rgba(232,89,12,0.25)' }}
+        >
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="white"><path d="M5 3l14 9-14 9V3z"/></svg>
+        </button>
       </div>
     </div>
   )
@@ -645,33 +707,96 @@ export default function SessionHistoryPage({ onBack, initialSession }) {
     return <MatchReport session={activeSession} tags={activeTags} onBack={() => { setActiveSession(null); setActiveTags([]) }} />
   }
 
+  // Compute stats
+  const totalSessions  = sessions.length
+  const avgScore       = sessions.length > 0 ? Math.round(sessions.reduce((s, x) => s + (x.qualityScore || 0), 0) / sessions.length) : 0
+  const scoutSessions  = sessions.filter(s => s.type !== 'audit').length
+  const auditSessions  = sessions.filter(s => s.type === 'audit').length
+
   return (
-    <div style={{ height: '100vh', display: 'flex', flexDirection: 'column', background: 'var(--bg)', overflow: 'hidden' }}>
-      <div style={{
-        flexShrink: 0, height: 48,
-        background: 'var(--bg-2)', borderBottom: '1px solid var(--b-1)',
-        display: 'flex', alignItems: 'center', padding: '0 16px', gap: 12,
+    <div style={{ height:'100vh', display:'flex', flexDirection:'column', background:'var(--bg)', overflow:'hidden' }}>
+
+      {/* ── Header ── */}
+      <header style={{
+        flexShrink:0, height:52,
+        background:'var(--bg-2)', borderBottom:'1px solid var(--b-1)',
+        display:'flex', alignItems:'center', padding:'0 20px', gap:12,
       }}>
-        <button className="btn-ghost" style={{ padding: '5px 12px', fontSize: 12 }} onClick={onBack}>
+        <button className="btn-ghost" style={{ padding:'5px 12px', fontSize:11, display:'flex', alignItems:'center', gap:5 }} onClick={onBack}>
+          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+            <path d="M19 12H5M12 5l-7 7 7 7"/>
+          </svg>
           Back
         </button>
-        <div style={{ width: 1, height: 16, background: 'var(--b-2)' }}/>
-        <span style={{ fontFamily: 'Inter', fontWeight: 700, fontSize: 14, color: 'var(--t-1)' }}>Session History</span>
-        {!loading && (
-          <span style={{ fontSize: 11, color: 'var(--t-3)' }}>{sessions.length} completed sessions</span>
-        )}
-      </div>
+        <div style={{ width:1, height:16, background:'var(--b-2)' }}/>
+        <div style={{ flex:1 }}>
+          <span style={{ fontFamily:'Inter', fontWeight:900, fontSize:14, color:'var(--t-1)', letterSpacing:-0.2 }}>Session History</span>
+        </div>
 
-      <div style={{ flex: 1, overflowY: 'auto', padding: '16px 20px' }}>
+        {/* Stats pills */}
+        {!loading && sessions.length > 0 && (
+          <div style={{ display:'flex', gap:8 }}>
+            {[
+              { label:'Total', value:totalSessions, color:'var(--t-2)' },
+              { label:'Scout', value:scoutSessions, color:'var(--p2)' },
+              { label:'Audit', value:auditSessions, color:'#0A84FF' },
+              { label:'Avg Score', value:`${avgScore}%`, color: avgScore>=80?'#30D158':avgScore>=60?'#FFD60A':'#FF453A' },
+            ].map(s => (
+              <div key={s.label} style={{
+                display:'flex', alignItems:'center', gap:5,
+                padding:'3px 10px', borderRadius:20,
+                background:'rgba(255,255,255,0.04)', border:'1px solid var(--b-1)',
+              }}>
+                <span style={{ fontSize:12, fontWeight:800, color:s.color, fontFamily:'Inter' }}>{s.value}</span>
+                <span style={{ fontSize:9, color:'var(--t-3)', fontWeight:600, letterSpacing:0.5 }}>{s.label.toUpperCase()}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </header>
+
+      {/* ── Session list ── */}
+      <div style={{ flex:1, overflowY:'auto' }}>
         {loading ? (
-          <div style={{ textAlign: 'center', color: 'var(--t-3)', paddingTop: 60, fontSize: 13 }}>Loading...</div>
+          <div style={{ display:'flex', alignItems:'center', justifyContent:'center', height:'100%', flexDirection:'column', gap:12 }}>
+            <svg style={{ animation:'spin 1s linear infinite' }} width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--t-3)" strokeWidth="2.5">
+              <circle cx="12" cy="12" r="10" strokeOpacity=".2"/><path d="M12 2a10 10 0 0 1 10 10"/>
+            </svg>
+            <span style={{ fontSize:12, color:'var(--t-3)' }}>Loading sessions…</span>
+          </div>
         ) : sessions.length === 0 ? (
-          <div style={{ textAlign: 'center', color: 'var(--t-3)', paddingTop: 60, fontSize: 13 }}>No completed sessions yet</div>
-        ) : sessions.map(s => (
-          <SessionCard key={s.id} session={s} onReview={handleReview} onExport={handleExport} loading={tagsLoading} />
-        ))}
+          <div style={{ display:'flex', alignItems:'center', justifyContent:'center', height:'100%', flexDirection:'column', gap:10 }}>
+            <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="var(--b-2)" strokeWidth="1.5">
+              <rect x="3" y="4" width="18" height="18" rx="3"/><path d="M3 9h18"/><circle cx="8" cy="14" r="1" fill="var(--b-2)"/><circle cx="12" cy="14" r="1" fill="var(--b-2)"/><circle cx="16" cy="14" r="1" fill="var(--b-2)"/>
+            </svg>
+            <span style={{ fontSize:13, color:'var(--t-3)' }}>No completed sessions yet</span>
+            <span style={{ fontSize:11, color:'var(--t-3)', opacity:0.6 }}>Sessions will appear here after you finish a review</span>
+          </div>
+        ) : (
+          <>
+            {/* Column headers */}
+            <div style={{
+              display:'grid', gridTemplateColumns:'60px 1fr 80px 80px 80px',
+              padding:'8px 20px', borderBottom:'1px solid var(--b-1)',
+              background:'var(--bg-2)', position:'sticky', top:0, zIndex:10,
+            }}>
+              {['SCORE','MATCH','ERRORS','REVIEWED',''].map((h,i) => (
+                <div key={i} style={{ fontSize:9, fontWeight:800, color:'var(--t-3)', letterSpacing:1.2, textAlign:i>=2?'right':'left' }}>{h}</div>
+              ))}
+            </div>
+
+            {sessions.map(s => (
+              <SessionCard key={s.id} session={s} onReview={handleReview} onExport={handleExport} loading={tagsLoading} />
+            ))}
+          </>
+        )}
         {tagsLoading && (
-          <div style={{ textAlign: 'center', color: 'var(--t-3)', paddingTop: 16, fontSize: 12 }}>Loading session data...</div>
+          <div style={{ display:'flex', alignItems:'center', justifyContent:'center', gap:8, padding:16, fontSize:12, color:'var(--t-3)' }}>
+            <svg style={{ animation:'spin 1s linear infinite' }} width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+              <circle cx="12" cy="12" r="10" strokeOpacity=".2"/><path d="M12 2a10 10 0 0 1 10 10"/>
+            </svg>
+            Loading session…
+          </div>
         )}
       </div>
     </div>
