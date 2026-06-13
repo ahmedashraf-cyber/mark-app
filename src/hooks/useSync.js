@@ -141,7 +141,7 @@ export function useSync(onStatusChange, sessionId) {
   }, [sessionId, onStatusChange])
 
   // Request full QA audit results from bridge
-  const requestQAResults = useCallback((matchId) => {
+  const requestQAResults = useCallback((matchId, half) => {
     return new Promise((resolve) => {
       const ws = getWs(onStatusChange)
       if (!ws || ws.readyState !== WebSocket.OPEN) { resolve(null); return }
@@ -152,7 +152,9 @@ export function useSync(onStatusChange, sessionId) {
         resolve(null)
       }, 8000)
 
-      ws.send(JSON.stringify({ type: 'getQAResults', matchId, ts: reqTs }))
+      // Convert half string ('1H'/'2H') to partId (1/2)
+      const partId = half === '2H' ? 2 : 1
+      ws.send(JSON.stringify({ type: 'getQAResults', matchId, partId, ts: reqTs }))
 
       function handler(event) {
         try {

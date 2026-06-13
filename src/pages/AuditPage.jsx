@@ -188,7 +188,7 @@ export default function AuditPage({ session, onBack, onFullReport }) {
     setLoading(true)
     setError('')
     try {
-      const data = await requestQAResults(session.matchId)
+      const data = await requestQAResults(session.matchId, session.half)
       if (!data) { setError('No data returned — make sure collection app is open on this match'); setLoading(false); return }
 
       // Calculate score

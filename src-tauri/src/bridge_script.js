@@ -1,5 +1,5 @@
 (async function(){
-  const BRIDGE_VERSION = '6.1.0-ws';
+  const BRIDGE_VERSION = '6.2.0-ws';
   if(window.__MARK_BRIDGE_VERSION__ === BRIDGE_VERSION){console.log('[MARK] bridge already running (v' + BRIDGE_VERSION + ')');return;}
   if(window.__MARK_BRIDGE_STOP__) window.__MARK_BRIDGE_STOP__();
   window.__MARK_BRIDGE__ = true;
@@ -213,6 +213,7 @@
       try {
         const endTs = video.currentTime * 1000; // ms
         const matchId = msg.matchId;
+        const partId = msg.partId || null; // 1 = first half, 2 = second half
         const cache = window.apollo && window.apollo.client && window.apollo.client.cache.extract();
         if (!cache) {
           ws.send(JSON.stringify({ type: 'qaResultsResponse', error: 'Apollo cache not available', ts: Date.now() }));
@@ -231,6 +232,7 @@
           if (!v.payload || typeof v.payload.videoTimestamp !== 'number') return false;
           if (v.payload.videoTimestamp <= 0 || v.payload.videoTimestamp > endTs) return false;
           if (EXCLUDED.includes(v.payload.name)) return false;
+          if (partId && v.partId !== partId) return false;
           if (seenBase.has(v.key)) return false;
           seenBase.add(v.key);
           return true;
@@ -250,6 +252,7 @@
           if (v.__typename !== 'Event') return false;
           if (v.matchId !== numMatchId && v.matchId !== String(numMatchId)) return false;
           if (v.category !== 'amendment') return false;
+          if (partId && v.partId !== partId) return false;
           if (!baseKeysInRange.has(v.key)) return false;
           return true;
         }).map(v => ({
