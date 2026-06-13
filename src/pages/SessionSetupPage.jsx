@@ -300,100 +300,192 @@ export default function SessionSetupPage({ onSessionStart, lastResult, onShowHis
   // (handled inline via setCompletedSession(null) on selection change)
 
   return (
-    <div className="min-h-screen flex flex-col" style={{background:'var(--bg)'}}>
-      {/* Topbar */}
-      <header style={{height:52,display:'flex',alignItems:'center',justifyContent:'space-between',padding:'0 20px',borderBottom:'1px solid var(--b-1)',background:'var(--bg-2)'}}>
+    <div style={{height:'100vh',display:'flex',flexDirection:'column',background:'var(--bg)',overflow:'hidden'}}>
+      {/* ── Topbar ── */}
+      <header style={{
+        flexShrink:0, height:52,
+        display:'flex', alignItems:'center', justifyContent:'space-between',
+        padding:'0 20px', borderBottom:'1px solid var(--b-1)', background:'var(--bg-2)',
+      }}>
         <div style={{display:'flex',alignItems:'center',gap:10}}>
-          <div style={{width:28,height:28,borderRadius:8,background:'var(--p2)',display:'flex',alignItems:'center',justifyContent:'center'}}>
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M12 2L3 7l9 5 9-5-9-5z" fill="white"/><path d="M3 12l9 5 9-5" stroke="white" strokeWidth="2" strokeLinecap="round"/></svg>
+          <div style={{
+            width:30,height:30,borderRadius:9,background:'var(--p2)',
+            display:'flex',alignItems:'center',justifyContent:'center',
+            boxShadow:'0 2px 10px rgba(232,89,12,0.4)',
+          }}>
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none">
+              <path d="M12 2L3 7l9 5 9-5-9-5z" fill="white"/>
+              <path d="M3 12l9 5 9-5" stroke="white" strokeWidth="2" strokeLinecap="round"/>
+            </svg>
           </div>
-          <span style={{fontFamily:'Inter',fontWeight:800,fontSize:16,color:'var(--t-1)'}}>MARK</span>
-          <span style={{fontSize:11,color:'var(--t-3)',fontWeight:600,marginLeft:2}}>Review App · v{CURRENT_VERSION}</span>
+          <div>
+            <span style={{fontFamily:'Inter',fontWeight:900,fontSize:15,color:'var(--t-1)',letterSpacing:-0.3}}>MARK</span>
+            <span style={{fontSize:10,color:'var(--t-3)',fontWeight:500,marginLeft:6}}>v{CURRENT_VERSION}</span>
+          </div>
         </div>
-        <div style={{display:'flex',alignItems:'center',gap:12}}>
-          <span style={{fontSize:12,color:'var(--t-3)'}}>{profile?.email}</span>
-          <button className="btn-ghost" style={{padding:'5px 12px',fontSize:12}} onClick={onShowHistory}>
-            Session History
+        <div style={{display:'flex',alignItems:'center',gap:8}}>
+          <div style={{
+            display:'flex',alignItems:'center',gap:6,
+            padding:'4px 10px',borderRadius:20,
+            background:'rgba(255,255,255,0.04)',border:'1px solid var(--b-1)',
+          }}>
+            <div style={{width:6,height:6,borderRadius:'50%',background:'#30D158',boxShadow:'0 0 6px rgba(48,209,88,0.5)'}}/>
+            <span style={{fontSize:11,color:'var(--t-3)'}}>{profile?.email}</span>
+          </div>
+          <button className="btn-ghost" style={{padding:'5px 14px',fontSize:11,display:'flex',alignItems:'center',gap:5}} onClick={() => onShowHistory && onShowHistory(null)}>
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+              <circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/>
+            </svg>
+            History
           </button>
-          <button className="btn-ghost" style={{padding:'5px 12px',fontSize:12}} onClick={logout}>Sign out</button>
+          <button className="btn-ghost" style={{padding:'5px 14px',fontSize:11}} onClick={logout}>Sign out</button>
         </div>
       </header>
 
       {/* Last result banner */}
       {lastResult && (
-        <div style={{background:'rgba(48,209,88,0.1)',borderBottom:'1px solid rgba(48,209,88,0.2)',padding:'10px 20px',display:'flex',alignItems:'center',gap:12,flexWrap:'wrap'}}>
-          <span style={{fontSize:13,color:'#30D158',fontWeight:700}}>✅ Session complete — Quality Score: {lastResult.quality}%</span>
-          <span style={{fontSize:12,color:'var(--t-3)'}}>{lastResult.tagCount} errors / {lastResult.total} events reviewed</span>
-          <div style={{marginLeft:'auto',display:'flex',gap:8,alignItems:'center'}}>
-            {lastResult.filePath && (
-              <button
-                onClick={async () => {
-                  try {
-                    const { invoke } = await import('@tauri-apps/api/core')
-                    await invoke('open_file', { path: lastResult.filePath })
-                  } catch(e) { console.error('[MARK] Cannot open file:', e) }
-                }}
-                style={{
-                  display:'flex', alignItems:'center', gap:6,
-                  padding:'5px 12px', borderRadius:7, cursor:'pointer',
-                  border:'1px solid rgba(48,209,88,0.4)',
-                  background:'rgba(48,209,88,0.12)',
-                  color:'#30D158', fontSize:12, fontWeight:600,
-                  transition:'all .1s',
-                }}
-              >
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none">
-                  <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
-                  <polyline points="14 2 14 8 20 8" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
-                </svg>
-                Open .xlsx
-              </button>
-            )}
-          </div>
+        <div className="slide-down" style={{
+          background:'rgba(48,209,88,0.08)', borderBottom:'1px solid rgba(48,209,88,0.15)',
+          padding:'8px 20px', display:'flex', alignItems:'center', gap:12,
+        }}>
+          <div style={{width:6,height:6,borderRadius:'50%',background:'#30D158',boxShadow:'0 0 6px rgba(48,209,88,0.6)',flexShrink:0}}/>
+          <span style={{fontSize:12,color:'#30D158',fontWeight:700}}>Session complete</span>
+          <span style={{fontSize:12,color:'var(--t-3)'}}>Quality: <strong style={{color:'var(--t-2)'}}>{lastResult.quality}%</strong> · {lastResult.tagCount} errors / {lastResult.total} events</span>
+          {lastResult.filePath && (
+            <button onClick={async () => { try { const { invoke } = await import('@tauri-apps/api/core'); await invoke('open_file', { path: lastResult.filePath }) } catch(e) {} }}
+              style={{ marginLeft:'auto', display:'flex', alignItems:'center', gap:5, padding:'3px 10px', borderRadius:6, cursor:'pointer', border:'1px solid rgba(48,209,88,0.3)', background:'rgba(48,209,88,0.08)', color:'#30D158', fontSize:11, fontWeight:600 }}>
+              Open .xlsx
+            </button>
+          )}
         </div>
       )}
 
-      <div style={{flex:1,overflow:'auto',padding:32,display:'flex',gap:24,maxWidth:1000,margin:'0 auto',width:'100%'}}>
-        {/* Mode selector */}
+      <div style={{flex:1,overflow:'auto',display:'flex',flexDirection:'column'}}>
+        {/* ── Mode selector ── */}
         {!reviewMode && (
-          <div className="scale-in" style={{display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',flex:1,gap:20,padding:'40px 20px'}}>
-            <div style={{textAlign:'center',marginBottom:8}}>
-              <div style={{fontFamily:'Inter',fontWeight:800,fontSize:20,color:'var(--t-1)',marginBottom:6}}>Select Review Mode</div>
-              <div style={{fontSize:12,color:'var(--t-3)'}}>How will you review this half?</div>
+          <div className="scale-in" style={{
+            flex:1, display:'flex', flexDirection:'column',
+            alignItems:'center', justifyContent:'center',
+            padding:'32px 24px', gap:28,
+          }}>
+            {/* Header */}
+            <div style={{textAlign:'center'}}>
+              <div style={{
+                fontFamily:'JetBrains Mono, monospace', fontSize:10, fontWeight:700,
+                color:'var(--p2)', letterSpacing:3, marginBottom:10, textTransform:'uppercase',
+              }}>Hudl Egypt · Quality Review</div>
+              <div style={{fontFamily:'Inter',fontWeight:900,fontSize:26,color:'var(--t-1)',letterSpacing:-0.5,marginBottom:6}}>
+                How are you reviewing?
+              </div>
+              <div style={{fontSize:13,color:'var(--t-3)'}}>Choose your review mode to get started</div>
             </div>
-            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:14,width:'100%',maxWidth:560}}>
+
+            {/* Mode cards */}
+            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:16,width:'100%',maxWidth:600}}>
               {[
                 {
                   mode:'scout',
-                  icon:'🎯',
+                  color:'#E8590C',
+                  glyph: (
+                    <svg width="32" height="32" viewBox="0 0 32 32" fill="none">
+                      <circle cx="14" cy="14" r="9" stroke="#E8590C" strokeWidth="2"/>
+                      <circle cx="14" cy="14" r="4" stroke="#E8590C" strokeWidth="2"/>
+                      <circle cx="14" cy="14" r="1.5" fill="#E8590C"/>
+                      <line x1="14" y1="2" x2="14" y2="6" stroke="#E8590C" strokeWidth="2" strokeLinecap="round"/>
+                      <line x1="14" y1="22" x2="14" y2="26" stroke="#E8590C" strokeWidth="2" strokeLinecap="round"/>
+                      <line x1="2" y1="14" x2="6" y2="14" stroke="#E8590C" strokeWidth="2" strokeLinecap="round"/>
+                      <line x1="22" y1="14" x2="26" y2="14" stroke="#E8590C" strokeWidth="2" strokeLinecap="round"/>
+                      <line x1="21" y1="21" x2="29" y2="29" stroke="#E8590C" strokeWidth="2.5" strokeLinecap="round"/>
+                    </svg>
+                  ),
                   title:'Scout',
                   sub:'Tag errors as you watch',
-                  desc:'Watch the video and tag collection errors directly in MARK using keyboard shortcuts.',
-                  color:'var(--p2)',
+                  desc:'Watch the video and flag collection errors using keyboard shortcuts — no collection app needed.',
+                  steps:['Open video in MARK','Press shortcut keys to tag','Done — score calculated'],
                 },
                 {
                   mode:'audit',
-                  icon:'🔍',
+                  color:'#0A84FF',
+                  glyph: (
+                    <svg width="32" height="32" viewBox="0 0 32 32" fill="none">
+                      <rect x="4" y="4" width="24" height="24" rx="4" stroke="#0A84FF" strokeWidth="2"/>
+                      <path d="M10 16l4 4 8-8" stroke="#0A84FF" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/>
+                      <line x1="10" y1="10" x2="22" y2="10" stroke="#0A84FF" strokeWidth="1.5" strokeLinecap="round" opacity="0.4"/>
+                      <line x1="10" y1="22" x2="16" y2="22" stroke="#0A84FF" strokeWidth="1.5" strokeLinecap="round" opacity="0.4"/>
+                    </svg>
+                  ),
                   title:'Audit',
                   sub:'Correct errors in collection app',
-                  desc:'Edit events directly in the collection app. MARK captures your corrections and calculates the quality score.',
-                  color:'#0A84FF',
+                  desc:'Edit events directly in the collection app. MARK reads your corrections and calculates quality scores.',
+                  steps:['Open match in collection app','Edit events as you review','Get results in MARK instantly'],
                 },
               ].map(m => (
-                <div key={m.mode} onClick={() => setReviewMode(m.mode)}
-                  className="card"
+                <div key={m.mode}
+                  onClick={() => setReviewMode(m.mode)}
                   style={{
-                    padding:'20px 18px',cursor:'pointer',
+                    background:'var(--bg-2)', borderRadius:14, padding:'22px 20px',
                     border:`1px solid rgba(255,255,255,0.06)`,
-                    transition:'all .2s var(--ease-out-expo)',
+                    cursor:'pointer', position:'relative', overflow:'hidden',
+                    transition:'all .22s var(--ease-out-expo)',
                   }}
-                  onMouseEnter={e => { e.currentTarget.style.borderColor = m.color; e.currentTarget.style.boxShadow = `0 8px 24px ${m.color}22` }}
-                  onMouseLeave={e => { e.currentTarget.style.borderColor = 'rgba(255,255,255,0.06)'; e.currentTarget.style.boxShadow = 'none' }}
+                  onMouseEnter={e => {
+                    e.currentTarget.style.borderColor = m.color + '50'
+                    e.currentTarget.style.transform = 'translateY(-3px)'
+                    e.currentTarget.style.boxShadow = `0 12px 32px ${m.color}18`
+                  }}
+                  onMouseLeave={e => {
+                    e.currentTarget.style.borderColor = 'rgba(255,255,255,0.06)'
+                    e.currentTarget.style.transform = 'translateY(0)'
+                    e.currentTarget.style.boxShadow = 'none'
+                  }}
                 >
-                  <div style={{fontSize:28,marginBottom:10}}>{m.icon}</div>
-                  <div style={{fontFamily:'Inter',fontWeight:800,fontSize:16,color:'var(--t-1)',marginBottom:3}}>{m.title}</div>
-                  <div style={{fontSize:11,fontWeight:600,color:m.color,marginBottom:8}}>{m.sub}</div>
-                  <div style={{fontSize:11,color:'var(--t-3)',lineHeight:1.6}}>{m.desc}</div>
+                  {/* Top accent line */}
+                  <div style={{
+                    position:'absolute', top:0, left:0, right:0, height:2,
+                    background:`linear-gradient(90deg, transparent, ${m.color}, transparent)`,
+                    opacity:0.6,
+                  }}/>
+
+                  {/* Glyph */}
+                  <div style={{marginBottom:14}}>{m.glyph}</div>
+
+                  {/* Title */}
+                  <div style={{fontFamily:'Inter',fontWeight:900,fontSize:18,color:'var(--t-1)',marginBottom:2,letterSpacing:-0.3}}>
+                    {m.title}
+                  </div>
+                  <div style={{fontSize:11,fontWeight:700,color:m.color,marginBottom:12,letterSpacing:0.3}}>
+                    {m.sub}
+                  </div>
+                  <div style={{fontSize:12,color:'var(--t-3)',lineHeight:1.7,marginBottom:16}}>
+                    {m.desc}
+                  </div>
+
+                  {/* Steps */}
+                  <div style={{display:'flex',flexDirection:'column',gap:5}}>
+                    {m.steps.map((step, i) => (
+                      <div key={i} style={{display:'flex',alignItems:'center',gap:8}}>
+                        <div style={{
+                          width:16,height:16,borderRadius:5,flexShrink:0,
+                          background:`${m.color}18`,border:`1px solid ${m.color}30`,
+                          display:'flex',alignItems:'center',justifyContent:'center',
+                          fontFamily:'JetBrains Mono, monospace',fontSize:8,fontWeight:700,color:m.color,
+                        }}>{i+1}</div>
+                        <span style={{fontSize:11,color:'var(--t-3)'}}>{step}</span>
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* Arrow */}
+                  <div style={{
+                    position:'absolute', bottom:18, right:18,
+                    width:28,height:28,borderRadius:8,
+                    background:`${m.color}14`,border:`1px solid ${m.color}30`,
+                    display:'flex',alignItems:'center',justifyContent:'center',
+                  }}>
+                    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke={m.color} strokeWidth="2.5" strokeLinecap="round">
+                      <path d="M5 12h14M12 5l7 7-7 7"/>
+                    </svg>
+                  </div>
                 </div>
               ))}
             </div>
@@ -401,37 +493,50 @@ export default function SessionSetupPage({ onSessionStart, lastResult, onShowHis
         )}
 
         {reviewMode && (
-          <div style={{padding:'8px 0 0',display:'flex',alignItems:'center',gap:8,paddingLeft:'0px'}}>
-            <button className="btn-ghost" style={{padding:'4px 10px',fontSize:11}} onClick={() => setReviewMode(null)}>
-              ← Change mode
-            </button>
+          <div className="fade-in" style={{
+            flex:1, display:'flex', flexDirection:'column', overflow:'hidden',
+          }}>
+            {/* Mode strip */}
             <div style={{
-              display:'flex',alignItems:'center',gap:6,padding:'3px 10px',borderRadius:20,
-              background: reviewMode==='audit' ? 'rgba(10,132,255,0.1)' : 'rgba(232,89,12,0.1)',
-              border: `1px solid ${reviewMode==='audit' ? 'rgba(10,132,255,0.3)' : 'rgba(232,89,12,0.3)'}`,
+              display:'flex', alignItems:'center', gap:10, padding:'10px 24px',
+              borderBottom:'1px solid var(--b-1)', background:'var(--bg-2)', flexShrink:0,
             }}>
-              <span style={{fontSize:12}}>{reviewMode==='audit' ? '🔍' : '🎯'}</span>
-              <span style={{fontSize:11,fontWeight:700,color: reviewMode==='audit' ? '#0A84FF' : 'var(--p2)'}}>
-                {reviewMode==='audit' ? 'Audit mode' : 'Scout mode'}
-              </span>
+              <button className="btn-ghost" style={{padding:'4px 10px',fontSize:11,display:'flex',alignItems:'center',gap:5}}
+                onClick={() => setReviewMode(null)}>
+                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><path d="M19 12H5M12 5l-7 7 7 7"/></svg>
+                Change mode
+              </button>
+              <div style={{width:1,height:14,background:'var(--b-2)'}}/>
+              <div style={{
+                display:'flex',alignItems:'center',gap:7,padding:'3px 12px',borderRadius:20,
+                background: reviewMode==='audit' ? 'rgba(10,132,255,0.1)' : 'rgba(232,89,12,0.1)',
+                border: `1px solid ${reviewMode==='audit' ? 'rgba(10,132,255,0.3)' : 'rgba(232,89,12,0.3)'}`,
+              }}>
+                <div style={{width:6,height:6,borderRadius:'50%',background:reviewMode==='audit'?'#0A84FF':'var(--p2)',boxShadow:`0 0 5px ${reviewMode==='audit'?'#0A84FF':'var(--p2)'}`}}/>
+                <span style={{fontSize:11,fontWeight:700,color:reviewMode==='audit'?'#0A84FF':'var(--p2)'}}>
+                  {reviewMode==='audit' ? 'Audit' : 'Scout'} mode
+                </span>
+              </div>
+              <span style={{fontSize:11,color:'var(--t-3)',marginLeft:4}}>Select a match and half to begin</span>
             </div>
-          </div>
-        )}
 
-        {reviewMode && (
-          <div style={{display:'flex',gap:16,flex:1,overflow:'hidden'}}>
+            {/* Match + half grid */}
+            <div style={{flex:1,display:'flex',gap:0,overflow:'hidden'}}>
 
         {/* Left — Match list */}
-        <div style={{flex:1,display:'flex',flexDirection:'column',gap:16}}>
-          <div>
-            <h2 style={{fontFamily:'Inter',fontWeight:800,fontSize:20,color:'var(--t-1)',marginBottom:4}}>New Review Session</h2>
-            <p style={{fontSize:13,color:'var(--t-3)'}}>Select the match and half you want to review</p>
+        <div style={{flex:1,display:'flex',flexDirection:'column',gap:0,borderRight:'1px solid var(--b-1)',overflow:'hidden'}}>
+          <div style={{padding:'14px 20px',borderBottom:'1px solid var(--b-1)',flexShrink:0}}>
+            <div style={{fontFamily:'Inter',fontWeight:800,fontSize:15,color:'var(--t-1)',marginBottom:10,letterSpacing:-0.2}}>Select Match</div>
+            <div style={{position:'relative'}}>
+              <svg style={{position:'absolute',left:10,top:'50%',transform:'translateY(-50%)',pointerEvents:'none'}} width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="var(--t-3)" strokeWidth="2" strokeLinecap="round">
+                <circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>
+              </svg>
+              <input className="mark-input" placeholder={matchesLoading ? 'Loading matches…' : `Search ${filteredMatches.length} matches…`}
+                value={matchSearch} onChange={e => { setMatchSearch(e.target.value); setSelectedMatch(null); setLockStatus(null) }}
+                style={{paddingLeft:30}} autoFocus/>
+            </div>
           </div>
-          <div>
-            <label style={{display:'block',fontSize:11,color:'var(--t-3)',fontWeight:700,marginBottom:6,letterSpacing:.5}}>MATCH — {matchesLoading ? 'loading…' : `${filteredMatches.length} available`}</label>
-            <input className="mark-input" placeholder="Search by match name, ID, or team…" value={matchSearch} onChange={e => { setMatchSearch(e.target.value); setSelectedMatch(null); setLockStatus(null) }} autoFocus />
-          </div>
-          <div className="card" style={{flex:1,overflow:'auto',maxHeight:400}}>
+          <div style={{flex:1,overflowY:'auto'}}>
             {matchesLoading ? (
               <div style={{padding:24,textAlign:'center',color:'var(--t-3)',fontSize:13}}>Loading matches…</div>
             ) : matchesError ? (
@@ -444,13 +549,20 @@ export default function SessionSetupPage({ onSessionStart, lastResult, onShowHis
               const isSelected = selectedMatch?.productionId === m.productionId
               return (
                 <div key={i} onClick={() => { setSelectedMatch(m); setLockStatus(null); setSelectedHalf(null); setCompletedSession(null) }}
-                  style={{padding:'12px 16px',borderBottom:'1px solid var(--b-1)',cursor:'pointer',
-                    background: isSelected ? 'rgba(232,89,12,0.12)' : 'transparent',
-                    borderLeft: isSelected ? '3px solid var(--p2)' : '3px solid transparent',transition:'background .1s'}}>
-                  <div style={{fontSize:13,fontWeight:600,color:'var(--t-1)'}}>{m.matchName}</div>
-                  <div style={{fontSize:11,color:'var(--t-3)',marginTop:2}}>
-                    <span className="mono" style={{color:'var(--p2)'}}>{m.productionId}</span>
-                    {' · '}{m.competition}{' · '}{m.matchDate}
+                  style={{
+                    padding:'11px 20px', borderBottom:'1px solid var(--b-1)', cursor:'pointer',
+                    background: isSelected ? 'rgba(232,89,12,0.08)' : 'transparent',
+                    borderLeft: isSelected ? '3px solid var(--p2)' : '3px solid transparent',
+                    transition:'background .1s',
+                  }}
+                  onMouseEnter={e => { if (!isSelected) e.currentTarget.style.background='rgba(255,255,255,0.02)' }}
+                  onMouseLeave={e => { if (!isSelected) e.currentTarget.style.background='transparent' }}
+                >
+                  <div style={{fontSize:13,fontWeight:isSelected?700:500,color:isSelected?'var(--t-1)':'var(--t-2)',marginBottom:2}}>{m.matchName}</div>
+                  <div style={{display:'flex',alignItems:'center',gap:6,fontSize:10,color:'var(--t-3)'}}>
+                    <span style={{fontFamily:'JetBrains Mono, monospace',color:isSelected?'var(--p2)':'var(--t-3)',fontWeight:600}}>{m.productionId}</span>
+                    <span>·</span><span>{m.competition}</span>
+                    <span>·</span><span>{m.matchDate}</span>
                   </div>
                 </div>
               )
@@ -459,18 +571,41 @@ export default function SessionSetupPage({ onSessionStart, lastResult, onShowHis
         </div>
 
         {/* Right — Half + status + start */}
-        <div style={{width:280,display:'flex',flexDirection:'column',gap:16}}>
-          <div>
-            <label style={{display:'block',fontSize:11,color:'var(--t-3)',fontWeight:700,marginBottom:8,letterSpacing:.5}}>HALF</label>
+        <div style={{width:300,flexShrink:0,display:'flex',flexDirection:'column',background:'var(--bg-2)',borderLeft:'1px solid var(--b-1)'}}>
+
+          {/* Match summary */}
+          <div style={{padding:'16px 20px',borderBottom:'1px solid var(--b-1)',flexShrink:0}}>
+            <div style={{fontSize:9,fontWeight:800,color:'var(--t-3)',letterSpacing:1.5,marginBottom:8}}>MATCH</div>
+            {selectedMatch ? (
+              <div>
+                <div style={{fontFamily:'Inter',fontWeight:700,fontSize:13,color:'var(--t-1)',marginBottom:3,lineHeight:1.3}}>{selectedMatch.matchName}</div>
+                <div style={{fontSize:10,color:'var(--t-3)'}}>{selectedMatch.competition} · {selectedMatch.matchDate}</div>
+                <div style={{fontFamily:'JetBrains Mono, monospace',fontSize:9,color:'var(--p2)',fontWeight:600,marginTop:4}}>#{selectedMatch.productionId}</div>
+              </div>
+            ) : (
+              <div style={{fontSize:12,color:'var(--t-3)',fontStyle:'italic'}}>No match selected</div>
+            )}
+          </div>
+
+          {/* Half selector */}
+          <div style={{padding:'16px 20px',borderBottom:'1px solid var(--b-1)',flexShrink:0}}>
+            <div style={{fontSize:9,fontWeight:800,color:'var(--t-3)',letterSpacing:1.5,marginBottom:10}}>HALF</div>
             <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8}}>
               {HALVES.map(h => {
                 const isSelected = selectedHalf?.id === h.id
                 return (
-                  <button key={h.id} onClick={() => { setSelectedHalf(h); setLockStatus(null); setCompletedSession(null) }} disabled={!selectedMatch}
-                    style={{padding:'10px 8px',borderRadius:10,border: isSelected ? '2px solid var(--p2)' : '2px solid var(--b-1)',
-                      background: isSelected ? 'rgba(232,89,12,0.12)' : 'var(--bg-2)',color: isSelected ? 'var(--p2)' : 'var(--t-2)',
-                      fontSize:13,fontWeight: isSelected ? 700 : 400,cursor: selectedMatch ? 'pointer' : 'not-allowed',
-                      opacity: selectedMatch ? 1 : .4,transition:'all .15s'}}>
+                  <button key={h.id}
+                    onClick={() => { setSelectedHalf(h); setLockStatus(null); setCompletedSession(null) }}
+                    disabled={!selectedMatch}
+                    style={{
+                      padding:'12px 8px', borderRadius:10, cursor: selectedMatch ? 'pointer' : 'not-allowed',
+                      border: isSelected ? '2px solid var(--p2)' : '2px solid var(--b-1)',
+                      background: isSelected ? 'rgba(232,89,12,0.1)' : 'var(--bg-3)',
+                      color: isSelected ? 'var(--p2)' : 'var(--t-3)',
+                      fontSize:13, fontWeight: isSelected ? 800 : 400,
+                      opacity: selectedMatch ? 1 : 0.3,
+                      transition:'all .15s',
+                    }}>
                     {h.label}
                   </button>
                 )
@@ -478,40 +613,46 @@ export default function SessionSetupPage({ onSessionStart, lastResult, onShowHis
             </div>
           </div>
 
-          {selectedMatch && (
-            <div className="card" style={{padding:14}}>
-              <div style={{fontSize:11,color:'var(--t-3)',fontWeight:700,marginBottom:6,letterSpacing:.5}}>SELECTED MATCH</div>
-              <div style={{fontSize:13,fontWeight:700,color:'var(--t-1)'}}>{selectedMatch.matchName}</div>
-              <div style={{fontSize:11,color:'var(--t-3)',marginTop:3}}>{selectedMatch.competition} · {selectedMatch.matchDate}</div>
-            </div>
-          )}
-
+          {/* Availability status */}
           {selectedMatch && selectedHalf && (
-            <div className="card" style={{padding:14}}>
-              {lockStatus === 'checking' && <div style={{fontSize:12,color:'var(--t-3)'}}>Checking availability…</div>}
+            <div style={{padding:'14px 20px',borderBottom:'1px solid var(--b-1)',flexShrink:0}}>
+              {lockStatus === 'checking' && (
+                <div style={{display:'flex',alignItems:'center',gap:7,fontSize:12,color:'var(--t-3)'}}>
+                  <svg style={{animation:'spin 1s linear infinite'}} width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                    <circle cx="12" cy="12" r="10" strokeOpacity=".2"/><path d="M12 2a10 10 0 0 1 10 10"/>
+                  </svg>
+                  Checking availability…
+                </div>
+              )}
               {lockStatus === 'free' && (
-                <div style={{display:'flex',alignItems:'center',gap:8}}>
-                  <span className="status-dot green"/>
-                  <span style={{fontSize:12,color:'var(--t-2)'}}>Available</span>
+                <div style={{display:'flex',alignItems:'center',gap:7}}>
+                  <div style={{width:7,height:7,borderRadius:'50%',background:'#30D158',boxShadow:'0 0 6px rgba(48,209,88,0.5)'}}/>
+                  <span style={{fontSize:12,color:'#30D158',fontWeight:600}}>Available to review</span>
                 </div>
               )}
               {lockStatus === 'locked' && (
-                <div style={{display:'flex',alignItems:'center',gap:8}}>
-                  <span className="status-dot red"/>
-                  <span style={{fontSize:12,color:'#FF453A'}}>Locked by {lockedBy}</span>
+                <div>
+                  <div style={{display:'flex',alignItems:'center',gap:7,marginBottom:4}}>
+                    <div style={{width:7,height:7,borderRadius:'50%',background:'#FF453A',boxShadow:'0 0 6px rgba(255,69,58,0.5)'}}/>
+                    <span style={{fontSize:12,color:'#FF453A',fontWeight:600}}>In progress</span>
+                  </div>
+                  <div style={{fontSize:11,color:'var(--t-3)',paddingLeft:14}}>Being reviewed by {lockedBy}</div>
                 </div>
               )}
               {lockStatus === 'completed' && (
                 <div>
-                  <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:8}}>
-                    <span style={{width:8,height:8,borderRadius:'50%',background:'#30D158',display:'inline-block',flexShrink:0}}/>
-                    <span style={{fontSize:12,color:'#30D158',fontWeight:700}}>Already reviewed by {lockedBy}</span>
+                  <div style={{display:'flex',alignItems:'center',gap:7,marginBottom:6}}>
+                    <div style={{width:7,height:7,borderRadius:'50%',background:'#30D158'}}/>
+                    <span style={{fontSize:12,color:'#30D158',fontWeight:600}}>Already reviewed</span>
                   </div>
                   {completedSession && (
-                    <div style={{fontSize:11,color:'var(--t-3)'}}>
-                      Score: <span style={{color:'var(--p2)',fontWeight:700}}>{completedSession.qualityScore || 0}%</span>
-                      {' · '}{completedSession.totalTaggedErrors || 0} errors
-                      {' · '}{completedSession.totalReviewedEvents || 0} events
+                    <div style={{
+                      background:'rgba(48,209,88,0.06)',border:'1px solid rgba(48,209,88,0.15)',
+                      borderRadius:8,padding:'8px 10px',fontSize:11,color:'var(--t-3)',
+                    }}>
+                      <span style={{color:'var(--t-2)'}}>{lockedBy}</span> ·{' '}
+                      <span style={{color:'var(--p2)',fontWeight:700}}>{completedSession.qualityScore || 0}%</span> quality
+                      <span style={{color:'var(--t-3)'}}> · {completedSession.totalTaggedErrors || 0} errors</span>
                     </div>
                   )}
                 </div>
@@ -519,67 +660,95 @@ export default function SessionSetupPage({ onSessionStart, lastResult, onShowHis
             </div>
           )}
 
-          {error && <div style={{fontSize:12,color:'#FF453A',background:'rgba(255,69,58,0.1)',borderRadius:8,padding:'8px 12px'}}>{error}</div>}
-
-          {lockStatus === 'completed' ? (
-            <button className="btn-ghost" style={{padding:'14px 0',fontSize:14,marginTop:'auto'}}
-              onClick={() => completedSession && onShowHistory && onShowHistory(completedSession)}>
-              View Review →
-            </button>
-          ) : (
-            <button className="btn-orange" style={{padding:'14px 0',fontSize:15,marginTop:'auto'}} disabled={!canStart} onClick={handleStartSession}>
-              {loading ? 'Starting…' : reviewMode==='audit' ? 'Start Audit Session →' : 'Start Scout Session →'}
-            </button>
+          {error && (
+            <div style={{margin:'12px 20px',padding:'8px 12px',borderRadius:8,background:'rgba(255,69,58,0.08)',border:'1px solid rgba(255,69,58,0.2)',fontSize:11,color:'#FF453A'}}>
+              {error}
+            </div>
           )}
+
+          {/* Spacer */}
+          <div style={{flex:1}}/>
+
+          {/* Start button */}
+          <div style={{padding:'16px 20px',borderTop:'1px solid var(--b-1)',flexShrink:0}}>
+            {lockStatus === 'completed' ? (
+              <button className="btn-ghost" style={{width:'100%',padding:'13px',fontSize:13,fontWeight:600}}
+                onClick={() => completedSession && onShowHistory && onShowHistory(completedSession)}>
+                View Review →
+              </button>
+            ) : (
+              <button className="btn-orange" style={{width:'100%',padding:'13px',fontSize:14,fontWeight:700}}
+                disabled={!canStart} onClick={handleStartSession}>
+                {loading ? 'Starting…' : reviewMode==='audit' ? 'Start Audit →' : 'Start Scout →'}
+              </button>
+            )}
+            {!selectedMatch && (
+              <div style={{textAlign:'center',fontSize:10,color:'var(--t-3)',marginTop:8}}>Select a match to continue</div>
+            )}
+            {selectedMatch && !selectedHalf && (
+              <div style={{textAlign:'center',fontSize:10,color:'var(--t-3)',marginTop:8}}>Select a half to continue</div>
+            )}
+          </div>
         </div>
+            </div>
           </div>
         )}
       </div>
 
-      {/* Recent sessions section */}
+      {/* ── Recent sessions ── */}
       {recentSessions.length > 0 && (
-        <div style={{borderTop:'1px solid var(--b-1)',padding:'16px 24px'}}>
-          <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:12}}>
-            <span style={{fontSize:11,fontWeight:800,color:'var(--t-3)',letterSpacing:1}}>RECENT SESSIONS</span>
-            <button className="btn-ghost" style={{fontSize:11,padding:'3px 10px'}} onClick={() => onShowHistory && onShowHistory(null)}>
+        <div style={{flexShrink:0,borderTop:'1px solid var(--b-1)',background:'var(--bg-2)',padding:'12px 24px'}}>
+          <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:10}}>
+            <span style={{fontSize:9,fontWeight:800,color:'var(--t-3)',letterSpacing:1.5}}>RECENT SESSIONS</span>
+            <button className="btn-ghost" style={{fontSize:10,padding:'2px 8px'}} onClick={() => onShowHistory && onShowHistory(null)}>
               View all →
             </button>
           </div>
-          <div style={{display:'flex',flexDirection:'column',gap:6}}>
+          <div style={{display:'flex',gap:8,overflowX:'auto',paddingBottom:4,scrollbarWidth:'none'}}>
             {recentSessions.map(s => {
               const score = s.qualityScore || 0
               const color = score >= 80 ? '#30D158' : score >= 60 ? '#FFD60A' : '#FF453A'
               const date = s.completedAt?.toDate?.()
                 ? s.completedAt.toDate().toLocaleDateString('en-GB',{day:'2-digit',month:'short'})
                 : ''
+              const isAudit = s.type === 'audit'
               return (
                 <div key={s.id}
                   onClick={() => onShowHistory && onShowHistory(s)}
                   style={{
                     display:'flex', alignItems:'center', gap:10,
-                    padding:'8px 12px', borderRadius:8, cursor:'pointer',
-                    border:'1px solid var(--b-1)', background:'var(--bg-2)',
-                    transition:'background .1s',
+                    padding:'8px 12px', borderRadius:10, cursor:'pointer',
+                    border:'1px solid var(--b-1)', background:'var(--bg-3)',
+                    transition:'all .15s', flexShrink:0, minWidth:220, maxWidth:260,
                   }}
-                  onMouseEnter={e => e.currentTarget.style.background='var(--bg-3)'}
-                  onMouseLeave={e => e.currentTarget.style.background='var(--bg-2)'}
+                  onMouseEnter={e => { e.currentTarget.style.background='rgba(255,255,255,0.04)'; e.currentTarget.style.borderColor='var(--b-2)' }}
+                  onMouseLeave={e => { e.currentTarget.style.background='var(--bg-3)'; e.currentTarget.style.borderColor='var(--b-1)' }}
                 >
                   <div style={{
-                    width:36,height:36,borderRadius:8,flexShrink:0,
-                    background:`${color}14`,border:`1.5px solid ${color}44`,
+                    width:34,height:34,borderRadius:9,flexShrink:0,
+                    background:`${color}12`,border:`1.5px solid ${color}33`,
                     display:'flex',alignItems:'center',justifyContent:'center',
                   }}>
                     <span style={{fontFamily:'Inter',fontWeight:900,fontSize:11,color}}>{score}%</span>
                   </div>
                   <div style={{flex:1,minWidth:0}}>
-                    <div style={{fontSize:12,fontWeight:600,color:'var(--t-1)',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>
+                    <div style={{fontSize:11,fontWeight:600,color:'var(--t-1)',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis',marginBottom:2}}>
                       {s.matchName}
                     </div>
-                    <div style={{fontSize:10,color:'var(--t-3)',marginTop:1}}>
-                      {s.half} · {s.totalTaggedErrors || 0} errors · {date}
+                    <div style={{display:'flex',alignItems:'center',gap:5,fontSize:9,color:'var(--t-3)'}}>
+                      <span style={{
+                        padding:'1px 5px',borderRadius:4,fontWeight:700,fontSize:8,
+                        background:isAudit?'rgba(10,132,255,0.12)':'rgba(232,89,12,0.12)',
+                        color:isAudit?'#0A84FF':'var(--p2)',
+                        border:`1px solid ${isAudit?'rgba(10,132,255,0.2)':'rgba(232,89,12,0.2)'}`,
+                      }}>{isAudit?'AUDIT':'SCOUT'}</span>
+                      <span>{s.half}</span>
+                      <span>·</span>
+                      <span>{s.totalTaggedErrors || 0} errors</span>
+                      <span>·</span>
+                      <span>{date}</span>
                     </div>
                   </div>
-                  <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="var(--t-3)" strokeWidth="2.5" strokeLinecap="round"><path d="M9 18l6-6-6-6"/></svg>
                 </div>
               )
             })}
