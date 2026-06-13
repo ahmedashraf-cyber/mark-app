@@ -1,5 +1,5 @@
 (async function(){
-  const BRIDGE_VERSION = '6.2.0-ws';
+  const BRIDGE_VERSION = '6.3.0-ws';
   if(window.__MARK_BRIDGE_VERSION__ === BRIDGE_VERSION){console.log('[MARK] bridge already running (v' + BRIDGE_VERSION + ')');return;}
   if(window.__MARK_BRIDGE_STOP__) window.__MARK_BRIDGE_STOP__();
   window.__MARK_BRIDGE__ = true;
@@ -223,30 +223,93 @@
         const numMatchId = typeof matchId === 'string' ? parseInt(matchId) : matchId;
         const EXCLUDED = ['starting-xi', 'half-start', 'squad'];
 
-        // Base events up to video time — deduplicated by key
-        const seenBase = new Set();
-        const baseEvents = Object.values(cache).filter(v => {
-          if (v.__typename !== 'Event') return false;
-          if (v.matchId !== numMatchId && v.matchId !== String(numMatchId)) return false;
-          if (v.category !== 'base') return false;
-          if (!v.payload || typeof v.payload.videoTimestamp !== 'number') return false;
-          if (v.payload.videoTimestamp <= 0 || v.payload.videoTimestamp > endTs) return false;
-          if (EXCLUDED.includes(v.payload.name)) return false;
-          if (partId && v.partId !== partId) return false;
-          if (seenBase.has(v.key)) return false;
-          seenBase.add(v.key);
-          return true;
-        }).map(v => ({
-          id: v.id,
-          key: v.key,
-          name: v.payload.name,
-          videoTimestamp: v.payload.videoTimestamp,
-          teamId: v.payload.teamId,
-          author: v.author,
-          capturedTime: v.capturedTime,
-        }));
+        // ── Method 1: Telemetry-based (primary — exact) ──────────────────────
+        // Uses event-activation telemetry to find exactly which events the reviewer viewed
+        let baseEvents = [];
+        let usedTelemetry = false;
 
-        // Only amendments whose base event is within video time range
+        try {
+          // Find reviewer author from telemetry events
+          const telemetryAll = Object.values(cache).filter(v =>
+            v.__typename === 'Event' && v.category === 'telemetry' &&
+            v.matchId === numMatchId && v.type === 'event-activation' &&
+            (!partId || v.partId === partId)
+          );
+
+          if (telemetryAll.length > 0) {
+            // Reviewer is the author of telemetry events
+            const reviewerAuthorId = telemetryAll[0].author;
+
+            // Collect all video timestamps the reviewer was at
+            const viewedTs = new Set();
+            telemetryAll.filter(t => t.author === reviewerAuthorId).forEach(t => {
+              (t.payload.videoTimestamps || []).forEach(vt => {
+                viewedTs.add(vt.from);
+                viewedTs.add(vt.to);
+              });
+            });
+
+            if (viewedTs.size > 0) {
+              // All base events in this half
+              const seenBase = new Set();
+              const allBase = Object.values(cache).filter(v => {
+                if (v.__typename !== 'Event') return false;
+                if (v.matchId !== numMatchId && v.matchId !== String(numMatchId)) return false;
+                if (v.category !== 'base') return false;
+                if (!v.payload || typeof v.payload.videoTimestamp !== 'number') return false;
+                if (v.payload.videoTimestamp <= 0) return false;
+                if (EXCLUDED.includes(v.payload.name)) return false;
+                if (partId && v.partId !== partId) return false;
+                if (seenBase.has(v.key)) return false;
+                seenBase.add(v.key);
+                return true;
+              });
+
+              // Match base events to viewed timestamps (within 2000ms)
+              baseEvents = allBase.filter(e => {
+                const ts = e.payload.videoTimestamp;
+                for (const vt of viewedTs) {
+                  if (Math.abs(vt - ts) <= 2000) return true;
+                }
+                return false;
+              }).map(v => ({
+                id: v.id, key: v.key, name: v.payload.name,
+                videoTimestamp: v.payload.videoTimestamp,
+                teamId: v.payload.teamId, author: v.author,
+                capturedTime: v.capturedTime,
+              }));
+
+              if (baseEvents.length > 0) usedTelemetry = true;
+            }
+          }
+        } catch(telErr) {
+          console.warn('[MARK] telemetry method failed:', telErr);
+        }
+
+        // ── Method 2: Video time fallback (if telemetry unavailable) ─────────
+        if (!usedTelemetry) {
+          console.log('[MARK] using video time fallback for event counting');
+          const seenBase = new Set();
+          baseEvents = Object.values(cache).filter(v => {
+            if (v.__typename !== 'Event') return false;
+            if (v.matchId !== numMatchId && v.matchId !== String(numMatchId)) return false;
+            if (v.category !== 'base') return false;
+            if (!v.payload || typeof v.payload.videoTimestamp !== 'number') return false;
+            if (v.payload.videoTimestamp <= 0 || v.payload.videoTimestamp > endTs) return false;
+            if (EXCLUDED.includes(v.payload.name)) return false;
+            if (partId && v.partId !== partId) return false;
+            if (seenBase.has(v.key)) return false;
+            seenBase.add(v.key);
+            return true;
+          }).map(v => ({
+            id: v.id, key: v.key, name: v.payload.name,
+            videoTimestamp: v.payload.videoTimestamp,
+            teamId: v.payload.teamId, author: v.author,
+            capturedTime: v.capturedTime,
+          }));
+        }
+
+        // ── Amendments for reviewed events only ───────────────────────────────
         const baseKeysInRange = new Set(baseEvents.map(e => e.key));
         const amendments = Object.values(cache).filter(v => {
           if (v.__typename !== 'Event') return false;
@@ -256,13 +319,9 @@
           if (!baseKeysInRange.has(v.key)) return false;
           return true;
         }).map(v => ({
-          id: v.id,
-          key: v.key,
-          type: v.type,
-          author: v.author,
-          capturedTime: v.capturedTime,
-          payload: v.payload,
-          originalName: null, // will be resolved by MARK using baseEvents
+          id: v.id, key: v.key, type: v.type, author: v.author,
+          capturedTime: v.capturedTime, payload: v.payload,
+          originalName: null,
         }));
 
         // Resolve original event name for each amendment
@@ -285,6 +344,7 @@
           amendments,
           collectorId,
           reviewerId,
+          usedTelemetry,
           ts: Date.now(),
         }));
 
