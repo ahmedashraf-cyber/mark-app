@@ -84,8 +84,36 @@ function AmendBadge({ type }) {
   )
 }
 
+// ── Mini score card ───────────────────────────────────────────────────────────
+function MiniScore({ label, score, reviewed, edited, color }) {
+  if (score === null) return (
+    <div style={{
+      background: 'var(--bg-3)', border: '1px solid var(--b-1)', borderRadius: 10,
+      padding: '12px 16px', display: 'flex', flexDirection: 'column', gap: 4, flex: 1,
+      opacity: 0.4,
+    }}>
+      <div style={{ fontSize: 9, fontWeight: 800, color: 'var(--t-3)', letterSpacing: 1 }}>{label.toUpperCase()}</div>
+      <div style={{ fontSize: 18, fontWeight: 900, color: 'var(--t-3)' }}>—</div>
+    </div>
+  )
+  return (
+    <div style={{
+      background: 'var(--bg-3)', border: `1px solid ${color}33`, borderRadius: 10,
+      padding: '12px 16px', display: 'flex', flexDirection: 'column', gap: 4, flex: 1,
+      boxShadow: `0 4px 12px ${color}11`,
+    }}>
+      <div style={{ fontSize: 9, fontWeight: 800, color, letterSpacing: 1 }}>{label.toUpperCase()}</div>
+      <div style={{ fontFamily: 'Inter', fontWeight: 900, fontSize: 22, color, lineHeight: 1 }}>{score}%</div>
+      <div style={{ fontSize: 10, color: 'var(--t-3)', marginTop: 2 }}>
+        <span style={{ color: '#FF453A', fontWeight: 700 }}>{edited}</span> edited /
+        <span style={{ color: 'var(--t-2)', fontWeight: 600 }}> {reviewed}</span> reviewed
+      </div>
+    </div>
+  )
+}
+
 // ── Quick summary card ─────────────────────────────────────────────────────────
-function QuickSummary({ results, score, onFullReport }) {
+function QuickSummary({ results, score, abcScores, onFullReport }) {
   const types = {}
   results.amendments.forEach(a => { types[a.type] = (types[a.type] || 0) + 1 })
   const uniqueEdited = new Set(results.amendments.map(a => a.key)).size
@@ -94,31 +122,53 @@ function QuickSummary({ results, score, onFullReport }) {
     <div className="scale-in" style={{
       background: 'var(--bg-2)', border: '1px solid var(--b-1)',
       borderRadius: 16, padding: '20px 24px',
-      display: 'flex', gap: 24, alignItems: 'center',
       boxShadow: '0 8px 32px rgba(0,0,0,0.4)',
     }}>
-      {/* Score */}
-      <ScoreRing score={score} size={110}/>
-
-      {/* Stats */}
-      <div style={{ flex: 1 }}>
-        <div style={{ display: 'flex', gap: 24, marginBottom: 14 }}>
-          {[
-            { label: 'Events reviewed', value: results.baseEvents.length },
-            { label: 'Edits made',      value: uniqueEdited, color: '#FF453A' },
-            { label: 'Up to',           value: fmt(results.videoTime) },
-          ].map(s => (
-            <div key={s.label}>
-              <div style={{ fontFamily: 'Inter', fontWeight: 800, fontSize: 22, color: s.color || 'var(--t-1)', lineHeight: 1 }}>
-                {s.value}
-              </div>
-              <div style={{ fontSize: 10, color: 'var(--t-3)', marginTop: 3, fontWeight: 600, letterSpacing: 0.5 }}>
-                {s.label.toUpperCase()}
-              </div>
-            </div>
-          ))}
+      {/* Top row: scores side by side */}
+      <div style={{ display: 'flex', gap: 12, marginBottom: 16, alignItems: 'stretch' }}>
+        {/* Overall score */}
+        <div style={{
+          background: 'var(--bg-3)', border: '1px solid rgba(232,89,12,0.3)', borderRadius: 10,
+          padding: '12px 16px', display: 'flex', flexDirection: 'column', alignItems: 'center',
+          gap: 6, flexShrink: 0,
+          boxShadow: '0 4px 12px rgba(232,89,12,0.1)',
+        }}>
+          <div style={{ fontSize: 9, fontWeight: 800, color: 'var(--p2)', letterSpacing: 1 }}>OVERALL</div>
+          <ScoreRing score={score} size={80}/>
         </div>
-        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+
+        {/* A/B/C scores */}
+        <MiniScore label="A - Review" color="#0A84FF" {...(abcScores?.A || { score: null, reviewed: 0, edited: 0 })}/>
+        <MiniScore label="B - Review" color="#30D158" {...(abcScores?.B || { score: null, reviewed: 0, edited: 0 })}/>
+        <MiniScore label="C - Review" color="#FFD60A" {...(abcScores?.C || { score: null, reviewed: 0, edited: 0 })}/>
+
+        {/* Full report button */}
+        <button className="btn-orange" style={{
+          padding: '0 16px', fontSize: 12, flexShrink: 0, alignSelf: 'stretch',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          writingMode: 'vertical-rl', letterSpacing: 1,
+        }} onClick={onFullReport}>
+          Full Report →
+        </button>
+      </div>
+
+      {/* Bottom row: stats + badges */}
+      <div style={{ display: 'flex', gap: 20, alignItems: 'center' }}>
+        {[
+          { label: 'Events reviewed', value: results.baseEvents.length },
+          { label: 'Edits made',      value: uniqueEdited, color: '#FF453A' },
+          { label: 'Up to',           value: fmt(results.videoTime) },
+        ].map(s => (
+          <div key={s.label}>
+            <div style={{ fontFamily: 'Inter', fontWeight: 800, fontSize: 18, color: s.color || 'var(--t-1)', lineHeight: 1 }}>
+              {s.value}
+            </div>
+            <div style={{ fontSize: 10, color: 'var(--t-3)', marginTop: 3, fontWeight: 600, letterSpacing: 0.5 }}>
+              {s.label.toUpperCase()}
+            </div>
+          </div>
+        ))}
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginLeft: 8 }}>
           {Object.entries(types).map(([type, count]) => (
             <span key={type} style={{ fontSize: 11, color: 'var(--t-2)' }}>
               <AmendBadge type={type}/> <span style={{ marginLeft: 3 }}>×{count}</span>
@@ -126,14 +176,67 @@ function QuickSummary({ results, score, onFullReport }) {
           ))}
         </div>
       </div>
-
-      {/* Full report button */}
-      <button className="btn-orange" style={{ padding: '12px 20px', fontSize: 13, flexShrink: 0 }}
-        onClick={onFullReport}>
-        Full Report →
-      </button>
     </div>
   )
+}
+
+// ── A/B/C Review group definitions ────────────────────────────────────────────
+const REVIEW_GROUPS = {
+  A: {
+    label: 'A - Review',
+    color: '#0A84FF',
+    match: (e, extras) => {
+      const n = e.name
+      const t = e.fields?.type || ''
+      if (['shot','own-goal-against','foul-committed','error','stoppage',
+           'end-stoppage','referee-ball-drop','end-shot','starting-xi',
+           'substitution','out','tactical-shift','player-off','player-on',
+           'card','offside','freeze-frame','shield'].includes(n)) return true
+      if (n === 'pass' && t !== 'recovery') return true
+      if (n === 'goal-keeper' && ['save','conceded-no-save'].includes(t)) return true
+      return false
+    }
+  },
+  B: {
+    label: 'B - Review',
+    color: '#30D158',
+    match: (e, extras) => {
+      const n = e.name
+      const t = e.fields?.type || ''
+      if (['clearance','interception','block','dribble','tackle',
+           'miscontrol','fifty-fifty'].includes(n)) return true
+      if (n === 'pass' && t === 'recovery') return true
+      if (n === 'goal-keeper' && !['save','conceded-no-save'].includes(t)) return true
+      return false
+    }
+  },
+  C: {
+    label: 'C - Review',
+    color: '#FFD60A',
+    match: (e, extras) => {
+      const n = e.name
+      if (['ball-recovery','pressure-start','pressure-end'].includes(n)) return true
+      // Aerial Losts — events with aerial-won in extras
+      if (['pass','shot','clearance','miscontrol'].includes(n) && extras?.includes('aerial-won')) return true
+      return false
+    }
+  }
+}
+
+function calcGroupScore(group, baseEvents, amendments, refinements) {
+  // Find base events belonging to this group
+  // refinements: map of key -> extras array (collector's original extras)
+  const groupBase = baseEvents.filter(e => {
+    const extras = refinements[e.key] || []
+    return group.match(e, extras)
+  })
+  if (groupBase.length === 0) return { score: null, reviewed: 0, edited: 0 }
+
+  const groupKeys = new Set(groupBase.map(e => e.key))
+  const groupAmends = amendments.filter(a => groupKeys.has(a.key))
+  const uniqueEdited = new Set(groupAmends.map(a => a.key)).size
+  const score = Math.round(((groupBase.length - uniqueEdited) / groupBase.length) * 100)
+  return { score, reviewed: groupBase.length, edited: uniqueEdited }
 }
 
 // ── Amendments Table ──────────────────────────────────────────────────────────
@@ -361,6 +464,7 @@ export default function AuditPage({ session, onBack, onFullReport }) {
   const [score,          setScore]          = useState(null)
   const [error,          setError]          = useState('')
   const [saved,          setSaved]          = useState(false)
+  const [abcScores,      setAbcScores]      = useState(null)
 
   const { requestQAResults } = useSync(setBridgeStatus, session.sessionId)
 
@@ -398,12 +502,29 @@ export default function AuditPage({ session, onBack, onFullReport }) {
       const total = data.baseEvents.length
       const q = total > 0 ? Math.round(((total - uniqueEdited) / total) * 100) : 0
 
+      // Calculate A/B/C scores using refinement extras from cache
+      let refinements = {}
+      try {
+        const cache = window.apollo?.client?.cache?.extract() || {}
+        Object.values(cache).forEach(v => {
+          if (v.__typename === 'Event' && v.category === 'refinement' && v.type === 'extras') {
+            const extras = Object.keys(v.payload?.fields || {}).filter(k => k !== 'extras')
+            refinements[v.key] = extras
+          }
+        })
+      } catch(e) {}
+
+      const abc = {}
+      for (const [key, group] of Object.entries(REVIEW_GROUPS)) {
+        abc[key] = calcGroupScore(group, data.baseEvents, data.amendments, refinements)
+      }
+      setAbcScores(abc)
       setResults(data)
       setScore(q)
 
       // Save to Firebase
       if (!saved) {
-        await saveToFirebase(data, q)
+        await saveToFirebase(data, q, abc)
         setSaved(true)
       }
     } catch(e) {
@@ -413,7 +534,7 @@ export default function AuditPage({ session, onBack, onFullReport }) {
     }
   }
 
-  async function saveToFirebase(data, q) {
+  async function saveToFirebase(data, q, abc) {
     try {
       const uniqueEdited = new Set(data.amendments.map(a => a.key)).size
       const types = {}
@@ -434,6 +555,9 @@ export default function AuditPage({ session, onBack, onFullReport }) {
         totalAmendments:    data.amendments.length,
         uniqueEditedEvents: uniqueEdited,
         qualityScore:       q,
+        qualityScoreA:      abc?.A?.score ?? null,
+        qualityScoreB:      abc?.B?.score ?? null,
+        qualityScoreC:      abc?.C?.score ?? null,
         amendmentTypes:     types,
         status:             'completed',
         completedAt:        serverTimestamp(),
@@ -645,6 +769,7 @@ export default function AuditPage({ session, onBack, onFullReport }) {
               <QuickSummary
                 results={results}
                 score={score}
+                abcScores={abcScores}
                 onFullReport={() => onFullReport(results, score, session)}
               />
               <AmendmentsTable results={results} session={session} />
