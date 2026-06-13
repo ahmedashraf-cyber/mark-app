@@ -156,12 +156,30 @@ function AmendmentsTable({ results, session }) {
     const base = baseByKey[key]
     const types = [...new Set(amends.map(a => a.type))]
     const latestAmend = amends.sort((a, b) => (b.capturedTime || '').localeCompare(a.capturedTime || ''))[0]
+    // Extract before/after values from amendment payload
+    const beforeAfter = amends.map(a => {
+      const p = a.payload || {}
+      const fields = p.fields || {}
+      if (a.type === 'deletion') return { before: base?.name || '?', after: 'Deleted' }
+      if (a.type === 'base') return { before: base?.name || '?', after: p.name || Object.values(fields).join(', ') || '?' }
+      if (a.type === 'extras' || a.type === 'location') {
+        const vals = Object.entries(fields).map(([k,v]) => `${k}: ${v}`).join(', ')
+        return { before: '?', after: vals || '?' }
+      }
+      if (a.type === 'camera') return { before: '?', after: p.name || Object.values(fields).join(', ') || '?' }
+      return { before: '?', after: JSON.stringify(fields).slice(0,40) }
+    })
+    const before = beforeAfter.map(x => x.before).filter((v,i,a) => a.indexOf(v)===i).join(' | ')
+    const after  = beforeAfter.map(x => x.after).filter((v,i,a) => a.indexOf(v)===i).join(' | ')
+
     return {
       key,
       eventName:    base?.name || '—',
       timestamp:    base?.videoTimestamp ? fmt(base.videoTimestamp / 1000) : '—',
       teamId:       base?.teamId || '—',
       types,
+      before,
+      after,
       collectorId:  base?.author || '—',
       reviewerId:   latestAmend?.author || '—',
       capturedTime: latestAmend?.capturedTime || '',
@@ -174,7 +192,7 @@ function AmendmentsTable({ results, session }) {
   })
 
   function downloadCSV() {
-    const headers = ['Match ID','Match Name','Half','Timestamp','Event Name','Team','Change Types','Collector ID','Reviewer ID','Captured Time']
+    const headers = ['Match ID','Match Name','Half','Timestamp','Event Name','Team','Change Types','Before Change','After Change','Collector ID','Reviewer ID','Captured Time']
     const csvRows = rows.map(r => [
       session.matchId,
       session.matchName,
@@ -183,14 +201,15 @@ function AmendmentsTable({ results, session }) {
       r.eventName,
       r.teamId,
       r.types.join(' + '),
+      r.before || '—',
+      r.after  || '—',
       r.collectorId,
       r.reviewerId,
       r.capturedTime,
     ])
     const csv = [headers, ...csvRows]
       .map(r => r.map(v => `"${String(v).replace(/"/g, '""')}"`).join(','))
-      .join('
-')
+      .join('\n')
     const blob = new Blob([csv], { type: 'text/csv' })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
@@ -231,12 +250,12 @@ function AmendmentsTable({ results, session }) {
         {/* Header row */}
         <div style={{
           display:'grid',
-          gridTemplateColumns:'60px 1fr 70px 120px 80px 80px 80px',
+          gridTemplateColumns:'60px 1fr 60px 110px 130px 130px 70px 70px 70px',
           padding:'7px 14px',
           background:'var(--bg-3)',
           borderBottom:'1px solid var(--b-1)',
         }}>
-          {['TIME','EVENT','TEAM','CHANGE','COLLECTOR','REVIEWER','CAPTURED'].map(h => (
+          {['TIME','EVENT','TEAM','CHANGE','BEFORE','AFTER','COLLECTOR','REVIEWER','CAPTURED'].map(h => (
             <span key={h} style={{ fontSize:9, fontWeight:800, color:'var(--t-3)', letterSpacing:1 }}>{h}</span>
           ))}
         </div>
@@ -246,7 +265,7 @@ function AmendmentsTable({ results, session }) {
           {rows.map((r, i) => (
             <div key={r.key} style={{
               display:'grid',
-              gridTemplateColumns:'60px 1fr 70px 120px 80px 80px 80px',
+              gridTemplateColumns:'60px 1fr 60px 110px 130px 130px 70px 70px 70px',
               padding:'7px 14px',
               borderBottom:'1px solid var(--b-1)',
               background: i % 2 === 0 ? 'transparent' : 'rgba(255,255,255,0.01)',
@@ -269,6 +288,8 @@ function AmendmentsTable({ results, session }) {
                   }}>{t}</span>
                 ))}
               </div>
+              <span style={{ fontSize:10, color:'#FF453A', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }} title={r.before}>{r.before || '—'}</span>
+              <span style={{ fontSize:10, color:'#30D158', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }} title={r.after}>{r.after || '—'}</span>
               <span style={{ fontSize:10, color:'var(--t-3)', fontFamily:'JetBrains Mono, monospace' }}>{r.collectorId}</span>
               <span style={{ fontSize:10, color:'var(--t-3)', fontFamily:'JetBrains Mono, monospace' }}>{r.reviewerId}</span>
               <span style={{ fontSize:9, color:'var(--t-3)' }}>
