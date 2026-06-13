@@ -1,5 +1,5 @@
 (async function(){
-  const BRIDGE_VERSION = '6.0.0-ws';
+  const BRIDGE_VERSION = '6.0.1-ws';
   if(window.__MARK_BRIDGE_VERSION__ === BRIDGE_VERSION){console.log('[MARK] bridge already running (v' + BRIDGE_VERSION + ')');return;}
   if(window.__MARK_BRIDGE_STOP__) window.__MARK_BRIDGE_STOP__();
   window.__MARK_BRIDGE__ = true;
@@ -244,11 +244,13 @@
           capturedTime: v.capturedTime,
         }));
 
-        // All amendments up to video time
+        // Only amendments whose base event is within video time range
+        const baseKeysInRange = new Set(baseEvents.map(e => e.key));
         const amendments = Object.values(cache).filter(v => {
           if (v.__typename !== 'Event') return false;
           if (v.matchId !== numMatchId && v.matchId !== String(numMatchId)) return false;
           if (v.category !== 'amendment') return false;
+          if (!baseKeysInRange.has(v.key)) return false;
           return true;
         }).map(v => ({
           id: v.id,
