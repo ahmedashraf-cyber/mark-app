@@ -85,29 +85,83 @@ function AmendBadge({ type }) {
 }
 
 // ── Mini score card ───────────────────────────────────────────────────────────
-function MiniScore({ label, score, reviewed, edited, color }) {
-  if (score === null) return (
-    <div style={{
-      background: 'var(--bg-3)', border: '1px solid var(--b-1)', borderRadius: 10,
-      padding: '12px 16px', display: 'flex', flexDirection: 'column', gap: 4, flex: 1,
-      opacity: 0.4,
-    }}>
-      <div style={{ fontSize: 9, fontWeight: 800, color: 'var(--t-3)', letterSpacing: 1 }}>{label.toUpperCase()}</div>
-      <div style={{ fontSize: 18, fontWeight: 900, color: 'var(--t-3)' }}>—</div>
-    </div>
-  )
+// ── Score card (equal size for all 4) ─────────────────────────────────────────
+function ScoreCard({ label, score, reviewed, edited, color, isOverall = false }) {
+  const displayColor = isOverall
+    ? (score >= 80 ? '#30D158' : score >= 60 ? '#FFD60A' : '#FF453A')
+    : color
+
+  const pct = score !== null ? score : 0
+  const r = 36
+  const circ = 2 * Math.PI * r
+  const offset = circ - (pct / 100) * circ
+
   return (
     <div style={{
-      background: 'var(--bg-3)', border: `1px solid ${color}33`, borderRadius: 10,
-      padding: '12px 16px', display: 'flex', flexDirection: 'column', gap: 4, flex: 1,
-      boxShadow: `0 4px 12px ${color}11`,
+      flex: 1,
+      background: 'var(--bg-3)',
+      border: `1px solid ${score !== null ? displayColor + '30' : 'var(--b-1)'}`,
+      borderRadius: 14,
+      padding: '18px 16px 16px',
+      display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10,
+      boxShadow: score !== null ? `0 4px 20px ${displayColor}0D` : 'none',
+      opacity: score === null ? 0.4 : 1,
+      transition: 'all .3s var(--ease-out-expo)',
+      position: 'relative', overflow: 'hidden',
     }}>
-      <div style={{ fontSize: 9, fontWeight: 800, color, letterSpacing: 1 }}>{label.toUpperCase()}</div>
-      <div style={{ fontFamily: 'Inter', fontWeight: 900, fontSize: 22, color, lineHeight: 1 }}>{score}%</div>
-      <div style={{ fontSize: 10, color: 'var(--t-3)', marginTop: 2 }}>
-        <span style={{ color: '#FF453A', fontWeight: 700 }}>{edited}</span> edited /
-        <span style={{ color: 'var(--t-2)', fontWeight: 600 }}> {reviewed}</span> reviewed
+      {/* Subtle glow accent top */}
+      {score !== null && (
+        <div style={{
+          position: 'absolute', top: 0, left: '50%', transform: 'translateX(-50%)',
+          width: '60%', height: 2, borderRadius: 2,
+          background: `linear-gradient(90deg, transparent, ${displayColor}, transparent)`,
+        }}/>
+      )}
+
+      {/* Label */}
+      <div style={{ fontSize: 9, fontWeight: 800, color: displayColor, letterSpacing: 1.5, textTransform: 'uppercase' }}>
+        {label}
       </div>
+
+      {/* Ring */}
+      <div style={{ position: 'relative', width: 88, height: 88 }}>
+        <svg width="88" height="88" viewBox="0 0 88 88">
+          <circle cx="44" cy="44" r={r} fill="none" stroke="var(--b-2)" strokeWidth="7"/>
+          {score !== null && (
+            <circle cx="44" cy="44" r={r} fill="none"
+              stroke={displayColor} strokeWidth="7"
+              strokeDasharray={circ} strokeDashoffset={offset}
+              strokeLinecap="round"
+              style={{ transform: 'rotate(-90deg)', transformOrigin: '50% 50%',
+                transition: 'stroke-dashoffset 1.2s cubic-bezier(0.16,1,0.3,1)' }}
+            />
+          )}
+        </svg>
+        <div style={{
+          position: 'absolute', inset: 0,
+          display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+        }}>
+          <span style={{ fontFamily: 'Inter', fontWeight: 900, fontSize: 20, color: displayColor, lineHeight: 1 }}>
+            {score !== null ? score : '—'}
+          </span>
+          {score !== null && <span style={{ fontSize: 8, color: 'var(--t-3)', fontWeight: 700, letterSpacing: 1 }}>%</span>}
+        </div>
+      </div>
+
+      {/* Stats */}
+      {score !== null && (
+        <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+          <div style={{ textAlign: 'center' }}>
+            <div style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 13, fontWeight: 700, color: '#FF453A', lineHeight: 1 }}>{edited}</div>
+            <div style={{ fontSize: 8, color: 'var(--t-3)', fontWeight: 600, letterSpacing: 0.8, marginTop: 2 }}>EDITED</div>
+          </div>
+          <div style={{ width: 1, height: 24, background: 'var(--b-2)' }}/>
+          <div style={{ textAlign: 'center' }}>
+            <div style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 13, fontWeight: 700, color: 'var(--t-2)', lineHeight: 1 }}>{reviewed}</div>
+            <div style={{ fontSize: 8, color: 'var(--t-3)', fontWeight: 600, letterSpacing: 0.8, marginTop: 2 }}>REVIEWED</div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
@@ -121,60 +175,46 @@ function QuickSummary({ results, score, abcScores, onFullReport }) {
   return (
     <div className="scale-in" style={{
       background: 'var(--bg-2)', border: '1px solid var(--b-1)',
-      borderRadius: 16, padding: '20px 24px',
-      boxShadow: '0 8px 32px rgba(0,0,0,0.4)',
+      borderRadius: 16, padding: '16px',
+      boxShadow: '0 8px 32px rgba(0,0,0,0.5)',
     }}>
-      {/* Top row: scores side by side */}
-      <div style={{ display: 'flex', gap: 12, marginBottom: 16, alignItems: 'stretch' }}>
-        {/* Overall score */}
-        <div style={{
-          background: 'var(--bg-3)', border: '1px solid rgba(232,89,12,0.3)', borderRadius: 10,
-          padding: '12px 16px', display: 'flex', flexDirection: 'column', alignItems: 'center',
-          gap: 6, flexShrink: 0,
-          boxShadow: '0 4px 12px rgba(232,89,12,0.1)',
-        }}>
-          <div style={{ fontSize: 9, fontWeight: 800, color: 'var(--p2)', letterSpacing: 1 }}>OVERALL</div>
-          <ScoreRing score={score} size={80}/>
-        </div>
-
-        {/* A/B/C scores */}
-        <MiniScore label="A - Review" color="#0A84FF" {...(abcScores?.A || { score: null, reviewed: 0, edited: 0 })}/>
-        <MiniScore label="B - Review" color="#30D158" {...(abcScores?.B || { score: null, reviewed: 0, edited: 0 })}/>
-        <MiniScore label="C - Review" color="#FFD60A" {...(abcScores?.C || { score: null, reviewed: 0, edited: 0 })}/>
-
-        {/* Full report button */}
-        <button className="btn-orange" style={{
-          padding: '0 16px', fontSize: 12, flexShrink: 0, alignSelf: 'stretch',
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-          writingMode: 'vertical-rl', letterSpacing: 1,
-        }} onClick={onFullReport}>
-          Full Report →
-        </button>
+      {/* 4 equal score cards */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: 10, marginBottom: 14 }}>
+        <ScoreCard label="Overall" score={score} reviewed={results.baseEvents.length} edited={uniqueEdited} color="var(--p2)" isOverall/>
+        <ScoreCard label="A - Review" score={abcScores?.A?.score ?? null} reviewed={abcScores?.A?.reviewed ?? 0} edited={abcScores?.A?.edited ?? 0} color="#0A84FF"/>
+        <ScoreCard label="B - Review" score={abcScores?.B?.score ?? null} reviewed={abcScores?.B?.reviewed ?? 0} edited={abcScores?.B?.edited ?? 0} color="#30D158"/>
+        <ScoreCard label="C - Review" score={abcScores?.C?.score ?? null} reviewed={abcScores?.C?.reviewed ?? 0} edited={abcScores?.C?.edited ?? 0} color="#FFD60A"/>
       </div>
 
-      {/* Bottom row: stats + badges */}
-      <div style={{ display: 'flex', gap: 20, alignItems: 'center' }}>
+      {/* Bottom: stats + badges + full report */}
+      <div style={{
+        display: 'flex', alignItems: 'center', gap: 16,
+        padding: '10px 12px',
+        background: 'var(--bg-3)', borderRadius: 10,
+        border: '1px solid var(--b-1)',
+      }}>
         {[
-          { label: 'Events reviewed', value: results.baseEvents.length },
-          { label: 'Edits made',      value: uniqueEdited, color: '#FF453A' },
-          { label: 'Up to',           value: fmt(results.videoTime) },
+          { label: 'REVIEWED', value: results.baseEvents.length, color: 'var(--t-1)' },
+          { label: 'EDITED',   value: uniqueEdited,              color: '#FF453A' },
+          { label: 'UP TO',    value: fmt(results.videoTime),     color: 'var(--p2)' },
         ].map(s => (
-          <div key={s.label}>
-            <div style={{ fontFamily: 'Inter', fontWeight: 800, fontSize: 18, color: s.color || 'var(--t-1)', lineHeight: 1 }}>
-              {s.value}
-            </div>
-            <div style={{ fontSize: 10, color: 'var(--t-3)', marginTop: 3, fontWeight: 600, letterSpacing: 0.5 }}>
-              {s.label.toUpperCase()}
-            </div>
+          <div key={s.label} style={{ display: 'flex', alignItems: 'baseline', gap: 5 }}>
+            <span style={{ fontFamily: 'Inter', fontWeight: 900, fontSize: 16, color: s.color }}>{s.value}</span>
+            <span style={{ fontSize: 9, fontWeight: 700, color: 'var(--t-3)', letterSpacing: 0.8 }}>{s.label}</span>
           </div>
         ))}
-        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginLeft: 8 }}>
+        <div style={{ width: 1, height: 20, background: 'var(--b-2)', marginLeft: 4 }}/>
+        <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap', flex: 1 }}>
           {Object.entries(types).map(([type, count]) => (
-            <span key={type} style={{ fontSize: 11, color: 'var(--t-2)' }}>
-              <AmendBadge type={type}/> <span style={{ marginLeft: 3 }}>×{count}</span>
+            <span key={type} style={{ display: 'flex', alignItems: 'center', gap: 3 }}>
+              <AmendBadge type={type}/>
+              <span style={{ fontSize: 10, color: 'var(--t-3)' }}>×{count}</span>
             </span>
           ))}
         </div>
+        <button className="btn-orange" style={{ padding: '8px 18px', fontSize: 12, flexShrink: 0 }} onClick={onFullReport}>
+          Full Report →
+        </button>
       </div>
     </div>
   )
@@ -673,11 +713,11 @@ export default function AuditPage({ session, onBack, onFullReport }) {
       {/* ── Main content ── */}
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
 
-        {/* Video area */}
-        <div style={{ background: '#000', position: 'relative', flexShrink: 0 }}>
+        {/* Video area — full width */}
+        <div style={{ background: '#000', position: 'relative', flexShrink: 0, width: '100%' }}>
           <video
             ref={videoRef}
-            style={{ width: '100%', height: results ? 200 : 320, objectFit: 'contain', display: 'block', transition: 'height .4s cubic-bezier(0.16,1,0.3,1)' }}
+            style={{ width: '100%', height: results ? 240 : 400, objectFit: 'contain', display: 'block', transition: 'height .4s cubic-bezier(0.16,1,0.3,1)' }}
             onTimeUpdate={e => setCurrentTime(e.target.currentTime)}
             onDurationChange={e => { if (isFinite(e.target.duration)) setDuration(e.target.duration) }}
             onPlay={() => setPlaying(true)}
