@@ -223,9 +223,16 @@ const REVIEW_GROUPS = {
   }
 }
 
-function calcGroupScore(group, baseEvents, amendments, refinements) {
+function filterAmendments(amendments, reviewerId) {
+  // Only count deletions made by the reviewer, not the collector
+  return amendments.filter(a => {
+    if (a.type === 'deletion') return a.author === reviewerId
+    return true
+  })
+}
+
+function calcGroupScore(group, baseEvents, amendments, refinements, reviewerId) {
   // Find base events belonging to this group
-  // refinements: map of key -> extras array (collector's original extras)
   const groupBase = baseEvents.filter(e => {
     const extras = refinements[e.key] || []
     return group.match(e, extras)
@@ -233,15 +240,22 @@ function calcGroupScore(group, baseEvents, amendments, refinements) {
   if (groupBase.length === 0) return { score: null, reviewed: 0, edited: 0 }
 
   const groupKeys = new Set(groupBase.map(e => e.key))
-  const groupAmends = amendments.filter(a => groupKeys.has(a.key))
-  const uniqueEdited = new Set(groupAmends.map(a => a.key)).size
+  const validAmends = filterAmendments(
+    amendments.filter(a => groupKeys.has(a.key)),
+    reviewerId
+  )
+  const uniqueEdited = new Set(validAmends.map(a => a.key)).size
   const score = Math.round(((groupBase.length - uniqueEdited) / groupBase.length) * 100)
   return { score, reviewed: groupBase.length, edited: uniqueEdited }
 }
 
 // ── Amendments Table ──────────────────────────────────────────────────────────
-function AmendmentsTable({ results, session }) {
-  const { baseEvents, amendments } = results
+function AmendmentsTable({ results, session, reviewerId }) {
+  const { baseEvents } = results
+  // Only count deletions made by the reviewer
+  const amendments = results.amendments.filter(a =>
+    a.type !== 'deletion' || a.author === reviewerId
+  )
 
   // Build profile lookup from Apollo cache
   const profileMap = {}
@@ -498,7 +512,8 @@ export default function AuditPage({ session, onBack, onFullReport }) {
       if (!data) { setError('No data returned — make sure collection app is open on this match'); setLoading(false); return }
 
       // Calculate score
-      const uniqueEdited = new Set(data.amendments.map(a => a.key)).size
+      const validAmendments = filterAmendments(data.amendments, data.reviewerId)
+      const uniqueEdited = new Set(validAmendments.map(a => a.key)).size
       const total = data.baseEvents.length
       const q = total > 0 ? Math.round(((total - uniqueEdited) / total) * 100) : 0
 
@@ -516,7 +531,7 @@ export default function AuditPage({ session, onBack, onFullReport }) {
 
       const abc = {}
       for (const [key, group] of Object.entries(REVIEW_GROUPS)) {
-        abc[key] = calcGroupScore(group, data.baseEvents, data.amendments, refinements)
+        abc[key] = calcGroupScore(group, data.baseEvents, data.amendments, refinements, data.reviewerId)
       }
       setAbcScores(abc)
       setResults(data)
@@ -662,7 +677,7 @@ export default function AuditPage({ session, onBack, onFullReport }) {
         <div style={{ background: '#000', position: 'relative', flexShrink: 0 }}>
           <video
             ref={videoRef}
-            style={{ width: '100%', maxHeight: results ? 220 : 340, objectFit: 'contain', display: 'block', transition: 'max-height .4s cubic-bezier(0.16,1,0.3,1)' }}
+            style={{ width: '100%', height: results ? 200 : 320, objectFit: 'contain', display: 'block', transition: 'height .4s cubic-bezier(0.16,1,0.3,1)' }}
             onTimeUpdate={e => setCurrentTime(e.target.currentTime)}
             onDurationChange={e => { if (isFinite(e.target.duration)) setDuration(e.target.duration) }}
             onPlay={() => setPlaying(true)}
@@ -772,7 +787,7 @@ export default function AuditPage({ session, onBack, onFullReport }) {
                 abcScores={abcScores}
                 onFullReport={() => onFullReport(results, score, session)}
               />
-              <AmendmentsTable results={results} session={session} />
+              <AmendmentsTable results={results} session={session} reviewerId={results.reviewerId} />
             </>
           )}
 
