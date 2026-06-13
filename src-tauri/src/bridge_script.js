@@ -1,5 +1,5 @@
 (async function(){
-  const BRIDGE_VERSION = '6.8.0-ws';
+  const BRIDGE_VERSION = '6.9.0-ws';
   if(window.__MARK_BRIDGE_VERSION__ === BRIDGE_VERSION){console.log('[MARK] bridge already running (v' + BRIDGE_VERSION + ')');return;}
   if(window.__MARK_BRIDGE_STOP__) window.__MARK_BRIDGE_STOP__();
   window.__MARK_BRIDGE__ = true;
@@ -331,10 +331,21 @@
           if (baseByKey[a.key]) a.originalName = baseByKey[a.key].name;
         });
 
-        // Get collector + reviewer ids
-        const collectorId = baseEvents.length > 0 ? baseEvents[0].author : null;
-        const reviewerAmendments = amendments.filter(a => a.author !== collectorId);
-        const reviewerId = reviewerAmendments.length > 0 ? reviewerAmendments[0].author : null;
+        // Get collector ID = most common author of base events
+        const authorCounts = {};
+        baseEvents.forEach(e => { authorCounts[e.author] = (authorCounts[e.author] || 0) + 1; });
+        const collectorId = Object.entries(authorCounts).sort((a,b) => b[1]-a[1])[0]?.[0];
+        const collectorIdNum = collectorId ? parseInt(collectorId) : null;
+
+        // Get reviewer ID = most common amendment author who is NOT the collector
+        const reviewerCounts = {};
+        amendments.forEach(a => {
+          if (a.author !== collectorIdNum) {
+            reviewerCounts[a.author] = (reviewerCounts[a.author] || 0) + 1;
+          }
+        });
+        const reviewerIdNum = Object.entries(reviewerCounts).sort((a,b) => b[1]-a[1])[0]?.[0];
+        const reviewerId = reviewerIdNum ? parseInt(reviewerIdNum) : null;
 
         ws.send(JSON.stringify({
           type: 'qaResultsResponse',

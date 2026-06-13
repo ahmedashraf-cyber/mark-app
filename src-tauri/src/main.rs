@@ -397,7 +397,7 @@ fn patch_one_shortcut(lnk_path: &std::path::Path) -> Result<bool, String> {
 //   5. Shift offsets of files that come AFTER app.html by the size delta
 //   6. Rebuild and write the file
 // Idempotent — checks for the marker comment and skips if already patched.
-const ASAR_MARKER: &str = "<!-- MARK_BRIDGE_INJECTED v12 -->";
+const ASAR_MARKER: &str = "<!-- MARK_BRIDGE_INJECTED v13 -->";
 
 #[command]
 fn patch_tag_once_asar() -> Result<String, String> {
