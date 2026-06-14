@@ -8,6 +8,7 @@ import ReviewPage from './pages/ReviewPage'
 import SessionHistoryPage from './pages/SessionHistoryPage'
 import AuditPage from './pages/AuditPage'
 import AuditReportPage from './pages/AuditReportPage'
+import ObserverPage from './pages/ObserverPage'
 import UpdateBanner from './components/UpdateBanner'
 
 // Cinematic page wrapper — fades + slides in each time content changes
@@ -162,6 +163,7 @@ function AppInner() {
   const [auditResults,   setAuditResults]   = useState(null)
   const [auditScore,     setAuditScore]     = useState(null)
   const [showAuditReport, setShowAuditReport] = useState(false)
+  const [observingSession, setObservingSession] = useState(null)
 
   useEffect(() => {
     if (!user) return
@@ -203,13 +205,18 @@ function AppInner() {
     </PageTransition>
   )
 
-  const pageId = showAuditReport ? 'audit-report' : session?.mode === 'audit' ? `audit-${session.sessionId}` : session ? `review-${session.sessionId}` : showHistory ? 'history' : 'setup'
+  const pageId = observingSession ? `observer-${observingSession.sessionId}` : showAuditReport ? 'audit-report' : session?.mode === 'audit' ? `audit-${session.sessionId}` : session ? `review-${session.sessionId}` : showHistory ? 'history' : 'setup'
 
   return (
     <>
       <BackgroundDecoration />
       <PageTransition id={pageId}>
-        {showAuditReport && auditResults ? (
+        {observingSession ? (
+          <ObserverPage
+            session={observingSession}
+            onBack={() => setObservingSession(null)}
+          />
+        ) : showAuditReport && auditResults ? (
           <AuditReportPage
             results={auditResults}
             score={auditScore}
@@ -241,6 +248,7 @@ function AppInner() {
             onSessionStart={(s) => setSession(s)}
             lastResult={lastResult}
             onShowHistory={(session) => { setHistorySession(session || null); setShowHistory(true) }}
+            onWatchSession={(s) => setObservingSession(s)}
           />
         )}
       </PageTransition>

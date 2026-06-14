@@ -149,7 +149,7 @@ const HALVES = [
   { id: 'ET2', label: 'Extra Time 2' },
 ]
 
-export default function SessionSetupPage({ onSessionStart, lastResult, onShowHistory }) {
+export default function SessionSetupPage({ onSessionStart, lastResult, onShowHistory, onWatchSession }) {
   const { profile, logout } = useAuth()
   const isAdmin = useAdmin(profile)
   const [matchSearch, setMatchSearch]     = useState('')
@@ -159,6 +159,8 @@ export default function SessionSetupPage({ onSessionStart, lastResult, onShowHis
   const [lockedBy, setLockedBy]           = useState('')
   const [completedSession, setCompletedSession] = useState(null)
   const [recentSessions, setRecentSessions]     = useState([])
+  const [allRecentSessions, setAllRecentSessions] = useState([])
+  const [adminMode, setAdminMode]               = useState(false)
   const [sessionsLoading, setSessionsLoading]   = useState(false)
   const [reviewMode, setReviewMode]             = useState(null) // null | 'scout' | 'audit'
   const [loading, setLoading]             = useState(false)
@@ -171,15 +173,28 @@ export default function SessionSetupPage({ onSessionStart, lastResult, onShowHis
   useEffect(() => {
     if (!profile?.uid) return
     setSessionsLoading(true)
-    getDocs(query(
-      collection(db, 'mark_sessions'),
-      where('reviewerId', '==', profile.uid),
-      where('status', '==', 'completed')
-    )).then(snap => {
-      const list = snap.docs.map(d => ({ id: d.id, ...d.data() }))
-      list.sort((a, b) => (b.completedAt?.toDate?.()?.getTime() || 0) - (a.completedAt?.toDate?.()?.getTime() || 0))
-      setRecentSessions(list.slice(0, 10))
-    }).catch(() => {}).finally(() => setSessionsLoading(false))
+    const ownQ = query(collection(db, 'mark_sessions'), where('reviewerId', '==', profile.uid), where('status', '==', 'completed'))
+    if (profile?.email === 'ahmed.ashraf@hudl.com') {
+      Promise.all([
+        getDocs(ownQ),
+        getDocs(query(collection(db, 'mark_sessions'), where('status', '==', 'in_progress'))),
+        getDocs(query(collection(db, 'mark_sessions'), where('status', '==', 'completed'))),
+      ]).then(([ownSnap, liveSnap, allSnap]) => {
+        const own = ownSnap.docs.map(d => ({ id: d.id, ...d.data() }))
+        own.sort((a, b) => (b.completedAt?.toDate?.()?.getTime() || 0) - (a.completedAt?.toDate?.()?.getTime() || 0))
+        setRecentSessions(own.slice(0, 10))
+        const live = liveSnap.docs.map(d => ({ id: d.id, ...d.data() }))
+        const completed = allSnap.docs.map(d => ({ id: d.id, ...d.data() }))
+        completed.sort((a, b) => (b.completedAt?.toDate?.()?.getTime() || 0) - (a.completedAt?.toDate?.()?.getTime() || 0))
+        setAllRecentSessions([...live, ...completed.slice(0, 15)])
+      }).catch(() => {}).finally(() => setSessionsLoading(false))
+    } else {
+      getDocs(ownQ).then(snap => {
+        const list = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+        list.sort((a, b) => (b.completedAt?.toDate?.()?.getTime() || 0) - (a.completedAt?.toDate?.()?.getTime() || 0))
+        setRecentSessions(list.slice(0, 10))
+      }).catch(() => {}).finally(() => setSessionsLoading(false))
+    }
   }, [profile?.uid])
 
   useEffect(() => {
@@ -700,57 +715,67 @@ export default function SessionSetupPage({ onSessionStart, lastResult, onShowHis
       </div>
 
       {/* ── Recent sessions ── */}
-      {recentSessions.length > 0 && (
+      {(recentSessions.length > 0 || (isAdmin && allRecentSessions.length > 0)) && (
         <div style={{flexShrink:0,borderTop:'1px solid var(--b-1)',background:'var(--bg-2)',padding:'12px 24px'}}>
-          <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:10}}>
+          <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:10}}>
             <span style={{fontSize:9,fontWeight:800,color:'var(--t-3)',letterSpacing:1.5}}>RECENT SESSIONS</span>
-            <button className="btn-ghost" style={{fontSize:10,padding:'2px 8px'}} onClick={() => onShowHistory && onShowHistory(null)}>
+            {isAdmin && (
+              <div style={{display:'flex',alignItems:'center',gap:4,padding:'2px 3px',borderRadius:16,background:'rgba(255,215,0,0.06)',border:'1px solid rgba(255,215,0,0.18)'}}>
+                <span style={{fontSize:9,paddingLeft:5}}>👑</span>
+                {['Mine','All'].map(m => (
+                  <button key={m}
+                    onClick={() => setAdminMode(m === 'All')}
+                    style={{padding:'2px 9px',borderRadius:12,fontSize:10,fontWeight:700,cursor:'pointer',border:'none',background:(m==='All')===adminMode?'rgba(255,215,0,0.2)':'transparent',color:(m==='All')===adminMode?'#FFD700':'var(--t-3)',transition:'all .15s'}}
+                  >{m}</button>
+                ))}
+              </div>
+            )}
+            <button className="btn-ghost" style={{fontSize:10,padding:'2px 8px',marginLeft:'auto'}} onClick={() => onShowHistory && onShowHistory(null)}>
               View all →
             </button>
           </div>
           <div style={{display:'flex',gap:8,overflowX:'auto',paddingBottom:4,scrollbarWidth:'none'}}>
-            {recentSessions.map(s => {
+            {(adminMode ? allRecentSessions : recentSessions).map(s => {
+              const isLive = s.status === 'in_progress'
               const score = s.qualityScore || 0
               const color = score >= 80 ? '#30D158' : score >= 60 ? '#FFD60A' : '#FF453A'
-              const date = s.completedAt?.toDate?.()
-                ? s.completedAt.toDate().toLocaleDateString('en-GB',{day:'2-digit',month:'short'})
-                : ''
+              const date = isLive ? null : (s.completedAt?.toDate?.()?.toLocaleDateString('en-GB',{day:'2-digit',month:'short'}) || '')
               const isAudit = s.type === 'audit'
+              const reviewer = adminMode ? (s.reviewerName || s.reviewerEmail?.split('@')[0]) : null
               return (
-                <div key={s.id}
-                  onClick={() => onShowHistory && onShowHistory(s)}
+                <div key={s.id || s.sessionId}
+                  onClick={() => isLive ? (onWatchSession && onWatchSession(s)) : (onShowHistory && onShowHistory(s))}
                   style={{
                     display:'flex', alignItems:'center', gap:10,
                     padding:'8px 12px', borderRadius:10, cursor:'pointer',
-                    border:'1px solid var(--b-1)', background:'var(--bg-3)',
-                    transition:'all .15s', flexShrink:0, minWidth:220, maxWidth:260,
+                    border:`1px solid ${isLive?'rgba(255,59,48,0.25)':'var(--b-1)'}`,
+                    background: isLive ? 'rgba(255,59,48,0.04)' : 'var(--bg-3)',
+                    transition:'all .15s', flexShrink:0, minWidth:220, maxWidth:280,
                   }}
-                  onMouseEnter={e => { e.currentTarget.style.background='rgba(255,255,255,0.04)'; e.currentTarget.style.borderColor='var(--b-2)' }}
-                  onMouseLeave={e => { e.currentTarget.style.background='var(--bg-3)'; e.currentTarget.style.borderColor='var(--b-1)' }}
+                  onMouseEnter={e => { e.currentTarget.style.background=isLive?'rgba(255,59,48,0.08)':'rgba(255,255,255,0.04)'; e.currentTarget.style.borderColor=isLive?'rgba(255,59,48,0.4)':'var(--b-2)' }}
+                  onMouseLeave={e => { e.currentTarget.style.background=isLive?'rgba(255,59,48,0.04)':'var(--bg-3)'; e.currentTarget.style.borderColor=isLive?'rgba(255,59,48,0.25)':'var(--b-1)' }}
                 >
-                  <div style={{
-                    width:34,height:34,borderRadius:9,flexShrink:0,
-                    background:`${color}12`,border:`1.5px solid ${color}33`,
-                    display:'flex',alignItems:'center',justifyContent:'center',
-                  }}>
-                    <span style={{fontFamily:'Inter',fontWeight:900,fontSize:11,color}}>{score}%</span>
-                  </div>
+                  {isLive ? (
+                    <div style={{width:34,height:34,borderRadius:9,flexShrink:0,background:'rgba(255,59,48,0.1)',border:'1.5px solid rgba(255,59,48,0.3)',display:'flex',alignItems:'center',justifyContent:'center'}}>
+                      <div style={{width:8,height:8,borderRadius:'50%',background:'#FF3B30',boxShadow:'0 0 8px rgba(255,59,48,0.9)'}}/>
+                    </div>
+                  ) : (
+                    <div style={{width:34,height:34,borderRadius:9,flexShrink:0,background:`${color}12`,border:`1.5px solid ${color}33`,display:'flex',alignItems:'center',justifyContent:'center'}}>
+                      <span style={{fontFamily:'Inter',fontWeight:900,fontSize:11,color}}>{score}%</span>
+                    </div>
+                  )}
                   <div style={{flex:1,minWidth:0}}>
                     <div style={{fontSize:11,fontWeight:600,color:'var(--t-1)',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis',marginBottom:2}}>
                       {s.matchName}
                     </div>
                     <div style={{display:'flex',alignItems:'center',gap:5,fontSize:9,color:'var(--t-3)'}}>
-                      <span style={{
-                        padding:'1px 5px',borderRadius:4,fontWeight:700,fontSize:8,
-                        background:isAudit?'rgba(10,132,255,0.12)':'rgba(232,89,12,0.12)',
-                        color:isAudit?'#0A84FF':'var(--p2)',
-                        border:`1px solid ${isAudit?'rgba(10,132,255,0.2)':'rgba(232,89,12,0.2)'}`,
-                      }}>{isAudit?'AUDIT':'SCOUT'}</span>
+                      <span style={{padding:'1px 5px',borderRadius:4,fontWeight:700,fontSize:8,background:isAudit?'rgba(10,132,255,0.12)':'rgba(232,89,12,0.12)',color:isAudit?'#0A84FF':'var(--p2)',border:`1px solid ${isAudit?'rgba(10,132,255,0.2)':'rgba(232,89,12,0.2)'}`}}>{isAudit?'AUDIT':'SCOUT'}</span>
                       <span>{s.half}</span>
-                      <span>·</span>
-                      <span>{s.totalTaggedErrors || 0} errors</span>
-                      <span>·</span>
-                      <span>{date}</span>
+                      {isLive ? (
+                        <><span>·</span><span style={{color:'#FF3B30',fontWeight:700}}>LIVE</span>{reviewer && <><span>·</span><span>{reviewer}</span></>}</>
+                      ) : (
+                        <><span>·</span><span>{s.totalTaggedErrors || 0} errors</span><span>·</span><span>{date}</span>{reviewer && <><span>·</span><span>{reviewer}</span></>}</>
+                      )}
                     </div>
                   </div>
                 </div>
