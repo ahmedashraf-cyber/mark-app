@@ -62,6 +62,10 @@ jobs:
           }
         shell: pwsh
 
+      - name: Lock Rust dependencies
+        run: cargo update --manifest-path src-tauri/Cargo.toml
+        shell: pwsh
+
       - name: Build Tauri app
         uses: tauri-apps/tauri-action@v0
         env:
