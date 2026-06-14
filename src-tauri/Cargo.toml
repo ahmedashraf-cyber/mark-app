@@ -15,7 +15,7 @@ axum = "0.7"
 tokio = { version = "1", features = ["full"] }
 http-range = "0.1"
 tauri-plugin-fs = ">=2.3.0, <2.4.0"
-reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
+reqwest = { version = "0.12", features = ["json", "native-tls"] }
 jsonwebtoken = "9"
 urlencoding = "2"
 serde = { version = "1", features = ["derive"] }
