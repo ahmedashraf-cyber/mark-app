@@ -33,7 +33,7 @@ jobs:
           cache-on-failure: true
 
       - name: Install frontend dependencies
-        run: npm ci
+        run: npm install
 
       - name: Sync version to tauri.conf.json
         run: node scripts/sync-version.js
