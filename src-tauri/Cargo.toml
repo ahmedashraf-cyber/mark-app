@@ -1,6 +1,6 @@
 [package]
 name = "mark-app"
-version = "7.3.0"
+version = "7.2.0"
 description = "MARK — Review App for Hudl Egypt"
 authors = ["Ahmed Ashraf"]
 edition = "2021"
@@ -15,7 +15,7 @@ axum = "0.7"
 tokio = { version = "1", features = ["full"] }
 http-range = "0.1"
 tauri-plugin-fs = "2"
-reqwest = { version = "0.12", features = ["json", "native-tls"] }
+reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
 jsonwebtoken = "9"
 urlencoding = "2"
 serde = { version = "1", features = ["derive"] }
