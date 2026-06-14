@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import { db } from '../firebase/config'
 import { collection, query, where, getDocs } from 'firebase/firestore'
 import { useAuth } from '../hooks/useAuth.jsx'
+import { useAdmin } from '../hooks/useAdmin.js'
 import { invoke } from '@tauri-apps/api/core'
 import { exportSessionToXlsx } from '../utils/exportSession'
 import { EXTRAS, GK_EXTRAS, GK_WRONG_EXTRAS } from '../components/TagPanel'
@@ -509,7 +510,7 @@ function MatchReport({ session, tags, onBack }) {
 }
 
 // ------ Session Card (list view) ------------------------------------------------------------------------------------------------------------------------------------------------------
-function SessionCard({ session, onReview, onExport, loading }) {
+function SessionCard({ session, onReview, onExport, loading, isAdmin }) {
   const score  = session.qualityScore || 0
   const color  = score >= 80 ? '#30D158' : score >= 60 ? '#FFD60A' : '#FF453A'
   const isAudit = session.type === 'audit'
@@ -573,12 +574,23 @@ function SessionCard({ session, onReview, onExport, loading }) {
             letterSpacing:0.5,
           }}>{isAudit?'AUDIT':'SCOUT'}</span>
         </div>
-        <div style={{ display:'flex', alignItems:'center', gap:6, fontSize:10, color:'var(--t-3)' }}>
+        <div style={{ display:'flex', alignItems:'center', gap:6, fontSize:10, color:'var(--t-3)', flexWrap:'wrap' }}>
           <span style={{ fontFamily:'JetBrains Mono, monospace', color:'var(--p2)', fontWeight:600, fontSize:9 }}>{session.matchId}</span>
           <span style={{ color:'var(--b-2)' }}>·</span>
           <span>{session.half}</span>
           <span style={{ color:'var(--b-2)' }}>·</span>
           <span>{date}</span>
+          {isAdmin && session.reviewerEmail && (
+            <>
+              <span style={{ color:'var(--b-2)' }}>·</span>
+              <span style={{
+                fontSize:9, color:'#FFD700', fontWeight:600,
+                display:'flex', alignItems:'center', gap:3,
+              }}>
+                <span>👤</span>{session.reviewerEmail}
+              </span>
+            </>
+          )}
         </div>
       </div>
 
@@ -635,8 +647,11 @@ function SessionCard({ session, onReview, onExport, loading }) {
 export default function SessionHistoryPage({ onBack, initialSession }) {
   const { profile } = useAuth()
   const [sessions,      setSessions]      = useState([])
+  const [allSessions,   setAllSessions]   = useState([])
   const [loading,       setLoading]       = useState(true)
+  const [adminMode,     setAdminMode]     = useState(false)
   const [activeSession, setActiveSession] = useState(null)
+  const isAdmin = useAdmin(profile)
   const [activeTags,    setActiveTags]    = useState([])
   const [tagsLoading,   setTagsLoading]   = useState(false)
 
@@ -645,6 +660,7 @@ export default function SessionHistoryPage({ onBack, initialSession }) {
     async function load() {
       setLoading(true)
       try {
+        // Own sessions
         const q = query(
           collection(db, 'mark_sessions'),
           where('reviewerId', '==', profile.uid),
@@ -652,16 +668,19 @@ export default function SessionHistoryPage({ onBack, initialSession }) {
         )
         const snap = await getDocs(q)
         const list = snap.docs.map(d => ({ id: d.id, ...d.data() }))
-        list.sort((a, b) => {
-          const ta = a.completedAt?.toDate?.()?.getTime() || 0
-          const tb = b.completedAt?.toDate?.()?.getTime() || 0
-          return tb - ta
-        })
+        list.sort((a, b) => (b.completedAt?.toDate?.()?.getTime() || 0) - (a.completedAt?.toDate?.()?.getTime() || 0))
         setSessions(list)
-        // Auto-open initialSession if provided
-        if (initialSession) {
-          handleReview(initialSession)
+
+        // Admin: also load ALL sessions
+        if (profile.email === 'ahmed.ashraf@hudl.com') {
+          const allQ = query(collection(db, 'mark_sessions'), where('status', '==', 'completed'))
+          const allSnap = await getDocs(allQ)
+          const allList = allSnap.docs.map(d => ({ id: d.id, ...d.data() }))
+          allList.sort((a, b) => (b.completedAt?.toDate?.()?.getTime() || 0) - (a.completedAt?.toDate?.()?.getTime() || 0))
+          setAllSessions(allList)
         }
+
+        if (initialSession) handleReview(initialSession)
       } catch(e) {
         console.error('[MARK] load sessions:', e)
       } finally {
@@ -708,10 +727,11 @@ export default function SessionHistoryPage({ onBack, initialSession }) {
   }
 
   // Compute stats
-  const totalSessions  = sessions.length
-  const avgScore       = sessions.length > 0 ? Math.round(sessions.reduce((s, x) => s + (x.qualityScore || 0), 0) / sessions.length) : 0
-  const scoutSessions  = sessions.filter(s => s.type !== 'audit').length
-  const auditSessions  = sessions.filter(s => s.type === 'audit').length
+  const displayedSessions = adminMode ? allSessions : sessions
+  const totalSessions  = displayedSessions.length
+  const avgScore       = displayedSessions.length > 0 ? Math.round(displayedSessions.reduce((s, x) => s + (x.qualityScore || 0), 0) / displayedSessions.length) : 0
+  const scoutSessions  = displayedSessions.filter(s => s.type !== 'audit').length
+  const auditSessions  = displayedSessions.filter(s => s.type === 'audit').length
 
   return (
     <div style={{ height:'100vh', display:'flex', flexDirection:'column', background:'var(--bg)', overflow:'hidden' }}>
@@ -733,8 +753,29 @@ export default function SessionHistoryPage({ onBack, initialSession }) {
           <span style={{ fontFamily:'Inter', fontWeight:900, fontSize:14, color:'var(--t-1)', letterSpacing:-0.2 }}>Session History</span>
         </div>
 
+        {/* Admin toggle */}
+        {isAdmin && (
+          <div style={{ display:'flex', alignItems:'center', gap:6,
+            padding:'3px 4px', borderRadius:20,
+            background:'rgba(255,215,0,0.06)', border:'1px solid rgba(255,215,0,0.2)',
+          }}>
+            <span style={{ fontSize:10, paddingLeft:8 }}>👑</span>
+            {['Mine','All'].map(mode => (
+              <button key={mode}
+                onClick={() => setAdminMode(mode === 'All')}
+                style={{
+                  padding:'3px 10px', borderRadius:16, fontSize:11, fontWeight:700,
+                  cursor:'pointer', border:'none',
+                  background: (mode === 'All') === adminMode ? 'rgba(255,215,0,0.2)' : 'transparent',
+                  color: (mode === 'All') === adminMode ? '#FFD700' : 'var(--t-3)',
+                  transition:'all .15s',
+                }}>{mode}</button>
+            ))}
+          </div>
+        )}
+
         {/* Stats pills */}
-        {!loading && sessions.length > 0 && (
+        {!loading && displayedSessions.length > 0 && (
           <div style={{ display:'flex', gap:8 }}>
             {[
               { label:'Total', value:totalSessions, color:'var(--t-2)' },
@@ -764,7 +805,7 @@ export default function SessionHistoryPage({ onBack, initialSession }) {
             </svg>
             <span style={{ fontSize:12, color:'var(--t-3)' }}>Loading sessions…</span>
           </div>
-        ) : sessions.length === 0 ? (
+        ) : displayedSessions.length === 0 ? (
           <div style={{ display:'flex', alignItems:'center', justifyContent:'center', height:'100%', flexDirection:'column', gap:10 }}>
             <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="var(--b-2)" strokeWidth="1.5">
               <rect x="3" y="4" width="18" height="18" rx="3"/><path d="M3 9h18"/><circle cx="8" cy="14" r="1" fill="var(--b-2)"/><circle cx="12" cy="14" r="1" fill="var(--b-2)"/><circle cx="16" cy="14" r="1" fill="var(--b-2)"/>
@@ -785,8 +826,8 @@ export default function SessionHistoryPage({ onBack, initialSession }) {
               ))}
             </div>
 
-            {sessions.map(s => (
-              <SessionCard key={s.id} session={s} onReview={handleReview} onExport={handleExport} loading={tagsLoading} />
+            {displayedSessions.map(s => (
+              <SessionCard key={s.id} session={s} onReview={handleReview} onExport={handleExport} loading={tagsLoading} isAdmin={isAdmin} />
             ))}
           </>
         )}

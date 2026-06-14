@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { db } from '../firebase/config'
 import { collection, query, where, getDocs, doc, setDoc, getDoc, serverTimestamp, orderBy, limit } from 'firebase/firestore'
 import { useAuth } from '../hooks/useAuth.jsx'
+import { useAdmin } from '../hooks/useAdmin.js'
 import { CURRENT_VERSION } from '../hooks/useUpdateCheck'
 
 const SHEETS_API_KEY   = 'AIzaSyDEO-0MZ4-LOdIJ7aIyscgmLWGN5h8MpNI'
@@ -150,6 +151,7 @@ const HALVES = [
 
 export default function SessionSetupPage({ onSessionStart, lastResult, onShowHistory }) {
   const { profile, logout } = useAuth()
+  const isAdmin = useAdmin(profile)
   const [matchSearch, setMatchSearch]     = useState('')
   const [selectedMatch, setSelectedMatch] = useState(null)
   const [selectedHalf, setSelectedHalf]   = useState(null)
@@ -327,10 +329,12 @@ export default function SessionSetupPage({ onSessionStart, lastResult, onShowHis
           <div style={{
             display:'flex',alignItems:'center',gap:6,
             padding:'4px 10px',borderRadius:20,
-            background:'rgba(255,255,255,0.04)',border:'1px solid var(--b-1)',
+            background: isAdmin ? 'rgba(255,215,0,0.06)' : 'rgba(255,255,255,0.04)',
+            border: isAdmin ? '1px solid rgba(255,215,0,0.2)' : '1px solid var(--b-1)',
           }}>
             <div style={{width:6,height:6,borderRadius:'50%',background:'#30D158',boxShadow:'0 0 6px rgba(48,209,88,0.5)'}}/>
-            <span style={{fontSize:11,color:'var(--t-3)'}}>{profile?.email}</span>
+            {isAdmin && <span style={{fontSize:11}}>👑</span>}
+            <span style={{fontSize:11,color: isAdmin ? '#FFD700' : 'var(--t-3)',fontWeight: isAdmin ? 600 : 400}}>{profile?.email}</span>
           </div>
           <button className="btn-ghost" style={{padding:'5px 14px',fontSize:11,display:'flex',alignItems:'center',gap:5}} onClick={() => onShowHistory && onShowHistory(null)}>
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
