@@ -9,14 +9,14 @@ edition = "2021"
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "=2.4.1", features = ["devtools"] }
+tauri = { version = "2", features = ["devtools"] }
 brotli-decompressor = "=5.0.1"
 alloc-stdlib = "=0.2.2"
 rfd = "0.15"
 axum = "0.7"
 tokio = { version = "1", features = ["full"] }
 http-range = "0.1"
-tauri-plugin-fs = "=2.3.0"
+tauri-plugin-fs = "2"
 reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
 jsonwebtoken = "9"
 urlencoding = "2"
