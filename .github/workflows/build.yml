@@ -62,12 +62,6 @@ jobs:
           }
         shell: pwsh
 
-      - name: Pin brotli to avoid alloc-no-stdlib conflict
-        shell: pwsh
-        run: |
-          cd src-tauri
-          cargo update brotli --precise 3.5.0
-
       - name: Build Tauri app
         uses: tauri-apps/tauri-action@v0
         env:
