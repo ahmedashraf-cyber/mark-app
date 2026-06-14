@@ -3336,6 +3336,226 @@ export const TAGGING_SCENARIOS = [
     "typeSC": null
   },
   {
+    "event": "Pass",
+    "eventSC": "E",
+    "tagged": "Left",
+    "errorType": "Wrong side",
+    "correction": "Right",
+    "correctionSC": null,
+    "typeQualifier": null,
+    "typeSC": null
+  },
+  {
+    "event": "Pass",
+    "eventSC": "E",
+    "tagged": "Right",
+    "errorType": "Wrong side",
+    "correction": "Left",
+    "correctionSC": null,
+    "typeQualifier": null,
+    "typeSC": null
+  },
+  {
+    "event": "Pass",
+    "eventSC": "E",
+    "tagged": "Ground",
+    "errorType": "Wrong height",
+    "correction": "Low",
+    "correctionSC": null,
+    "typeQualifier": null,
+    "typeSC": null
+  },
+  {
+    "event": "Pass",
+    "eventSC": "E",
+    "tagged": "Ground",
+    "errorType": "Wrong height",
+    "correction": "High",
+    "correctionSC": null,
+    "typeQualifier": null,
+    "typeSC": null
+  },
+  {
+    "event": "Pass",
+    "eventSC": "E",
+    "tagged": "Low",
+    "errorType": "Wrong height",
+    "correction": "Ground",
+    "correctionSC": null,
+    "typeQualifier": null,
+    "typeSC": null
+  },
+  {
+    "event": "Pass",
+    "eventSC": "E",
+    "tagged": "Low",
+    "errorType": "Wrong height",
+    "correction": "High",
+    "correctionSC": null,
+    "typeQualifier": null,
+    "typeSC": null
+  },
+  {
+    "event": "Pass",
+    "eventSC": "E",
+    "tagged": "High",
+    "errorType": "Wrong height",
+    "correction": "Ground",
+    "correctionSC": null,
+    "typeQualifier": null,
+    "typeSC": null
+  },
+  {
+    "event": "Pass",
+    "eventSC": "E",
+    "tagged": "High",
+    "errorType": "Wrong height",
+    "correction": "Low",
+    "correctionSC": null,
+    "typeQualifier": null,
+    "typeSC": null
+  },
+  {
+    "event": "Pass",
+    "eventSC": "E",
+    "tagged": "Head",
+    "errorType": "Wrong body part",
+    "correction": "Left foot",
+    "correctionSC": null,
+    "typeQualifier": null,
+    "typeSC": null
+  },
+  {
+    "event": "Pass",
+    "eventSC": "E",
+    "tagged": "Head",
+    "errorType": "Wrong body part",
+    "correction": "Right foot",
+    "correctionSC": null,
+    "typeQualifier": null,
+    "typeSC": null
+  },
+  {
+    "event": "Pass",
+    "eventSC": "E",
+    "tagged": "Head",
+    "errorType": "Wrong body part",
+    "correction": "Other",
+    "correctionSC": null,
+    "typeQualifier": null,
+    "typeSC": null
+  },
+  {
+    "event": "Pass",
+    "eventSC": "E",
+    "tagged": "Left foot",
+    "errorType": "Wrong body part",
+    "correction": "Head",
+    "correctionSC": null,
+    "typeQualifier": null,
+    "typeSC": null
+  },
+  {
+    "event": "Pass",
+    "eventSC": "E",
+    "tagged": "Left foot",
+    "errorType": "Wrong body part",
+    "correction": "Right foot",
+    "correctionSC": null,
+    "typeQualifier": null,
+    "typeSC": null
+  },
+  {
+    "event": "Pass",
+    "eventSC": "E",
+    "tagged": "Left foot",
+    "errorType": "Wrong body part",
+    "correction": "Other",
+    "correctionSC": null,
+    "typeQualifier": null,
+    "typeSC": null
+  },
+  {
+    "event": "Pass",
+    "eventSC": "E",
+    "tagged": "Right foot",
+    "errorType": "Wrong body part",
+    "correction": "Head",
+    "correctionSC": null,
+    "typeQualifier": null,
+    "typeSC": null
+  },
+  {
+    "event": "Pass",
+    "eventSC": "E",
+    "tagged": "Right foot",
+    "errorType": "Wrong body part",
+    "correction": "Left foot",
+    "correctionSC": null,
+    "typeQualifier": null,
+    "typeSC": null
+  },
+  {
+    "event": "Pass",
+    "eventSC": "E",
+    "tagged": "Right foot",
+    "errorType": "Wrong body part",
+    "correction": "Other",
+    "correctionSC": null,
+    "typeQualifier": null,
+    "typeSC": null
+  },
+  {
+    "event": "Pass",
+    "eventSC": "E",
+    "tagged": "Other",
+    "errorType": "Wrong body part",
+    "correction": "Head",
+    "correctionSC": null,
+    "typeQualifier": null,
+    "typeSC": null
+  },
+  {
+    "event": "Pass",
+    "eventSC": "E",
+    "tagged": "Other",
+    "errorType": "Wrong body part",
+    "correction": "Left foot",
+    "correctionSC": null,
+    "typeQualifier": null,
+    "typeSC": null
+  },
+  {
+    "event": "Pass",
+    "eventSC": "E",
+    "tagged": "Other",
+    "errorType": "Wrong body part",
+    "correction": "Right foot",
+    "correctionSC": null,
+    "typeQualifier": null,
+    "typeSC": null
+  },
+  {
+    "event": "Pass",
+    "eventSC": "E",
+    "tagged": "Null",
+    "errorType": "Missing extra",
+    "correction": "Miscommunication",
+    "correctionSC": null,
+    "typeQualifier": null,
+    "typeSC": null
+  },
+  {
+    "event": "Pass",
+    "eventSC": "E",
+    "tagged": "Miscommunication",
+    "errorType": "Not needed extra",
+    "correction": "Null",
+    "correctionSC": null,
+    "typeQualifier": null,
+    "typeSC": null
+  },
+  {
     "event": "Pass interception",
     "eventSC": "I",
     "tagged": "Pass interception",
@@ -3450,6 +3670,46 @@ export const TAGGING_SCENARIOS = [
     "eventSC": "I",
     "tagged": "Pass interception",
     "errorType": "Extra event",
+    "correction": "Null",
+    "correctionSC": null,
+    "typeQualifier": null,
+    "typeSC": null
+  },
+  {
+    "event": "Pass interception",
+    "eventSC": "I",
+    "tagged": "Null",
+    "errorType": "Missing extra",
+    "correction": "Miscommunication",
+    "correctionSC": null,
+    "typeQualifier": null,
+    "typeSC": null
+  },
+  {
+    "event": "Pass interception",
+    "eventSC": "I",
+    "tagged": "Null",
+    "errorType": "Missing extra",
+    "correction": "Step in",
+    "correctionSC": null,
+    "typeQualifier": null,
+    "typeSC": null
+  },
+  {
+    "event": "Pass interception",
+    "eventSC": "I",
+    "tagged": "Miscommunication",
+    "errorType": "Not needed extra",
+    "correction": "Null",
+    "correctionSC": null,
+    "typeQualifier": null,
+    "typeSC": null
+  },
+  {
+    "event": "Pass interception",
+    "eventSC": "I",
+    "tagged": "Step in",
+    "errorType": "Not needed extra",
     "correction": "Null",
     "correctionSC": null,
     "typeQualifier": null,
@@ -3792,6 +4052,46 @@ export const TAGGING_SCENARIOS = [
     "errorType": "Wrong technique",
     "correction": "Diving",
     "correctionSC": 1,
+    "typeQualifier": null,
+    "typeSC": null
+  },
+  {
+    "event": "Goal Keeper",
+    "eventSC": "G",
+    "tagged": "Null",
+    "errorType": "Missing extra",
+    "correction": "Diving",
+    "correctionSC": null,
+    "typeQualifier": null,
+    "typeSC": null
+  },
+  {
+    "event": "Goal Keeper",
+    "eventSC": "G",
+    "tagged": "Null",
+    "errorType": "Missing extra",
+    "correction": "Standing",
+    "correctionSC": null,
+    "typeQualifier": null,
+    "typeSC": null
+  },
+  {
+    "event": "Goal Keeper",
+    "eventSC": "G",
+    "tagged": "Diving",
+    "errorType": "Not needed extra",
+    "correction": "Null",
+    "correctionSC": null,
+    "typeQualifier": null,
+    "typeSC": null
+  },
+  {
+    "event": "Goal Keeper",
+    "eventSC": "G",
+    "tagged": "Standing",
+    "errorType": "Not needed extra",
+    "correction": "Null",
+    "correctionSC": null,
     "typeQualifier": null,
     "typeSC": null
   },

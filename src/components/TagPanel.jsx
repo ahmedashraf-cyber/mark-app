@@ -121,6 +121,7 @@ const ERROR_TYPES = [
   { key:'4', id:'missing_extra',    label:'Missing extra',    autoSave:false },
   { key:'5', id:'wrong_extra',      label:'Wrong extra',      autoSave:false },
   { key:'6', id:'not_needed_extra', label:'Not needed extra', autoSave:false },
+  { key:'7', id:'wrong_timestamp',  label:'Wrong timestamp',  autoSave:false },
 ]
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
@@ -379,6 +380,7 @@ export default function TagPanel({ pendingTag, onSave, onCancel, editTag, onEdit
         if      (et.id === 'wrong_event')      setStep(isGK ? 'gk_wrong_event' : 'wrong_event')
         else if (et.id === 'missing_event')    setStep('team')
         else if (et.id === 'extra_event')      setStep('team')
+        else if (et.id === 'wrong_timestamp')  setStep('team')
         else if (et.id === 'missing_extra')    setStep('missing_extra')
         else if (et.id === 'not_needed_extra') setStep('not_needed_extra')
         else if (et.id === 'wrong_extra')      setStep('wrong_extra_pick')
@@ -495,6 +497,7 @@ export default function TagPanel({ pendingTag, onSave, onCancel, editTag, onEdit
                       if      (et.id === 'wrong_event')      setStep(isGK ? 'gk_wrong_event' : 'wrong_event')
                       else if (et.id === 'missing_event')    setStep('team')
                       else if (et.id === 'extra_event')      setStep('team')
+                      else if (et.id === 'wrong_timestamp')  setStep('team')
                       else if (et.id === 'missing_extra')    setStep('missing_extra')
                       else if (et.id === 'not_needed_extra') setStep('not_needed_extra')
                       else if (et.id === 'wrong_extra')      setStep('wrong_extra_pick')
@@ -575,6 +578,7 @@ export const EXTRAS = [
   { key:'4', id:'missing_extra',    label:'Missing extra'    },
   { key:'5', id:'wrong_extra',      label:'Wrong extra'      },
   { key:'6', id:'not_needed_extra', label:'Not needed extra' },
+  { key:'7', id:'wrong_timestamp',  label:'Wrong timestamp'  },
 ]
 
 export const GK_EXTRAS = [

@@ -36,6 +36,8 @@ export const TORNADO_EVENTS = [
   { key: null, id: 'substitution',      label: 'Substitution',      mouse: true,  sheetEvent: null },
   { key: null, id: 'tactical_shift',    label: 'Tactical Shift',    mouse: true,  sheetEvent: null },
   { key: null, id: 'formation',         label: 'Formation',         mouse: true,  sheetEvent: null },
+  { key: null, id: 'camera_off',        label: 'Camera Off',        mouse: true,  sheetEvent: null },
+  { key: null, id: 'camera_on',         label: 'Camera On',         mouse: true,  sheetEvent: null },
 ]
 
 // Q key = Missing Event (MARK-only)
