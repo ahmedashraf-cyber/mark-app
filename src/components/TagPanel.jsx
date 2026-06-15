@@ -98,12 +98,16 @@ function getWrongExtrasMap(eventId) {
 }
 
 // GK_WRONG_EVENT_MAP — MARK-specific, hardcoded. Sheet doesn't model GK subtypes the same way.
+// Each entry: { correctEvents: [...], extras: [...] }. Reviewer picks a correct event (if any),
+// then an expected extra (if any) as a follow-up step.
 const GK_WRONG_EVENT_MAP = {
-  gk_collected: ['GK (Punch)','Ball recovery'],
-  gk_punch: ['GK (Collected)','GK (Save)'],
-  gk_keeper_sweeper: ['Ball recovery','Clearance'],
-  gk_save: ['GK (Punch)'],
+  gk_collected:      { correctEvents: ['GK (Keeper sweeper)','GK (Save)'],                                extras: ['Second effort','Success','Fail'] },
+  gk_save:           { correctEvents: [],                                                                  extras: ['Won','Success','Second effort'] },
+  gk_shot:           { correctEvents: ['Save attempt','Conceded no save','Post','Wayward','Out endline'], extras: ['Won','Success','Fail','Second effort'] },
+  gk_punch:          { correctEvents: ['GK (Keeper sweeper)','Ball recovery','GK (Collected)'],           extras: [] },
+  gk_keeper_sweeper: { correctEvents: ['GK (Punch)','GK (Save)','GK (Collected)'],                         extras: ['Clear','Claim'] },
 }
+const gkEntry = (id) => GK_WRONG_EVENT_MAP[id] || { correctEvents: [], extras: [] }
 
 // ─── GK sub-types ─────────────────────────────────────────────────────────────
 const GK_SUBTYPES = [
@@ -111,6 +115,7 @@ const GK_SUBTYPES = [
   { key:'2', id:'gk_punch',          label:'Punch'          },
   { key:'3', id:'gk_keeper_sweeper', label:'Keeper sweeper' },
   { key:'4', id:'gk_save',           label:'Save'           },
+  { key:'5', id:'gk_shot',           label:'Shot'           },
 ]
 
 // ─── error types ──────────────────────────────────────────────────────────────
@@ -377,7 +382,10 @@ export default function TagPanel({ pendingTag, onSave, onCancel, editTag, onEdit
         const et = ERROR_TYPES.find(x => x.key === e.key)
         if (!et) return
         setErrorTypeId(et.id)
-        if      (et.id === 'wrong_event')      setStep(isGK ? 'gk_wrong_event' : 'wrong_event')
+        if      (et.id === 'wrong_event') {
+          if (!isGK) setStep('wrong_event')
+          else { const ent = gkEntry(gkSubType?.id); setStep(ent.correctEvents.length ? 'gk_wrong_event' : (ent.extras.length ? 'gk_extra' : 'team')) }
+        }
         else if (et.id === 'missing_event')    setStep('team')
         else if (et.id === 'extra_event')      setStep('team')
         else if (et.id === 'wrong_timestamp')  setStep('team')
@@ -395,9 +403,17 @@ export default function TagPanel({ pendingTag, onSave, onCancel, editTag, onEdit
       }
 
       if (step === 'gk_wrong_event') {
-        const list = GK_WRONG_EVENT_MAP[gkSubType?.id] || []
+        const ent  = gkEntry(gkSubType?.id)
+        const list = ent.correctEvents
         const idx  = KEYS.indexOf(k)
-        if (idx >= 0 && idx < list.length) { setCorrection(list[idx]); setStep('team') }
+        if (idx >= 0 && idx < list.length) { setCorrection(list[idx]); setStep(ent.extras.length ? 'gk_extra' : 'team') }
+        return
+      }
+
+      if (step === 'gk_extra') {
+        const list = gkEntry(gkSubType?.id).extras
+        const idx  = KEYS.indexOf(k)
+        if (idx >= 0 && idx < list.length) { setSelectedExtra(list[idx]); setStep('team') }
         return
       }
 
@@ -446,9 +462,11 @@ export default function TagPanel({ pendingTag, onSave, onCancel, editTag, onEdit
   const wrongExtraMap  = getWrongExtrasMap(eventId) || {}
   const wrongExtraKeys = Object.keys(wrongExtraMap)
   const missingList    = getMissingExtrasList(eventId) || []
+  const gkEnt          = isGK ? gkEntry(gkSubType?.id) : null
   const wrongEventList = isGK
-    ? (GK_WRONG_EVENT_MAP[gkSubType?.id] || [])
+    ? (gkEnt.correctEvents || [])
     : (getWrongEventList(eventId) || [])
+  const gkExtraList    = isGK ? (gkEnt.extras || []) : []
 
   return (
     <div style={{ position:'fixed', inset:0, zIndex:1000, display:'flex', alignItems:'flex-end', pointerEvents:'none' }}>
@@ -494,7 +512,10 @@ export default function TagPanel({ pendingTag, onSave, onCancel, editTag, onEdit
                     color={et.autoSave ? '#30D158' : 'var(--p2)'} autoSave={et.autoSave}
                     onClick={() => {
                       setErrorTypeId(et.id)
-                      if      (et.id === 'wrong_event')      setStep(isGK ? 'gk_wrong_event' : 'wrong_event')
+                      if      (et.id === 'wrong_event') {
+                        if (!isGK) setStep('wrong_event')
+                        else setStep(gkEnt.correctEvents.length ? 'gk_wrong_event' : (gkEnt.extras.length ? 'gk_extra' : 'team'))
+                      }
                       else if (et.id === 'missing_event')    setStep('team')
                       else if (et.id === 'extra_event')      setStep('team')
                       else if (et.id === 'wrong_timestamp')  setStep('team')
@@ -514,7 +535,16 @@ export default function TagPanel({ pendingTag, onSave, onCancel, editTag, onEdit
           <>
             <StepLabel text="correct event was" color="var(--p2)" />
             <KeyedList items={wrongEventList} color="var(--p2)" cols={wrongEventList.length > 5 ? 2 : 1}
-              onSelect={(c) => { setCorrection(c); setStep('team') }} />
+              onSelect={(c) => { setCorrection(c); setStep(isGK && gkExtraList.length ? 'gk_extra' : 'team') }} />
+          </>
+        )}
+
+        {/* GK expected extra (follow-up) */}
+        {step === 'gk_extra' && (
+          <>
+            <StepLabel text="expected extra" color="#FF9F0A" />
+            <KeyedList items={gkExtraList} color="#FF9F0A" cols={gkExtraList.length > 4 ? 2 : 1}
+              onSelect={(c) => { setSelectedExtra(c); setStep('team') }} />
           </>
         )}
 
@@ -586,6 +616,7 @@ export const GK_EXTRAS = [
   { key:'2', id:'gk_punch',          label:'Punch'           },
   { key:'3', id:'gk_keeper_sweeper', label:'Keeper sweeper'  },
   { key:'4', id:'gk_save',           label:'Save'            },
+  { key:'5', id:'gk_shot',           label:'Shot'            },
 ]
 
 export const GK_WRONG_EXTRAS = {}
