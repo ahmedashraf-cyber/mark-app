@@ -97,6 +97,31 @@ function getWrongExtrasMap(eventId) {
   return _wxC[eventId]
 }
 
+// ─── MARK-specific extra additions (single-pick: flag → team, no correction step) ──
+// Layered on top of the sheet taxonomy. `wrongExtra` items appear in the "Wrong extra"
+// step; `missingExtra` items appear in the "Missing extra" step. Picking one records it
+// and goes straight to team — unlike sheet wrong-extras which have a correction sub-step.
+const MARK_EXTRA_ADDITIONS = {
+  pass:   { wrongExtra: ['Step in','Wrong Side','Corner','Aerial won'], missingExtra: ['Step in','Aerial won'] },
+  tackle: { wrongExtra: ['Wrong extra'],                                missingExtra: [] },
+}
+const markAdd = (eventId) => MARK_EXTRA_ADDITIONS[eventId] || { wrongExtra: [], missingExtra: [] }
+
+// Combined "which extra was wrong" list = sheet keys + MARK single-pick additions.
+function wrongExtraKeysFor(eventId) {
+  const keys = Object.keys(getWrongExtrasMap(eventId))
+  return keys.concat(markAdd(eventId).wrongExtra.filter(x => !keys.includes(x)))
+}
+// Combined "missing extra" list = sheet list + MARK additions.
+function missingExtrasFor(eventId) {
+  const base = getMissingExtrasList(eventId) || []
+  return base.concat(markAdd(eventId).missingExtra.filter(x => !base.includes(x)))
+}
+// A MARK addition is single-pick when it isn't a sheet wrong-extra key (no correction targets).
+function isWrongExtraSinglePick(eventId, label) {
+  return markAdd(eventId).wrongExtra.includes(label) && !getWrongExtrasMap(eventId)[label]
+}
+
 // GK_WRONG_EVENT_MAP — MARK-specific, hardcoded. Sheet doesn't model GK subtypes the same way.
 // Each entry: { correctEvents: [...], extras: [...] }. Reviewer picks a correct event (if any),
 // then an expected extra (if any) as a follow-up step.
@@ -417,7 +442,14 @@ export default function TagPanel({ pendingTag, onSave, onCancel, editTag, onEdit
         return
       }
 
-      if (step === 'missing_extra' || step === 'not_needed_extra') {
+      if (step === 'missing_extra') {
+        const list = missingExtrasFor(eventId)
+        const idx  = KEYS.indexOf(k)
+        if (idx >= 0 && idx < list.length) { setSelectedExtra(list[idx]); setStep('team') }
+        return
+      }
+
+      if (step === 'not_needed_extra') {
         const list = getMissingExtrasList(eventId) || []
         const idx  = KEYS.indexOf(k)
         if (idx >= 0 && idx < list.length) { setSelectedExtra(list[idx]); setStep('team') }
@@ -425,10 +457,13 @@ export default function TagPanel({ pendingTag, onSave, onCancel, editTag, onEdit
       }
 
       if (step === 'wrong_extra_pick') {
-        const map  = getWrongExtrasMap(eventId) || {}
-        const list = Object.keys(map)
+        const list = wrongExtraKeysFor(eventId)
         const idx  = KEYS.indexOf(k)
-        if (idx >= 0 && idx < list.length) { setSelectedExtra(list[idx]); setStep('wrong_extra_corr') }
+        if (idx >= 0 && idx < list.length) {
+          const sel = list[idx]
+          setSelectedExtra(sel)
+          setStep(isWrongExtraSinglePick(eventId, sel) ? 'team' : 'wrong_extra_corr')
+        }
         return
       }
 
@@ -459,9 +494,11 @@ export default function TagPanel({ pendingTag, onSave, onCancel, editTag, onEdit
   if (errorTypeId)   crumbs.push(ERROR_TYPES.find(x => x.id === errorTypeId)?.label || '')
   if (selectedExtra) crumbs.push(selectedExtra)
 
-  const wrongExtraMap  = getWrongExtrasMap(eventId) || {}
-  const wrongExtraKeys = Object.keys(wrongExtraMap)
+  const wrongExtraMap      = getWrongExtrasMap(eventId) || {}
+  const wrongExtraKeys     = Object.keys(wrongExtraMap)
+  const wrongExtraKeysFull = wrongExtraKeysFor(eventId)
   const missingList    = getMissingExtrasList(eventId) || []
+  const missingListFull    = missingExtrasFor(eventId)
   const gkEnt          = isGK ? gkEntry(gkSubType?.id) : null
   const wrongEventList = isGK
     ? (gkEnt.correctEvents || [])
@@ -503,9 +540,9 @@ export default function TagPanel({ pendingTag, onSave, onCancel, editTag, onEdit
             <div style={{ display:'flex', flexWrap:'wrap', gap:6 }}>
               {ERROR_TYPES.map(et => {
                 // hide missing/not-needed/wrong-extra if event has none
-                if (et.id === 'missing_extra'    && missingList.length    === 0) return null
+                if (et.id === 'missing_extra'    && missingListFull.length === 0) return null
                 if (et.id === 'not_needed_extra' && missingList.length    === 0) return null
-                if (et.id === 'wrong_extra'      && wrongExtraKeys.length === 0) return null
+                if (et.id === 'wrong_extra'      && wrongExtraKeysFull.length === 0) return null
                 if (et.id === 'wrong_event'      && wrongEventList.length === 0 && !isGK) return null
                 return (
                   <PillBtn key={et.id} label={et.label} shortcut={et.key} active={false}
@@ -552,7 +589,7 @@ export default function TagPanel({ pendingTag, onSave, onCancel, editTag, onEdit
         {step === 'missing_extra' && (
           <>
             <StepLabel text="which extra is missing" color="#FF9F0A" />
-            <KeyedList items={missingList} color="#FF9F0A" cols={missingList.length > 4 ? 2 : 1}
+            <KeyedList items={missingListFull} color="#FF9F0A" cols={missingListFull.length > 4 ? 2 : 1}
               onSelect={(c) => { setSelectedExtra(c); setStep('team') }} />
           </>
         )}
@@ -570,8 +607,8 @@ export default function TagPanel({ pendingTag, onSave, onCancel, editTag, onEdit
         {step === 'wrong_extra_pick' && (
           <>
             <StepLabel text="which extra was wrong" color="#FF9F0A" />
-            <KeyedList items={wrongExtraKeys} color="#FF9F0A" cols={wrongExtraKeys.length > 4 ? 2 : 1}
-              onSelect={(c) => { setSelectedExtra(c); setStep('wrong_extra_corr') }} />
+            <KeyedList items={wrongExtraKeysFull} color="#FF9F0A" cols={wrongExtraKeysFull.length > 4 ? 2 : 1}
+              onSelect={(c) => { setSelectedExtra(c); setStep(isWrongExtraSinglePick(eventId, c) ? 'team' : 'wrong_extra_corr') }} />
           </>
         )}
 
