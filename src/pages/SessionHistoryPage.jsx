@@ -6,6 +6,7 @@ import { useAdmin } from '../hooks/useAdmin.js'
 import { invoke } from '@tauri-apps/api/core'
 import { exportSessionToXlsx } from '../utils/exportSession'
 import { EXTRAS, GK_EXTRAS, GK_WRONG_EXTRAS } from '../components/TagPanel'
+import { SPEED_MIN, SPEED_MAX, SPEED_STEP } from '../data/shortcuts'
 
 // ------ Helpers ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 const fmt = (s) => {
@@ -320,6 +321,7 @@ function MatchReport({ session, tags, onBack }) {
   const [playing,     setPlaying]     = useState(false)
   const [currentTime, setCurrentTime] = useState(0)
   const [duration,    setDuration]    = useState(0)
+  const [speed,       setSpeed]       = useState(1)
   const [showVideo,   setShowVideo]   = useState(false)
   const videoRef = useRef(null)
   const { home, away } = parseTeams(session.matchName)
@@ -372,6 +374,40 @@ function MatchReport({ session, tags, onBack }) {
     else { v.pause(); setPlaying(false) }
   }
 
+  function seekBy(seconds) {
+    const v = videoRef.current
+    if (!v) return
+    v.currentTime = Math.max(0, Math.min(v.duration || 0, v.currentTime + seconds))
+    setCurrentTime(v.currentTime)
+  }
+
+  function changeSpeed(valueOrUpdater) {
+    const v = videoRef.current
+    if (!v) return
+    const next = typeof valueOrUpdater === 'function' ? valueOrUpdater(v.playbackRate) : valueOrUpdater
+    v.playbackRate = next
+    setSpeed(next)
+  }
+
+  // Video keyboard controls — same method as MARK Scout (no collection-app sync here)
+  useEffect(() => {
+    if (!videoLoaded || !showVideo) return
+    function handleKey(e) {
+      const key = e.key, shift = e.shiftKey
+      if (key === 'ArrowUp') { e.preventDefault(); togglePlay(); return }       // ↑ play / pause
+      if (key === 'ArrowRight' || key === 'ArrowLeft') {                        // → / ← seek 400ms (40ms w/ Shift)
+        e.preventDefault()
+        const ms = shift ? 40 : 400
+        seekBy((key === 'ArrowRight' ? 1 : -1) * ms / 1000)
+        return
+      }
+      if (key === '+' || key === '=') { e.preventDefault(); changeSpeed(p => Math.min(SPEED_MAX, Math.round((p + SPEED_STEP) * 100) / 100)); return }
+      if (key === '-' || key === '_') { e.preventDefault(); changeSpeed(p => Math.max(SPEED_MIN, Math.round((p - SPEED_STEP) * 100) / 100)); return }
+    }
+    window.addEventListener('keydown', handleKey)
+    return () => window.removeEventListener('keydown', handleKey)
+  }, [videoLoaded, showVideo])
+
   const date = session.completedAt?.toDate?.()
     ? session.completedAt.toDate().toLocaleDateString('en-GB', { day:'2-digit', month:'short', year:'numeric' })
     : session.matchDate || ''
@@ -414,7 +450,7 @@ function MatchReport({ session, tags, onBack }) {
       <div style={{ flexShrink: 0, background: '#000', position: 'relative', display: showVideo ? 'block' : 'none' }}>
         <video
           ref={videoRef}
-          style={{ width: '100%', maxHeight: 280, objectFit: 'contain', display: 'block' }}
+          style={{ width: '100%', maxHeight: '60vh', objectFit: 'contain', display: 'block' }}
           onTimeUpdate={e => setCurrentTime(e.target.currentTime)}
           onDurationChange={e => { if (isFinite(e.target.duration)) setDuration(e.target.duration) }}
           onPlay={() => setPlaying(true)}
@@ -456,6 +492,13 @@ function MatchReport({ session, tags, onBack }) {
           </div>
           <span style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 10, color: 'rgba(255,255,255,0.5)', flexShrink: 0 }}>
             {fmt(duration)}
+          </span>
+          <span style={{
+            fontFamily: 'JetBrains Mono, monospace', fontSize: 10, flexShrink: 0,
+            color: speed === 1 ? 'rgba(255,255,255,0.5)' : 'var(--p2)',
+            background: 'rgba(255,255,255,0.1)', borderRadius: 4, padding: '2px 6px',
+          }}>
+            {speed % 1 === 0 ? speed + '.0' : speed}×
           </span>
         </div>
       </div>
