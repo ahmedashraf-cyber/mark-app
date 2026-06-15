@@ -697,6 +697,7 @@ export default function SessionHistoryPage({ onBack, initialSession }) {
   const isAdmin = useAdmin(profile)
   const [activeTags,    setActiveTags]    = useState([])
   const [tagsLoading,   setTagsLoading]   = useState(false)
+  const [search,        setSearch]        = useState('')
 
   useEffect(() => {
     if (!profile?.uid) return
@@ -771,6 +772,12 @@ export default function SessionHistoryPage({ onBack, initialSession }) {
 
   // Compute stats
   const displayedSessions = adminMode ? allSessions : sessions
+  const q = search.trim().toLowerCase()
+  const filteredSessions = q
+    ? displayedSessions.filter(s =>
+        (s.matchName || '').toLowerCase().includes(q) ||
+        String(s.matchId || '').toLowerCase().includes(q))
+    : displayedSessions
   const totalSessions  = displayedSessions.length
   const avgScore       = displayedSessions.length > 0 ? Math.round(displayedSessions.reduce((s, x) => s + (x.qualityScore || 0), 0) / displayedSessions.length) : 0
   const scoutSessions  = displayedSessions.filter(s => s.type !== 'audit').length
@@ -794,6 +801,34 @@ export default function SessionHistoryPage({ onBack, initialSession }) {
         <div style={{ width:1, height:16, background:'var(--b-2)' }}/>
         <div style={{ flex:1 }}>
           <span style={{ fontFamily:'Inter', fontWeight:900, fontSize:14, color:'var(--t-1)', letterSpacing:-0.2 }}>Session History</span>
+        </div>
+
+        {/* Search — match name or ID */}
+        <div style={{ position:'relative', width:240 }}>
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="var(--t-3)" strokeWidth="2.5" strokeLinecap="round"
+            style={{ position:'absolute', left:10, top:'50%', transform:'translateY(-50%)', pointerEvents:'none' }}>
+            <circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/>
+          </svg>
+          <input
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            placeholder="Search match or ID…"
+            style={{
+              width:'100%', padding:'6px 26px 6px 30px', borderRadius:8,
+              border:'1px solid var(--b-1)', background:'rgba(255,255,255,0.04)',
+              color:'var(--t-1)', fontSize:12, fontFamily:'Inter', outline:'none', boxSizing:'border-box',
+            }}
+            onFocus={e => e.target.style.borderColor = 'var(--p2)'}
+            onBlur={e => e.target.style.borderColor = 'var(--b-1)'}
+          />
+          {search && (
+            <button onClick={() => setSearch('')} style={{
+              position:'absolute', right:6, top:'50%', transform:'translateY(-50%)',
+              width:16, height:16, borderRadius:'50%', border:'none', cursor:'pointer',
+              background:'var(--b-2)', color:'var(--t-2)', fontSize:10, lineHeight:1,
+              display:'flex', alignItems:'center', justifyContent:'center',
+            }}>×</button>
+          )}
         </div>
 
         {/* Admin toggle */}
@@ -869,7 +904,12 @@ export default function SessionHistoryPage({ onBack, initialSession }) {
               ))}
             </div>
 
-            {displayedSessions.map(s => (
+            {filteredSessions.length === 0 ? (
+              <div style={{ display:'flex', alignItems:'center', justifyContent:'center', padding:'48px 20px', flexDirection:'column', gap:6 }}>
+                <span style={{ fontSize:13, color:'var(--t-3)' }}>No sessions match “{search}”</span>
+                <span style={{ fontSize:11, color:'var(--t-3)', opacity:0.6 }}>Try a different match name or ID</span>
+              </div>
+            ) : filteredSessions.map(s => (
               <SessionCard key={s.id} session={s} onReview={handleReview} onExport={handleExport} loading={tagsLoading} isAdmin={isAdmin} />
             ))}
           </>

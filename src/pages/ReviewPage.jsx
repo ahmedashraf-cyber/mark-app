@@ -4,7 +4,7 @@ import { db, auth } from '../firebase/config'
 import { collection, addDoc, updateDoc, doc, serverTimestamp, increment } from 'firebase/firestore'
 import { useAuth } from '../hooks/useAuth.jsx'
 import { useSync } from '../hooks/useSync'
-import { KEY_TO_EVENT, MISSING_EVENT_KEY, SPEED_MIN, SPEED_MAX, SPEED_STEP } from '../data/shortcuts'
+import { KEY_TO_EVENT, SPEED_MIN, SPEED_MAX, SPEED_STEP } from '../data/shortcuts'
 import TagPanel from '../components/TagPanel'
 import TaggedEventsList from '../components/TaggedEventsList'
 import ErrorTimeline from '../components/ErrorTimeline'
@@ -111,13 +111,6 @@ export default function ReviewPage({ session, onDone, onBack, bridgeSyncStatus, 
       // Error tagging — only after review started
       if (!reviewStartedRef.current) return
 
-      if (upper === MISSING_EVENT_KEY) {
-        e.preventDefault()
-        setActiveKey(upper)
-        setTimeout(() => setActiveKey(null), 600)
-        setPendingTag({ key: upper, isMissing: true, videoTime: videoRef.current?.currentTime || 0 })
-        return
-      }
       if (KEY_TO_EVENT[upper]) {
         e.preventDefault()
         setActiveKey(upper)

@@ -10,24 +10,24 @@ export const TORNADO_EVENTS = [
   { key: 'D', id: 'dribble',           label: 'Dribble',           mouse: false, sheetEvent: 'Dribble' },
   { key: 'W', id: 'reception',         label: 'Reception',         mouse: false, sheetEvent: 'Reception' },
   { key: 'T', id: 'miscontrol',        label: 'Miscontrol',        mouse: false, sheetEvent: 'Miscontrol' },
-  { key: 'P', id: 'pressure',          label: 'Pressure',          mouse: false, sheetEvent: null },
+  { key: 'G', id: 'pressure',          label: 'Pressure',          mouse: false, sheetEvent: null },
   { key: '0', id: 'fifty_fifty',       label: 'Fifty Fifty',       mouse: false, sheetEvent: 'Fifty fifty' },
   { key: 'O', id: 'out',               label: 'Out',               mouse: false, sheetEvent: null },
   { key: 'X', id: 'foul_committed',    label: 'Foul Committed',    mouse: false, sheetEvent: 'Foul committed' },
   { key: 'C', id: 'shield',            label: 'Shield',            mouse: false, sheetEvent: 'Shield' },
   { key: 'B', id: 'block',             label: 'Block',             mouse: false, sheetEvent: 'Block' },
   { key: 'V', id: 'interception',      label: 'Interception',      mouse: false, sheetEvent: 'Interception' },
-  { key: 'K', id: 'tackle',            label: 'Tackle',            mouse: false, sheetEvent: 'Tackle' },
+  { key: 'A', id: 'tackle',            label: 'Tackle',            mouse: false, sheetEvent: 'Tackle' },
   { key: 'R', id: 'ball_recovery',     label: 'Ball Recovery',     mouse: false, sheetEvent: 'Ball recovery' },
   { key: 'F', id: 'clearance',         label: 'Clearance',         mouse: false, sheetEvent: 'Clearance' },
   { key: 'H', id: 'hold_up_duel',      label: 'Hold Up Duel',      mouse: false, sheetEvent: 'Hold up duel' },
   { key: 'Y', id: 'positioning_duel',  label: 'Positioning Duel',  mouse: false, sheetEvent: 'Positioning duel' },
-  { key: 'L', id: 'separation_duel',   label: 'Separation Duel',   mouse: false, sheetEvent: 'Separation duel' },
-  { key: 'M', id: 'leg_stretch_duel',  label: 'Leg Stretch Duel',  mouse: false, sheetEvent: 'Leg stretch duel' },
-  { key: 'G', id: 'goal_keeper',       label: 'Goal Keeper',       mouse: false, sheetEvent: 'Goal Keeper' },
+  { key: 'J', id: 'separation_duel',   label: 'Separation Duel',   mouse: false, sheetEvent: 'Separation duel' },
+  { key: 'U', id: 'leg_stretch_duel',  label: 'Leg Stretch Duel',  mouse: false, sheetEvent: 'Leg stretch duel' },
+  { key: 'K', id: 'goal_keeper',       label: 'Goal Keeper',       mouse: false, sheetEvent: 'Goal Keeper' },
   { key: 'I', id: 'pass_interception',  label: 'Pass Interception',  mouse: false, sheetEvent: 'Pass interception' },
-  { key: 'N', id: 'pass_recovery',      label: 'Pass Recovery',       mouse: false, sheetEvent: 'Pass recovery' },
-  { key: 'U', id: 'pass_first_time',    label: 'Pass (First time)',   mouse: false, sheetEvent: 'Pass (First time)' },
+  { key: 'P', id: 'pass_recovery',      label: 'Pass Recovery',       mouse: false, sheetEvent: 'Pass recovery' },
+  { key: 'Q', id: 'pass_first_time',    label: 'Pass (First time)',   mouse: false, sheetEvent: 'Pass (First time)' },
   // ── Mouse-click events (no keyboard shortcut) ─────────────────────────────
   { key: null, id: 'card',              label: 'Card',              mouse: true,  sheetEvent: 'Card' },
   { key: null, id: 'error',             label: 'Error',             mouse: true,  sheetEvent: null },
@@ -39,9 +39,6 @@ export const TORNADO_EVENTS = [
   { key: null, id: 'camera_off',        label: 'Camera Off',        mouse: true,  sheetEvent: null },
   { key: null, id: 'camera_on',         label: 'Camera On',         mouse: true,  sheetEvent: null },
 ]
-
-// Q key = Missing Event (MARK-only)
-export const MISSING_EVENT_KEY = 'Q'
 
 // ── Video navigation shortcuts (matches collection app exactly) ───────────────
 // ↑ Play / Pause

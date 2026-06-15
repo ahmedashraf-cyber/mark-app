@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { TORNADO_EVENTS, MISSING_EVENT_KEY } from '../data/shortcuts'
+import { TORNADO_EVENTS } from '../data/shortcuts'
 import { TAGGING_SCENARIOS } from '../data/tagging_scenarios'
 
 // ─── key sequence for lists ───────────────────────────────────────────────────
@@ -273,7 +273,7 @@ function TeamRow({ onSave, disabled }) {
 function TagPanelEdit({ tag, onSave, onDelete, onCancel }) {
   const event = TORNADO_EVENTS.find(e => e.key?.toUpperCase() === tag.triggeredKey?.toUpperCase())
     || { label: tag.triggeredEventLabel || tag.triggeredKey, id: tag.triggeredEventId, key: tag.triggeredKey }
-  const isMissing = tag.triggeredKey?.toUpperCase() === MISSING_EVENT_KEY
+  const isMissing = !!tag.isMissing
   const [team, setTeam] = useState(tag.team || null)
 
   function handleSave() {

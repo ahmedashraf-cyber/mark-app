@@ -1,10 +1,8 @@
-import { MISSING_EVENT_KEY } from '../data/shortcuts'
-
 const LEFT_EVENTS = [
   { key: 'E',    label: 'Pass',              id: 'pass' },
   { key: 'I',    label: 'Pass Interception', id: 'pass_interception' },
-  { key: 'N',    label: 'Pass Recovery',     id: 'pass_recovery' },
-  { key: 'U',    label: 'Pass (First time)', id: 'pass_first_time' },
+  { key: 'P',    label: 'Pass Recovery',     id: 'pass_recovery' },
+  { key: 'Q',    label: 'Pass (First time)', id: 'pass_first_time' },
   { key: 'S',    label: 'Shot',              id: 'shot' },
   { key: 'D',    label: 'Dribble',         id: 'dribble' },
   { key: 'W',    label: 'Reception',       id: 'reception' },
@@ -25,18 +23,16 @@ const LEFT_EVENTS = [
 const RIGHT_EVENTS = [
   { key: 'B',    label: 'Block',            id: 'block' },
   { key: 'V',    label: 'Interception',     id: 'interception' },
-  { key: 'K',    label: 'Tackle',           id: 'tackle' },
+  { key: 'A',    label: 'Tackle',           id: 'tackle' },
   { key: 'R',    label: 'Ball Recovery',    id: 'ball_recovery' },
   { key: 'F',    label: 'Clearance',        id: 'clearance' },
   { key: 'H',    label: 'Hold Up Duel',     id: 'hold_up_duel' },
   { key: 'Y',    label: 'Positioning Duel', id: 'positioning_duel' },
-  { key: 'L',    label: 'Separation Duel',  id: 'separation_duel' },
-  { key: 'M',    label: 'Leg Stretch Duel', id: 'leg_stretch_duel' },
-  { key: 'G',    label: 'Goal Keeper',      id: 'goal_keeper' },
-  { key: 'P',    label: 'Pressure',         id: 'pressure' },
+  { key: 'J',    label: 'Separation Duel',  id: 'separation_duel' },
+  { key: 'U',    label: 'Leg Stretch Duel', id: 'leg_stretch_duel' },
+  { key: 'K',    label: 'Goal Keeper',      id: 'goal_keeper' },
+  { key: 'G',    label: 'Pressure',         id: 'pressure' },
 ]
-
-const MISSING = { key: MISSING_EVENT_KEY, label: 'Missing Event' }
 
 function EventCard({ ev, active, onClick }) {
   const isMouseOnly = ev.key === null
@@ -121,49 +117,6 @@ export default function EventsSidebar({ side, activeKey, onMouseEvent }) {
             onClick={ev.key === null ? () => onMouseEvent?.(ev) : undefined}
           />
         ))}
-
-        {/* Missing event — left sidebar only */}
-        {side === 'left' && (
-          <>
-            <div style={{
-              height: 1,
-              background: 'linear-gradient(90deg, transparent, rgba(191,90,242,0.3), transparent)',
-              margin: '6px 10px',
-            }}/>
-            <div
-              className={`event-card ${activeUpper === MISSING.key ? 'active' : ''}`}
-              style={{
-                cursor: 'default',
-                ...(activeUpper === MISSING.key ? {
-                  background: 'rgba(191,90,242,0.14)',
-                  borderColor: 'rgba(191,90,242,0.35)',
-                  boxShadow: '0 2px 12px rgba(191,90,242,0.2)',
-                } : {}),
-              }}
-            >
-              <span style={{
-                fontSize: 12,
-                color: activeUpper === MISSING.key ? '#BF5AF2' : 'var(--t-2)',
-                fontWeight: activeUpper === MISSING.key ? 700 : 400,
-                fontFamily: 'DM Sans, sans-serif',
-                transition: 'color 0.15s ease',
-              }}>
-                {MISSING.label}
-              </span>
-              <span style={{
-                fontFamily: 'JetBrains Mono, monospace', fontSize: 10, fontWeight: 700,
-                color: activeUpper === MISSING.key ? '#BF5AF2' : 'var(--t-3)',
-                background: activeUpper === MISSING.key ? 'rgba(191,90,242,0.18)' : 'var(--bg-3)',
-                border: `1px solid ${activeUpper === MISSING.key ? 'rgba(191,90,242,0.45)' : 'var(--b-2)'}`,
-                borderRadius: 4, padding: '1px 6px', minWidth: 20, textAlign: 'center',
-                transition: 'all 0.15s ease',
-                boxShadow: activeUpper === MISSING.key ? '0 0 6px rgba(191,90,242,0.3)' : 'none',
-              }}>
-                {MISSING.key}
-              </span>
-            </div>
-          </>
-        )}
       </div>
     </div>
   )
