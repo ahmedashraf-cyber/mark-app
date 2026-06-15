@@ -18,6 +18,8 @@ const LEFT_EVENTS = [
   { key: null,   label: 'Substitution',    id: 'substitution' },
   { key: null,   label: 'Tactical Shift',  id: 'tactical_shift' },
   { key: null,   label: 'Formation',       id: 'formation' },
+  { key: null,   label: 'Camera Off',      id: 'camera_off' },
+  { key: null,   label: 'Camera On',       id: 'camera_on' },
 ]
 
 const RIGHT_EVENTS = [

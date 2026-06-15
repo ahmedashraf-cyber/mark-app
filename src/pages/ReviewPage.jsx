@@ -377,6 +377,20 @@ export default function ReviewPage({ session, onDone, onBack, bridgeSyncStatus, 
               {speed}x
             </div>
           )}
+          {videoLoaded && (
+            <button
+              className="btn-ghost"
+              title="Remove the current video and load a new one"
+              style={{padding:'7px 12px',fontSize:12,display:'flex',alignItems:'center',gap:6}}
+              onClick={handleVideoFile}
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M23 7l-7 5 7 5V7z"/><rect x="1" y="5" width="15" height="14" rx="2"/>
+                <path d="M5 2v3M2.5 3.5h3" stroke="currentColor" strokeWidth="1.6"/>
+              </svg>
+              Change Video
+            </button>
+          )}
           <button
             className="btn-ghost"
             style={{padding:'7px 14px',fontSize:12}}
