@@ -439,10 +439,20 @@ function MatchReport({ session, tags, onBack }) {
           </button>
         )}
         {videoLoaded && (
-          <button className="btn-ghost" style={{ padding: '5px 12px', fontSize: 11 }}
-            onClick={() => setShowVideo(v => !v)}>
-            {showVideo ? 'Hide Video' : 'Show Video'}
-          </button>
+          <>
+            <button className="btn-ghost" title="Remove the current video and load a new one"
+              style={{ padding: '5px 12px', fontSize: 11, display:'flex', alignItems:'center', gap:6 }}
+              onClick={loadVideo}>
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M23 7l-7 5 7 5V7z"/><rect x="1" y="5" width="15" height="14" rx="2"/>
+              </svg>
+              Change Video
+            </button>
+            <button className="btn-ghost" style={{ padding: '5px 12px', fontSize: 11 }}
+              onClick={() => setShowVideo(v => !v)}>
+              {showVideo ? 'Hide Video' : 'Show Video'}
+            </button>
+          </>
         )}
       </div>
 

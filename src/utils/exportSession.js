@@ -153,24 +153,14 @@ export async function exportSessionToXlsx({ session, tags, quality, tagCount, to
   const fileName = `${session.matchName || 'Review'} - ${session.half || 'H1'}.xlsx`
     .replace(/[/\\?%*:|"<>]/g, '-')
 
-  try {
-    const wbout = XLSX.write(wb, { bookType: 'xlsx', type: 'array', cellStyles: true })
+  const wbout = XLSX.write(wb, { bookType: 'xlsx', type: 'array', cellStyles: true })
 
-    const { downloadDir, join } = await import('@tauri-apps/api/path')
-    const { writeFile }         = await import('@tauri-apps/plugin-fs')
-
-    const dir      = await downloadDir()
-    const filePath = await join(dir, fileName)
-    await writeFile(filePath, new Uint8Array(wbout))
-    return filePath
-  } catch (e) {
-    console.warn('[MARK] fs write failed, browser download:', e)
-    const wbout = XLSX.write(wb, { bookType: 'xlsx', type: 'array' })
-    const blob  = new Blob([wbout], { type: 'application/octet-stream' })
-    const url   = URL.createObjectURL(blob)
-    const a     = document.createElement('a')
-    a.href = url; a.download = fileName; a.click()
-    URL.revokeObjectURL(url)
-    return fileName
-  }
+  // Native save dialog handled in Rust (rfd) — shows a real file picker and
+  // writes via full fs access, avoiding the silent/scoped JS fs write.
+  const { invoke } = await import('@tauri-apps/api/core')
+  const savedPath = await invoke('save_xlsx_file', {
+    name: fileName,
+    data: Array.from(new Uint8Array(wbout)),
+  })
+  return savedPath // null if the user cancelled the dialog
 }

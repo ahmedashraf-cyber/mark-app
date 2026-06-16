@@ -221,6 +221,22 @@ fn pick_video_file() -> Option<String> {
         .map(|p| p.to_string_lossy().to_string())
 }
 
+// ─── Save bytes to a user-chosen path via native save dialog (rfd) ────────────
+#[command]
+fn save_xlsx_file(name: String, data: Vec<u8>) -> Result<Option<String>, String> {
+    match rfd::FileDialog::new()
+        .set_file_name(name.as_str())
+        .add_filter("Excel", &["xlsx"])
+        .save_file()
+    {
+        Some(path) => {
+            std::fs::write(&path, &data).map_err(|e| e.to_string())?;
+            Ok(Some(path.to_string_lossy().to_string()))
+        }
+        None => Ok(None), // user cancelled
+    }
+}
+
 // ─── Find the collection app window ──────────────────────────────────────────
 #[cfg(target_os = "windows")]
 unsafe fn find_collection_hwnd() -> Option<windows::Win32::Foundation::HWND> {
@@ -965,6 +981,7 @@ fn main() {
             patch_tag_once_shortcuts,
             patch_tag_once_asar,
             pick_video_file,
+            save_xlsx_file,
             get_video_url,
             open_file,
             create_google_sheet,
