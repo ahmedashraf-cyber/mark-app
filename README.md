@@ -1,5 +1,5 @@
 # MARK — Review App
-> **v4.2.0** · Tauri 2 + React 19 · Windows desktop · Hudl Egypt
+> **v7.3.6** · Tauri 2 + React 19 · Windows desktop · Hudl Egypt
 
 MARK is a Windows desktop app for Batch Trainers at Hudl Egypt. Reviewers watch match video, tag collector errors using the same keyboard shortcuts as the Statsbomb collection app, and quality scores feed automatically into [FIELD](https://ahmedashraf-cyber.github.io/flowops/index.html).
 
@@ -17,6 +17,8 @@ Download the latest `.msi` or `.exe` from [Releases](https://github.com/ahmedash
 
 | File | Contents |
 |------|----------|
+| [CHANGELOG.md](./CHANGELOG.md) | Release-by-release history (v7.3.1–v7.3.6), the brotli build saga, and versioning rules |
+| [DECISIONS.md](./DECISIONS.md) | Why MARK works the way it does — the frozen audit-redesign spec, the reviewer-detection investigation, and every Scout decision |
 | [MARK_CONTEXT.md](./MARK_CONTEXT.md) | Full architecture, data schemas, file structure, Firestore collections, sync mechanism, TagPanel workflow |
 | [SYNC_PROBLEM_CONTEXT.md](./SYNC_PROBLEM_CONTEXT.md) | Complete history of the sync problem — 20 failed approaches + the winning solution |
 | [TAGPANEL_CONTEXT.md](./TAGPANEL_CONTEXT.md) | Error tagging workflow — all events, error types, per-event extras, wrong event corrections |
