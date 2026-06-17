@@ -1,3 +1,24 @@
+/**
+ * EventsSidebar.jsx — the two event palettes flanking the video.
+ * ============================================================================
+ *
+ * Renders the catalogue of taggable events the reviewer can pick from:
+ *   • LEFT_EVENTS  — "offence" side (Pass family, Shot, Dribble, set-piece /
+ *                    admin mouse-events like Card, Substitution, Camera On/Off…)
+ *   • RIGHT_EVENTS — "defence" side (Block, Tackle, duels, Goal Keeper, Pressure)
+ *
+ * IMPORTANT: the `key` shown here is DISPLAY-ONLY. The real keyboard handling
+ * lives in ReviewPage via shortcuts.js (KEY_TO_EVENT). These arrays must be
+ * kept in sync with shortcuts.js by hand — if a key changes there, change the
+ * label here too, or the on-screen hint will lie. (The v7.3.3 reshuffle and the
+ * Camera On/Off additions were applied in both places for exactly this reason.)
+ *
+ * `key: null` entries are mouse-only events: their card is clickable and fires
+ * onMouseEvent(ev); keyed entries are tagged via the keyboard.
+ *
+ * Props: side ('left'|'right'), activeKey (currently-pressed key, for the active
+ * highlight), onMouseEvent (handler for clicking a mouse-only card).
+ */
 const LEFT_EVENTS = [
   { key: 'E',    label: 'Pass',              id: 'pass' },
   { key: 'I',    label: 'Pass Interception', id: 'pass_interception' },

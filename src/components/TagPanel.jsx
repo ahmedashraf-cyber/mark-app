@@ -1,3 +1,53 @@
+/**
+ * TagPanel.jsx — the error-tagging panel (the heart of MARK Scout).
+ * ============================================================================
+ *
+ * When a reviewer presses an event key (or clicks a mouse-event), this panel
+ * opens and walks them through a small STEP MACHINE to record what was wrong.
+ * Both a keyboard handler (in a useEffect) and on-click handlers drive the same
+ * steps — keep the two paths in sync when editing.
+ *
+ * STEP FLOW (happy paths)
+ *   event chosen
+ *     ├─ Goalkeeper → gk_subtype → error_type
+ *     │                              └─ wrong_event → gk_wrong_event
+ *     │                                   → (has extras?) gk_extra → team
+ *     │                                   → (no extras)            team
+ *     └─ any other → error_type
+ *           ├─ wrong_event       → wrong_event (pick correct event) → team
+ *           ├─ wrong_extra       → wrong_extra_pick → (sheet key) wrong_extra_corr → team
+ *           │                                       → (MARK single-pick)            team
+ *           ├─ missing_extra     → missing_extra (pick which) → team
+ *           ├─ not_needed_extra  → not_needed_extra (pick which) → team
+ *           └─ missing/extra evt → team
+ *   team → doSave()
+ *
+ * WHERE THE OPTIONS COME FROM
+ *   The lists shown at each step are derived from the auto-generated taxonomy
+ *   (TAGGING_SCENARIOS, from the official error-correction sheet) via the
+ *   memoised builders below:
+ *     • getWrongEventList(id)   — corrections for "Wrong event".
+ *     • getWrongExtrasMap(id)   — { taggedExtra: [corrections] } for the 10
+ *                                 attribute error-types (collapsed into one
+ *                                 "Wrong extra" step). This is a TWO-step flow:
+ *                                 pick which extra was wrong, then correct it.
+ *     • getMissingExtrasList(id)— flat list for "Missing extra"/"Not needed".
+ *
+ * MARK ADDITIONS LAYER (MARK_EXTRA_ADDITIONS, see below)
+ *   The sheet doesn't cover everything, so MARK layers extra options on top per
+ *   event. These are SINGLE-PICK (flag → team; no "correct to" sub-step), which
+ *   is how they differ from sheet wrong-extras. Helpers wrongExtraKeysFor(),
+ *   missingExtrasFor() and isWrongExtraSinglePick() merge sheet + MARK options.
+ *
+ * GOALKEEPER (GK_WRONG_EVENT_MAP, GK_SUBTYPES)
+ *   GK is special-cased: the sheet doesn't model GK subtypes, so the map is
+ *   hardcoded as { correctEvents, extras } per subtype and consumed through the
+ *   gkEntry() helper.
+ *
+ * EXPORTS: EXTRAS / GK_EXTRAS / GK_WRONG_EXTRAS are legacy label-lookup tables
+ * used by TaggedEventsList and the xlsx export to turn stored ids back into
+ * human labels.
+ */
 import { useState, useEffect } from 'react'
 import { TORNADO_EVENTS } from '../data/shortcuts'
 import { TAGGING_SCENARIOS } from '../data/tagging_scenarios'

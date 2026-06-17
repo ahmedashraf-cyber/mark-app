@@ -1,8 +1,38 @@
-// Tornado event shortcuts — same keys used in collection app
-// MARK 4.1.0 — added Pass Interception (I) and Card (mouse) per official taxonomy.
-// `sheetEvent` maps each MARK event to its canonical name in the error-correction sheet
-// (so ErrorTagModal can look up which error types / corrections apply to it).
-// `sheetEvent: null` means the event isn't part of the error-correction taxonomy.
+/**
+ * shortcuts.js — single source of truth for MARK's tagging keys & video nav.
+ * ============================================================================
+ *
+ * WHAT THIS FILE IS
+ *   Every taggable event, its keyboard key, and the video playback controls
+ *   live here. Two other modules read from this file and MUST stay consistent
+ *   with it:
+ *     • EventsSidebar.jsx — renders the on-screen key labels. (It keeps its own
+ *       LEFT/RIGHT arrays for layout, so when a key changes here, change it
+ *       there too — the labels are display-only and won't auto-sync.)
+ *     • ReviewPage.jsx    — the keyboard handler, which looks events up via the
+ *       KEY_TO_EVENT map exported at the bottom.
+ *
+ * TORNADO_EVENTS — one entry per taggable event. Field meanings:
+ *   • key        Keyboard shortcut (uppercase letter / digit). `null` = the
+ *                event has no shortcut and can only be tagged by mouse click.
+ *   • id         Stable internal id (snake_case). Used everywhere in code and
+ *                stored on saved tags — NEVER rename without a data migration.
+ *   • label      Human-readable name shown in the UI.
+ *   • mouse      true  → mouse-click event (rendered as a clickable card).
+ *                false → keyboard event.
+ *   • sheetEvent Canonical name in the error-correction taxonomy sheet
+ *                (src/data/tagging_scenarios.js). This is the join key the
+ *                TagPanel uses to look up which error types / corrections /
+ *                extras apply. `null` = the event isn't in the taxonomy, so the
+ *                tag panel shows no sheet-derived error options for it.
+ *
+ * KEY-MAP HISTORY (so the current letters aren't surprising)
+ *   v7.3.3 reshuffled 7 keys at the owner's request and REMOVED the standalone
+ *   "Missing Event" feature so its old `Q` could go to Pass (First time):
+ *     Leg Stretch M→U · Tackle K→A · Pass Recovery N→P · Goal Keeper G→K ·
+ *     Pressure P→G · Pass (First time) U→Q · Separation L→J.
+ *   There are intentionally no duplicate keys — guard this when editing.
+ */
 export const TORNADO_EVENTS = [
   // ── Keyboard events ──────────────────────────────────────────────────────────
   { key: 'E', id: 'pass',              label: 'Pass',              mouse: false, sheetEvent: 'Pass' },
