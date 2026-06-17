@@ -1,3 +1,27 @@
+/**
+ * SessionHistoryPage.jsx — past sessions list + single-session report.
+ * ============================================================================
+ *
+ * This file has TWO views in one module:
+ *
+ *  1) THE LIST (default export) — all sessions for the user (or all users in
+ *     admin mode), with a header search that filters by match name OR match ID
+ *     (every half shares a match ID, so an ID surfaces the match and all its
+ *     halves). Stats chips (total/scout/audit/avg) summarise the set. Each row
+ *     is a SessionCard with a download (export) and a play (open report) button.
+ *
+ *  2) THE REPORT (the component rendered when a session is opened) — quality
+ *     gauge, team split, top events/extras, the tagged-events list, and a VIDEO
+ *     PLAYER. The player here is STANDALONE (no collection-app bridge): it
+ *     auto-loads a saved path or lets you pick one (loadVideo → pick_video_file),
+ *     supports the same transport keys as Scout (↑ / →← / +-), and has a
+ *     "Change Video" button to replace the file.
+ *
+ * EXPORT (download button): handleExport pulls the session's tags from Firestore
+ * and hands them to exportSessionToXlsx, which now saves via a native Rust save
+ * dialog (save_xlsx_file) — see exportSession.js for why the old silent JS-fs
+ * write was replaced.
+ */
 import { useState, useEffect, useRef } from 'react'
 import { db } from '../firebase/config'
 import { collection, query, where, getDocs } from 'firebase/firestore'

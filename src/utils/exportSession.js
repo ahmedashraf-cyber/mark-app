@@ -1,3 +1,26 @@
+/**
+ * exportSession.js — turn a reviewed session into a spreadsheet.
+ * ============================================================================
+ *
+ * Two exporters share the same row-building logic:
+ *   • exportSessionToXlsx          — writes a local .xlsx via a native save
+ *                                    dialog (Rust save_xlsx_file). USED BY the
+ *                                    download button.
+ *   • exportSessionToGoogleSheets  — pushes the same data to a Google Sheet via
+ *                                    a Tauri command (create_google_sheet).
+ *
+ * Each tagged error becomes a row: Match ID, Match Name, Event, Timestamp, up to
+ * 5 Extras, Team, and (xlsx only) a clickable "open video at timestamp" link.
+ * extraLabel() resolves stored extra ids back to human labels using the
+ * legacy tables exported from TagPanel.
+ *
+ * WHY THE NATIVE SAVE DIALOG (v7.3.6): the previous version wrote silently to
+ * the OS Downloads folder through the *scoped* JS fs plugin, with a browser
+ * `<a download>` fallback that is a no-op inside a desktop Tauri webview — so
+ * clicking download looked like nothing happened. save_xlsx_file (rfd in Rust)
+ * shows a real Save dialog and writes with full fs access. Returns the chosen
+ * path, or null if the user cancels.
+ */
 import * as XLSX from 'xlsx'
 import { EXTRAS, GK_EXTRAS, GK_WRONG_EXTRAS } from '../components/TagPanel'
 

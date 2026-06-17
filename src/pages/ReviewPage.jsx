@@ -1,3 +1,29 @@
+/**
+ * ReviewPage.jsx — the live Scout review screen.
+ * ============================================================================
+ *
+ * This is where a reviewer actually works: a match video on the left/right with
+ * the two EventsSidebar palettes, the TagPanel for recording errors, and a live
+ * bridge to the StatsBomb collection app so the two stay frame-synced.
+ *
+ * RESPONSIBILITIES
+ *   • Video: load/replace via the native picker (handleVideoFile → Rust
+ *     pick_video_file), served over a local HTTP url (get_video_url). Keyboard
+ *     transport matches the collection app: ↑ play/pause, →/← seek 400ms
+ *     (40ms with Shift), +/- speed. A "Change Video" button swaps the file.
+ *   • Tagging: a global keydown handler turns event keys into a pendingTag and
+ *     opens the TagPanel; mouse-only events come through handleMouseEvent.
+ *     (Tagging is gated until review has started — reviewStartedRef.)
+ *   • Bridge: "Inject Bridge" pushes bridge_script.js into the collection app so
+ *     navigation/seek stay in sync; this is the live, two-way path (unlike the
+ *     standalone session report, which has no bridge).
+ *   • Persistence: tags are written to Firestore (mark_error_tags) and session
+ *     counters updated.
+ *
+ * NOTE ON KEYS: event keys come from shortcuts.js (KEY_TO_EVENT). The video
+ * transport keys are handled here directly. Keep both in mind when adding keys
+ * so a tagging key and a transport key never collide.
+ */
 import { useState, useEffect, useRef } from 'react'
 import { invoke, convertFileSrc } from '@tauri-apps/api/core'
 import { db, auth } from '../firebase/config'

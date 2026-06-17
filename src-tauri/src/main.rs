@@ -1,5 +1,23 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+//! main.rs — MARK's Tauri (Rust) backend.
+//! ===========================================================================
+//! The desktop side that the React UI talks to via `invoke(...)`. Responsibilities:
+//!
+//!   • Video serving: a tiny local HTTP server streams the chosen file so the
+//!     <video> element can play it (get_video_url + VideoState).
+//!   • Native file dialogs via `rfd` (preferred over the scoped JS fs/dialog
+//!     plugins — full access, always-visible dialogs):
+//!       - pick_video_file  → open a video
+//!       - save_xlsx_file   → save the session export (.xlsx)
+//!   • Collection-app bridge: finds the StatsBomb window, injects
+//!     bridge_script.js (embedded at compile time via include_str!), and relays
+//!     keystrokes/commands so MARK and the collection app stay frame-synced.
+//!   • Google Sheets export (create_google_sheet) and misc helpers (open_file).
+//!
+//! All commands are registered in the `invoke_handler!` near the bottom; the JS
+//! side calls them by their snake_case names.
+
 use std::sync::{Arc, Mutex};
 use tauri::command;
 use futures_util::{SinkExt, StreamExt};
