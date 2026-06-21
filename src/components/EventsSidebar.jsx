@@ -41,6 +41,8 @@ const LEFT_EVENTS = [
   { key: null,   label: 'Formation',       id: 'formation' },
   { key: null,   label: 'Camera Off',      id: 'camera_off' },
   { key: null,   label: 'Camera On',       id: 'camera_on' },
+  { key: null,   label: 'Half start',      id: 'half_start' },
+  { key: null,   label: 'Half end',        id: 'half_end' },
 ]
 
 const RIGHT_EVENTS = [

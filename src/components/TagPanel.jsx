@@ -152,8 +152,15 @@ function getWrongExtrasMap(eventId) {
 // step; `missingExtra` items appear in the "Missing extra" step. Picking one records it
 // and goes straight to team — unlike sheet wrong-extras which have a correction sub-step.
 const MARK_EXTRA_ADDITIONS = {
-  pass:   { wrongExtra: ['Step in','Wrong Side','Corner','Aerial won'], missingExtra: ['Step in','Aerial won'] },
-  tackle: { wrongExtra: ['Wrong extra'],                                missingExtra: [] },
+  pass:           { wrongExtra: ['Step in','Wrong Side','Corner','Aerial won','Lunch'], missingExtra: ['Step in','Aerial won','Lunch'] },
+  tackle:         { wrongExtra: ['Right','Left','Right take on','Left take on','None'],  missingExtra: ['Dribble attempted'] },
+  dribble:        { wrongExtra: ['None'],                                                missingExtra: [] },
+  foul_committed: { wrongExtra: [],                                                      missingExtra: ['Advantage','Yellow Card','Red Card','Second yellow'] },
+  // New marker events (Half start / Half end) — generic single-pick flags so the
+  // wrong-extra / missing-extra error types are selectable. Replace 'Extra' with
+  // the real options once defined.
+  half_start:     { wrongExtra: ['Extra'],                                               missingExtra: ['Extra'] },
+  half_end:       { wrongExtra: ['Extra'],                                               missingExtra: ['Extra'] },
 }
 const markAdd = (eventId) => MARK_EXTRA_ADDITIONS[eventId] || { wrongExtra: [], missingExtra: [] }
 
@@ -181,6 +188,7 @@ const GK_WRONG_EVENT_MAP = {
   gk_shot:           { correctEvents: ['Save attempt','Conceded no save','Post','Wayward','Out endline'], extras: ['Won','Success','Fail','Second effort'] },
   gk_punch:          { correctEvents: ['GK (Keeper sweeper)','Ball recovery','GK (Collected)'],           extras: [] },
   gk_keeper_sweeper: { correctEvents: ['GK (Punch)','GK (Save)','GK (Collected)'],                         extras: ['Clear','Claim'] },
+  gk_smother:        { correctEvents: [],                                                                  extras: ['Success','Won'] },
 }
 const gkEntry = (id) => GK_WRONG_EVENT_MAP[id] || { correctEvents: [], extras: [] }
 
@@ -191,6 +199,7 @@ const GK_SUBTYPES = [
   { key:'3', id:'gk_keeper_sweeper', label:'Keeper sweeper' },
   { key:'4', id:'gk_save',           label:'Save'           },
   { key:'5', id:'gk_shot',           label:'Shot'           },
+  { key:'6', id:'gk_smother',        label:'Smother'        },
 ]
 
 // ─── error types ──────────────────────────────────────────────────────────────
@@ -202,6 +211,10 @@ const ERROR_TYPES = [
   { key:'5', id:'wrong_extra',      label:'Wrong extra',      autoSave:false },
   { key:'6', id:'not_needed_extra', label:'Not needed extra', autoSave:false },
   { key:'7', id:'wrong_timestamp',  label:'Wrong timestamp',  autoSave:false },
+  // Global attribute errors — available for ANY event, recorded straight to team.
+  { key:'8', id:'wrong_side',       label:'Wrong side',       autoSave:false },
+  { key:'9', id:'wrong_player',     label:'Wrong player',     autoSave:false },
+  { key:'0', id:'wrong_location',   label:'Wrong location',   autoSave:false },
 ]
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
@@ -464,6 +477,9 @@ export default function TagPanel({ pendingTag, onSave, onCancel, editTag, onEdit
         else if (et.id === 'missing_event')    setStep('team')
         else if (et.id === 'extra_event')      setStep('team')
         else if (et.id === 'wrong_timestamp')  setStep('team')
+        else if (et.id === 'wrong_side')       setStep('team')
+        else if (et.id === 'wrong_player')     setStep('team')
+        else if (et.id === 'wrong_location')   setStep('team')
         else if (et.id === 'missing_extra')    setStep('missing_extra')
         else if (et.id === 'not_needed_extra') setStep('not_needed_extra')
         else if (et.id === 'wrong_extra')      setStep('wrong_extra_pick')
@@ -606,6 +622,9 @@ export default function TagPanel({ pendingTag, onSave, onCancel, editTag, onEdit
                       else if (et.id === 'missing_event')    setStep('team')
                       else if (et.id === 'extra_event')      setStep('team')
                       else if (et.id === 'wrong_timestamp')  setStep('team')
+                      else if (et.id === 'wrong_side')       setStep('team')
+                      else if (et.id === 'wrong_player')     setStep('team')
+                      else if (et.id === 'wrong_location')   setStep('team')
                       else if (et.id === 'missing_extra')    setStep('missing_extra')
                       else if (et.id === 'not_needed_extra') setStep('not_needed_extra')
                       else if (et.id === 'wrong_extra')      setStep('wrong_extra_pick')
@@ -704,6 +723,7 @@ export const GK_EXTRAS = [
   { key:'3', id:'gk_keeper_sweeper', label:'Keeper sweeper'  },
   { key:'4', id:'gk_save',           label:'Save'            },
   { key:'5', id:'gk_shot',           label:'Shot'            },
+  { key:'6', id:'gk_smother',        label:'Smother'         },
 ]
 
 export const GK_WRONG_EXTRAS = {}
