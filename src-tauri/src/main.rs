@@ -738,9 +738,10 @@ fn open_file(path: String) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
         if path.starts_with("http://") || path.starts_with("https://") {
-            // Open URL in default browser
-            std::process::Command::new("cmd")
-                .args(["/c", "start", "", &path])
+            // Open URL in the default browser via rundll32 — single-arg, so `&`
+            // in the URL isn't chopped by cmd's command separator.
+            std::process::Command::new("rundll32")
+                .args(["url.dll,FileProtocolHandler", &path])
                 .spawn()
                 .map_err(|e| format!("Failed to open URL: {}", e))?;
         } else {
@@ -794,8 +795,11 @@ async fn google_oauth_sign_in() -> Result<serde_json::Value, String> {
 
     #[cfg(target_os = "windows")]
     {
-        std::process::Command::new("cmd")
-            .args(["/c", "start", "", &auth_url])
+        // Open the default browser via rundll32 — the whole URL is passed as a
+        // single argument, so the `&` between query params isn't treated as a
+        // cmd command separator (which had been dropping response_type/scope).
+        std::process::Command::new("rundll32")
+            .args(["url.dll,FileProtocolHandler", &auth_url])
             .spawn()
             .map_err(|e| format!("Could not open browser: {}", e))?;
     }
