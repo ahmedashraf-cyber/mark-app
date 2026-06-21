@@ -122,3 +122,21 @@ A drifted `CURRENT_VERSION` (7.3.0) above the published release (7.2.1) froze th
 updater for everyone. **Decision/rule:** the version must be bumped in lockstep
 across all files, and every new release must be strictly greater than any value
 shipped in a prior build. Codified at the top of [CHANGELOG.md](./CHANGELOG.md).
+
+---
+
+## 7. Version numbering & on-screen version (owner rules)
+
+Two operational rules set by the owner:
+
+1. **Number sequence.** The patch digit runs `0→9` only, then rolls to the next
+   minor with patch reset to `0`: `…7.3.9 → 7.4.0 → 7.4.1 …`. Two-digit patches
+   like `7.3.10` are not used. (7.3.10 / 7.3.11 during the Google-Sheets work are
+   a pre-rule exception; the next clean bump rolls to **7.4.0**.)
+2. **On-screen version must always match the release**, in BOTH places it shows:
+   the OS **window title bar** (synced from `package.json` by
+   `scripts/sync-version.js`) and the in-app **top-left logo** (`CURRENT_VERSION`
+   in `useUpdateCheck.js`, rendered by `SessionSetupPage.jsx`). The standard
+   version bump updates both — confirm before shipping.
+
+Both are codified in the Conventions section of [CHANGELOG.md](./CHANGELOG.md).

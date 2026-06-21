@@ -10,6 +10,12 @@ in-app auto-updater compares the latest GitHub release against
 > **Golden rule of versioning:** the new release must be *strictly greater* than
 > the `CURRENT_VERSION` baked into every installed build, or the updater will
 > not prompt. See the v7.3.1 entry for why this bit us.
+>
+> **Version-number sequence (required):** the patch digit runs **0→9 only**, then
+> rolls over to the next minor with the patch reset to 0. So the order is
+> `…7.3.8 → 7.3.9 → 7.4.0 → 7.4.1 → …` — there is **no** 7.3.10 / 7.3.11. (The
+> 7.3.10 / 7.3.11 builds during the Google-Sheets work are a one-off exception
+> that predates this rule; the next clean bump rolls to **7.4.0**.)
 
 ---
 
@@ -168,6 +174,18 @@ blocking, not nice-to-haves.
 
 - **Versioning:** bump `package.json`, `Cargo.toml`, `useUpdateCheck.js`;
   `tauri.conf.json` auto-syncs in CI via `scripts/sync-version.js`.
+- **Version-number sequence:** patch digit `0→9` only, then roll to the next
+  minor and reset patch to `0` (`7.3.9 → 7.4.0`). Never go to a two-digit patch
+  like `7.3.10`.
+- **On-screen version (must always match the release):** the version shows in
+  TWO places and both are driven by the version bump — never let them drift:
+    1. **OS window title bar** ("MARK X.Y.Z — Review App") — rewritten from
+       `package.json` by `scripts/sync-version.js` during the CI build.
+    2. **In-app top-left logo** ("MARK vX.Y.Z" on the main page) — rendered from
+       `CURRENT_VERSION` in `src/hooks/useUpdateCheck.js`
+       (`src/pages/SessionSetupPage.jsx`).
+  Bumping the standard version files updates both; verify they read the new
+  number before shipping.
 - **Every edit:** run a JS/JSX parse check and a brace/duplicate-function guard
   before committing.
 - **Custom native ops use `rfd` in Rust** (`pick_video_file`, `save_xlsx_file`)
