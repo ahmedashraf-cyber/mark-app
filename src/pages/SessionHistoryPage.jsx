@@ -28,7 +28,7 @@ import { collection, query, where, getDocs } from 'firebase/firestore'
 import { useAuth } from '../hooks/useAuth.jsx'
 import { useAdmin } from '../hooks/useAdmin.js'
 import { invoke } from '@tauri-apps/api/core'
-import { exportSessionToXlsx } from '../utils/exportSession'
+import { exportSessionToXlsx, exportSessionToGoogleSheets } from '../utils/exportSession'
 import { EXTRAS, GK_EXTRAS, GK_WRONG_EXTRAS } from '../components/TagPanel'
 import { SPEED_MIN, SPEED_MAX, SPEED_STEP } from '../data/shortcuts'
 
@@ -587,7 +587,7 @@ function MatchReport({ session, tags, onBack }) {
 }
 
 // ------ Session Card (list view) ------------------------------------------------------------------------------------------------------------------------------------------------------
-function SessionCard({ session, onReview, onExport, loading, isAdmin }) {
+function SessionCard({ session, onReview, onExport, onExportSheets, loading, isAdmin }) {
   const score  = session.qualityScore || 0
   const color  = score >= 80 ? '#30D158' : score >= 60 ? '#FFD60A' : '#FF453A'
   const isAudit = session.type === 'audit'
@@ -702,6 +702,22 @@ function SessionCard({ session, onReview, onExport, loading, isAdmin }) {
           </svg>
         </button>
         <button
+          onClick={e => { e.stopPropagation(); onExportSheets(session) }}
+          title="Export to Google Sheet"
+          style={{
+            width:32, height:32, borderRadius:8,
+            background:'rgba(10,132,255,0.10)', border:'1px solid rgba(10,132,255,0.28)',
+            display:'flex', alignItems:'center', justifyContent:'center', cursor:'pointer',
+            transition:'all .15s',
+          }}
+          onMouseEnter={e => e.currentTarget.style.background='rgba(10,132,255,0.20)'}
+          onMouseLeave={e => e.currentTarget.style.background='rgba(10,132,255,0.10)'}
+        >
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#0A84FF" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <rect x="4" y="3" width="16" height="18" rx="2"/><path d="M4 9h16M4 15h16M10 3v18"/>
+          </svg>
+        </button>
+        <button
           onClick={e => { e.stopPropagation(); onReview(session) }}
           style={{
             width:32, height:32, borderRadius:8,
@@ -783,6 +799,30 @@ export default function SessionHistoryPage({ onBack, initialSession }) {
       })
     } catch(e) {
       console.error('[MARK] export failed:', e)
+    }
+  }
+
+  // STAGE 0 TEST — does the service account actually create + share a sheet?
+  // Wires the existing Google Sheets export to a button, opens the result, and
+  // shows the error plainly if it fails (the failure mode we need to confirm).
+  async function handleExportSheets(session) {
+    try {
+      const q    = query(collection(db, 'mark_error_tags'), where('sessionId', '==', session.sessionId))
+      const snap = await getDocs(q)
+      const tags = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+      const url  = await exportSessionToGoogleSheets({
+        session,
+        tags,
+        quality: session.qualityScore || 0,
+        tagCount: session.totalTaggedErrors || 0,
+        total: session.totalReviewedEvents || 0,
+        videoPath: null,
+      })
+      const { invoke } = await import('@tauri-apps/api/core')
+      await invoke('open_file', { path: url })
+    } catch(e) {
+      console.error('[MARK] Google Sheets export failed:', e)
+      alert('Google Sheets export failed:\n\n' + (e?.message || e))
     }
   }
 
@@ -944,7 +984,7 @@ export default function SessionHistoryPage({ onBack, initialSession }) {
                 <span style={{ fontSize:11, color:'var(--t-3)', opacity:0.6 }}>Try a different match name or ID</span>
               </div>
             ) : filteredSessions.map(s => (
-              <SessionCard key={s.id} session={s} onReview={handleReview} onExport={handleExport} loading={tagsLoading} isAdmin={isAdmin} />
+              <SessionCard key={s.id} session={s} onReview={handleReview} onExport={handleExport} onExportSheets={handleExportSheets} loading={tagsLoading} isAdmin={isAdmin} />
             ))}
           </>
         )}
