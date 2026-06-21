@@ -66,6 +66,7 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MARK_GOOGLE_CLIENT_SECRET: ${{ secrets.MARK_GOOGLE_CLIENT_SECRET }}
         with:
           tagName: v__VERSION__
           releaseName: 'MARK v__VERSION__'

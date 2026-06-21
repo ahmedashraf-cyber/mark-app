@@ -187,3 +187,67 @@ export async function exportSessionToXlsx({ session, tags, quality, tagCount, to
   })
   return savedPath // null if the user cancelled the dialog
 }
+
+// STAGE 1 — sign-in-as-reviewer Google Sheet (OAuth + drive.file).
+// Builds the same single-session sheet, then uploads it to the SIGNED-IN USER's
+// own Google Drive (converted to a native Sheet). No service account, no app
+// verification — uses only the non-sensitive drive.file scope. Returns the URL.
+export async function exportSessionToUserDrive({ session, tags, quality, tagCount, total }) {
+  const { invoke } = await import('@tauri-apps/api/core')
+
+  // 1. Valid access token: refresh if we already signed in, otherwise sign in.
+  let accessToken = ''
+  const stored = localStorage.getItem('mark_g_refresh')
+  if (stored) {
+    try {
+      const r = await invoke('google_oauth_refresh', { refreshToken: stored })
+      accessToken = r.access_token || ''
+    } catch (e) { /* refresh failed → fall through to interactive sign-in */ }
+  }
+  if (!accessToken) {
+    const t = await invoke('google_oauth_sign_in')
+    accessToken = t.access_token || ''
+    if (t.refresh_token) localStorage.setItem('mark_g_refresh', t.refresh_token)
+  }
+  if (!accessToken) throw new Error('Could not obtain a Google access token')
+
+  // 2. Build the workbook (same layout as the Excel export; one tab for now).
+  const { home, away } = parseTeams(session.matchName)
+  const rows = tags.map(tag => {
+    const extras = (tag.extras || []).map(extraLabel)
+    const team   = tag.team === 'home' ? home : tag.team === 'away' ? away : (tag.team || '')
+    return [
+      session.matchId || session.sessionId,
+      session.matchName || '',
+      tag.triggeredEventLabel || tag.triggeredKey || '',
+      fmtTime(tag.videoTimeSec),
+      extras[0] || '', extras[1] || '', extras[2] || '',
+      extras[3] || '', extras[4] || '',
+      team,
+    ]
+  })
+  const maxExtras  = Math.max(0, ...rows.map(r => r.slice(4, 9).filter(Boolean).length))
+  const extraCount = Math.min(5, maxExtras)
+  const headers = [
+    'Match ID', 'Match Name', 'Event', 'Timestamp',
+    ...Array.from({ length: extraCount }, (_, i) => `Extra ${i + 1}`),
+    'Team', 'Open at Timestamp',
+  ]
+  const trimmedRows = rows.map(r => [ r[0], r[1], r[2], r[3], ...r.slice(4, 4 + extraCount), r[9], '' ])
+  const qualityRow  = [`Quality Score: ${quality}%  |  ${tagCount} errors / ${total} events reviewed`]
+  const ws = XLSX.utils.aoa_to_sheet([qualityRow, headers, ...trimmedRows])
+  ws['!merges'] = [{ s: { r: 0, c: 0 }, e: { r: 0, c: headers.length - 1 } }]
+  const wb = XLSX.utils.book_new()
+  const tabName = `${(session.matchId || 'Session').toString().slice(0,20)} - ${session.half || 'H1'}`.slice(0, 31)
+  XLSX.utils.book_append_sheet(wb, ws, tabName)
+  const wbout = XLSX.write(wb, { bookType: 'xlsx', type: 'array' })
+
+  // 3. Upload to the user's Drive as a native Sheet; return the shareable link.
+  const name = `MARK Review — ${session.matchName || session.matchId || 'Session'}`
+  const res  = await invoke('drive_create_sheet', {
+    accessToken,
+    name,
+    data: Array.from(new Uint8Array(wbout)),
+  })
+  return res.webViewLink || (res.id ? `https://docs.google.com/spreadsheets/d/${res.id}` : '')
+}

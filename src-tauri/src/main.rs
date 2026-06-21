@@ -759,6 +759,186 @@ fn send_key_to_collection_app(_exe_name: String, _key_code: String) -> Result<St
 }
 
 
+// --- Google OAuth (desktop loopback) + Drive upload ---------------------------
+// Sign-in-as-the-reviewer path: MARK gets the user's OWN Google token and creates
+// the master sheet IN THEIR OWN DRIVE, using only the non-sensitive `drive.file`
+// scope (no app verification, works for any Google account). A Desktop-app client
+// secret is treated as non-confidential by Google, so embedding it here is fine.
+const OAUTH_CLIENT_ID: &str =
+    "680107914768-8ndh7e12cluc5jbptfrarg7rlrg9mfjt.apps.googleusercontent.com";
+// Client secret is injected at BUILD time from the MARK_GOOGLE_CLIENT_SECRET
+// GitHub Actions secret — never committed to the repo. (Empty in local builds.)
+fn oauth_client_secret() -> &'static str {
+    option_env!("MARK_GOOGLE_CLIENT_SECRET").unwrap_or("")
+}
+const OAUTH_SCOPE: &str = "https://www.googleapis.com/auth/drive.file openid email";
+
+// Open the browser, run the loopback OAuth flow, return the token JSON
+// (access_token, refresh_token, expires_in, ...).
+#[command]
+async fn google_oauth_sign_in() -> Result<serde_json::Value, String> {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .map_err(|e| format!("Local sign-in server failed to start: {}", e))?;
+    let port = listener.local_addr().map_err(|e| e.to_string())?.port();
+    let redirect_uri = format!("http://127.0.0.1:{}", port);
+
+    let auth_url = format!(
+        "https://accounts.google.com/o/oauth2/v2/auth?client_id={}&redirect_uri={}&response_type=code&scope={}&access_type=offline&prompt=consent",
+        urlencoding::encode(OAUTH_CLIENT_ID),
+        urlencoding::encode(&redirect_uri),
+        urlencoding::encode(OAUTH_SCOPE),
+    );
+
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("cmd")
+            .args(["/c", "start", "", &auth_url])
+            .spawn()
+            .map_err(|e| format!("Could not open browser: {}", e))?;
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = &auth_url;
+    }
+
+    // Wait for Google's redirect and pull the ?code= out of the request line.
+    let (mut stream, _) = listener
+        .accept()
+        .await
+        .map_err(|e| format!("No sign-in redirect received: {}", e))?;
+    let mut buf = vec![0u8; 8192];
+    let n = stream.read(&mut buf).await.map_err(|e| e.to_string())?;
+    let req = String::from_utf8_lossy(&buf[..n]);
+    let first_line = req.lines().next().unwrap_or("");
+    let code = first_line
+        .split_whitespace()
+        .nth(1)
+        .and_then(|p| p.split('?').nth(1))
+        .and_then(|qs| qs.split('&').find(|kv| kv.starts_with("code=")))
+        .map(|kv| kv.trim_start_matches("code="))
+        .map(|c| {
+            urlencoding::decode(c)
+                .map(|s| s.into_owned())
+                .unwrap_or_else(|_| c.to_string())
+        })
+        .ok_or_else(|| "Sign-in was cancelled (no authorization code).".to_string())?;
+
+    let page = "<html><body style='font-family:sans-serif;text-align:center;padding-top:60px'><h2>MARK is signed in</h2><p>You can close this tab and return to MARK.</p></body></html>";
+    let resp = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+        page.len(),
+        page
+    );
+    let _ = stream.write_all(resp.as_bytes()).await;
+
+    let client = reqwest::Client::new();
+    let params = [
+        ("client_id", OAUTH_CLIENT_ID),
+        ("client_secret", oauth_client_secret()),
+        ("code", code.as_str()),
+        ("grant_type", "authorization_code"),
+        ("redirect_uri", redirect_uri.as_str()),
+    ];
+    let token_json: serde_json::Value = client
+        .post("https://oauth2.googleapis.com/token")
+        .form(&params)
+        .send()
+        .await
+        .map_err(|e| format!("Token exchange failed: {}", e))?
+        .json()
+        .await
+        .map_err(|e| format!("Token parse failed: {}", e))?;
+    if token_json.get("error").is_some() {
+        return Err(format!("Google sign-in error: {}", token_json));
+    }
+    Ok(token_json)
+}
+
+// Exchange a stored refresh_token for a fresh access_token.
+#[command]
+async fn google_oauth_refresh(refresh_token: String) -> Result<serde_json::Value, String> {
+    let client = reqwest::Client::new();
+    let params = [
+        ("client_id", OAUTH_CLIENT_ID),
+        ("client_secret", oauth_client_secret()),
+        ("refresh_token", refresh_token.as_str()),
+        ("grant_type", "refresh_token"),
+    ];
+    let json: serde_json::Value = client
+        .post("https://oauth2.googleapis.com/token")
+        .form(&params)
+        .send()
+        .await
+        .map_err(|e| format!("Token refresh failed: {}", e))?
+        .json()
+        .await
+        .map_err(|e| format!("Token refresh parse failed: {}", e))?;
+    if json.get("error").is_some() {
+        return Err(format!("Token refresh error: {}", json));
+    }
+    Ok(json)
+}
+
+// Create a Google Sheet in the signed-in user's Drive from .xlsx bytes (converted
+// to a native Sheet on upload), share "anyone with link (view)", return id+url.
+#[command]
+async fn drive_create_sheet(
+    access_token: String,
+    name: String,
+    data: Vec<u8>,
+) -> Result<serde_json::Value, String> {
+    let client = reqwest::Client::new();
+    let boundary = "MARKb0undary7e3f2a";
+    let metadata = serde_json::json!({
+        "name": name,
+        "mimeType": "application/vnd.google-apps.spreadsheet"
+    });
+
+    let mut body: Vec<u8> = Vec::new();
+    body.extend_from_slice(format!("--{}\r\n", boundary).as_bytes());
+    body.extend_from_slice(b"Content-Type: application/json; charset=UTF-8\r\n\r\n");
+    body.extend_from_slice(metadata.to_string().as_bytes());
+    body.extend_from_slice(format!("\r\n--{}\r\n", boundary).as_bytes());
+    body.extend_from_slice(
+        b"Content-Type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet\r\n\r\n",
+    );
+    body.extend_from_slice(&data);
+    body.extend_from_slice(format!("\r\n--{}--\r\n", boundary).as_bytes());
+
+    let json: serde_json::Value = client
+        .post("https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,webViewLink")
+        .header("Authorization", format!("Bearer {}", access_token))
+        .header("Content-Type", format!("multipart/related; boundary={}", boundary))
+        .body(body)
+        .send()
+        .await
+        .map_err(|e| format!("Drive upload failed: {}", e))?
+        .json()
+        .await
+        .map_err(|e| format!("Drive upload parse failed: {}", e))?;
+    if json.get("error").is_some() {
+        return Err(format!("Drive upload error: {}", json));
+    }
+
+    if let Some(id) = json.get("id").and_then(|v| v.as_str()) {
+        let perm = serde_json::json!({ "role": "reader", "type": "anyone" });
+        let _ = client
+            .post(format!(
+                "https://www.googleapis.com/drive/v3/files/{}/permissions",
+                id
+            ))
+            .header("Authorization", format!("Bearer {}", access_token))
+            .json(&perm)
+            .send()
+            .await;
+    }
+    Ok(json)
+}
+
+
 // --- Google Sheets API via Service Account JWT --------------------------------
 const SA_CLIENT_EMAIL: &str = "mark-reporter@mark-app-498618.iam.gserviceaccount.com";
 const SA_PRIVATE_KEY: &str = "-----BEGIN PRIVATE KEY-----\nMIIEvAIBADANBgkqhkiG9w0BAQEFAASCBKYwggSiAgEAAoIBAQDppEco89tq/jUH\nn7Krqf15QeKUnw03Js9FwLaaocMAtpgtvG0cP3sBBFQkhEAsDLVh1m69jRAKZcN2\n1FOShXhhmlxggl4Z8fkJF+fUqQyPGTtCm9BeeKlDpfNBuWSznQl+gIIn4Gn0YInY\nI0LC0E2umQFNxf7kIhV1D14Ymwn3MmpdXMFjp0kg3odSmp4jwc9by+IVS8GjdctW\nVrOLkxM8wzKi0cMFYtBXJVIRdm6IIxJwyHPVPkyNyYBJARifdy63D71ubfnLCXvq\n5dhyr/ViX8vnzBFLkYDGHss9Uy4r3CymSnfwSSJng0wWtK8MIIQVJEcEpRaL2uk2\n49JhfZ4JAgMBAAECggEABRUOpYsnwMwj9/+8ZE63uwwYwz4Hd1A9ONRK6eeuunn+\nVZuwQumgQcLSmBMWuJk+gSY9NUXXgru5H1avNQl5YiQjB3K73HQemZj0cR7hQqPx\nnaQOibOLDl6SgUw+BB3cdOzo3Thc4v+OQrjs95hjjDKmAYdW9qbwJmJNxsVpQirY\nW3KrQtMDsrw6afuai8CWSlrA6ucKSf1t1XflG6565ZkjnP1NlueTJ1ojK5eeVac9\nnMrn0jLQ4/JCBSZBr7x3KAHLQX6e8929V08X3ObnT1HVyWfzfYQmMOgJA7P/TwG9\nahtRTCktZ4PynDBtVSVMs/3rLxw6qHCi8tZ0eNc5IQKBgQD10Q/ZAkH34jShCwcF\nbQ94Twrri7LcgYtInE5H5anikdT6hRgXXugHYn5S0T0Zsf0QK3l9Zee2bN6ugDjq\nZCqAr4aEqyK+VL+jSODgx9dHngRRSozrZKvr0av3FGkj0ZU1O3X6hwThyfN0RX+W\nO7yL/VFuQyTWpuwg/H7Ki513sQKBgQDzUhknBgwMnfTrnS+gq7f5Wg2boRWXRB2x\nADSzu+SgdFVFySFYpipxwUGjONbkZz88hac0IWC3bDUno1nBj0x1rXU2Mm2s5XTF\nwPaOOjg4SNQD05mz5Grk/aBKYe1nxq/xS1zVvIEhvR5yy9u9O3vOFHMdxH6ZptYj\n83Md1xj52QKBgFuXSSNfnvrg0yFKPZR8/W2jbfsz8zIMJryoWNabMUCVe9jYbJCQ\nsT3HKjBrfCut0RAMUtkxdjPXvuUgK5TSO6/1NtcJ+QkYBMuvZPL8Iy+xJgSwFW/D\n8/cLCdsnRMGu3ryV6jCtzFjg6ZBiMNbmbStv+L5v0DMWwRbNXeTUPpkRAoGAYDcX\noRnADAEuBzlJyxP8FMrqVJ8XBZC22PYG4QeseVJnIchNultCr2bHCL8CIqE9HTaQ\njomgUAem4Tyz0llS17m2fq7kNZkqWsRZ+pXFA2SxCa5TuhHZvyEXkDI3CXFEw3qU\nhCQdP/UjpCs+gg6Sf0QQ3TWFBkc1qFOtMqCKzMkCgYBmPGzmQ2xGEa/b4PnIrblR\nM2Y4e9zCEV6hc/37qy0LJIpe0iZTUPMd8pIyNtZXVWFDsJ/U3ai3zUKCYAJAGct8\nZHnLFBl8rjsWB7woJk6LdVeYItgU/jVAw54n5PwEaajFvZO15q1zsAOjhj/vmksi\nQIGusOLsrprvflY8YpinSQ==\n-----END PRIVATE KEY-----\n";
@@ -1000,6 +1180,9 @@ fn main() {
             patch_tag_once_asar,
             pick_video_file,
             save_xlsx_file,
+            google_oauth_sign_in,
+            google_oauth_refresh,
+            drive_create_sheet,
             get_video_url,
             open_file,
             create_google_sheet,

@@ -28,7 +28,7 @@ import { collection, query, where, getDocs } from 'firebase/firestore'
 import { useAuth } from '../hooks/useAuth.jsx'
 import { useAdmin } from '../hooks/useAdmin.js'
 import { invoke } from '@tauri-apps/api/core'
-import { exportSessionToXlsx, exportSessionToGoogleSheets } from '../utils/exportSession'
+import { exportSessionToXlsx, exportSessionToUserDrive } from '../utils/exportSession'
 import { EXTRAS, GK_EXTRAS, GK_WRONG_EXTRAS } from '../components/TagPanel'
 import { SPEED_MIN, SPEED_MAX, SPEED_STEP } from '../data/shortcuts'
 
@@ -802,24 +802,22 @@ export default function SessionHistoryPage({ onBack, initialSession }) {
     }
   }
 
-  // STAGE 0 TEST — does the service account actually create + share a sheet?
-  // Wires the existing Google Sheets export to a button, opens the result, and
-  // shows the error plainly if it fails (the failure mode we need to confirm).
+  // STAGE 1 — Google Sheet in the reviewer's OWN Drive (OAuth sign-in, drive.file).
+  // First run opens the browser to sign in; after that it's silent (refresh token).
   async function handleExportSheets(session) {
     try {
       const q    = query(collection(db, 'mark_error_tags'), where('sessionId', '==', session.sessionId))
       const snap = await getDocs(q)
       const tags = snap.docs.map(d => ({ id: d.id, ...d.data() }))
-      const url  = await exportSessionToGoogleSheets({
+      const url  = await exportSessionToUserDrive({
         session,
         tags,
         quality: session.qualityScore || 0,
         tagCount: session.totalTaggedErrors || 0,
         total: session.totalReviewedEvents || 0,
-        videoPath: null,
       })
       const { invoke } = await import('@tauri-apps/api/core')
-      await invoke('open_file', { path: url })
+      if (url) await invoke('open_file', { path: url })
     } catch(e) {
       console.error('[MARK] Google Sheets export failed:', e)
       alert('Google Sheets export failed:\n\n' + (e?.message || e))
