@@ -19,6 +19,8 @@
  * Props: side ('left'|'right'), activeKey (currently-pressed key, for the active
  * highlight), onMouseEvent (handler for clicking a mouse-only card).
  */
+import { memo } from 'react'
+
 const LEFT_EVENTS = [
   { key: 'E',    label: 'Pass',              id: 'pass' },
   { key: 'I',    label: 'Pass Interception', id: 'pass_interception' },
@@ -103,7 +105,7 @@ function EventCard({ ev, active, onClick }) {
   )
 }
 
-export default function EventsSidebar({ side, activeKey, onMouseEvent }) {
+function EventsSidebar({ side, activeKey, onMouseEvent }) {
   const events = side === 'left' ? LEFT_EVENTS : RIGHT_EVENTS
   const activeUpper = activeKey ? activeKey.toUpperCase() : null
 
@@ -146,3 +148,7 @@ export default function EventsSidebar({ side, activeKey, onMouseEvent }) {
     </div>
   )
 }
+
+// Memoised: re-renders only when side/activeKey/onMouseEvent change — NOT on the
+// parent's currentTime ticks during playback (keeps the video smooth).
+export default memo(EventsSidebar)

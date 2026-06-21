@@ -24,7 +24,7 @@
  * transport keys are handled here directly. Keep both in mind when adding keys
  * so a tagging key and a transport key never collide.
  */
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import { invoke, convertFileSrc } from '@tauri-apps/api/core'
 import { db, auth } from '../firebase/config'
 import { collection, addDoc, updateDoc, doc, serverTimestamp, increment } from 'firebase/firestore'
@@ -238,6 +238,13 @@ export default function ReviewPage({ session, onDone, onBack, bridgeSyncStatus, 
     markReviewStart()
     setPendingTag({ key: ev.key || '•', isMissing: false, videoTime: videoRef.current?.currentTime || 0, id: ev.id, label: ev.label })
   }
+
+  // Stable callback for the memoised sidebars: a ref always holds the latest
+  // handler, so the sidebars keep a constant onMouseEvent reference and do NOT
+  // re-render on every currentTime tick during playback — no stale closure.
+  const handleMouseEventRef = useRef(handleMouseEvent)
+  handleMouseEventRef.current = handleMouseEvent
+  const onMouseEventStable = useCallback((ev) => handleMouseEventRef.current(ev), [])
 
   async function handleTagSave(tagData) {
     setPendingTag(null)
@@ -461,7 +468,7 @@ export default function ReviewPage({ session, onDone, onBack, bridgeSyncStatus, 
       {/* Middle row: left sidebar + video + right sidebar */}
       <div style={{flex:1,display:'flex',overflow:'hidden'}}>
 
-        <EventsSidebar side="left" activeKey={activeKey} onMouseEvent={handleMouseEvent} />
+        <EventsSidebar side="left" activeKey={activeKey} onMouseEvent={onMouseEventStable} />
 
         {/* Video */}
         <div style={{flex:1,position:'relative',background:'#000',overflow:'hidden'}}>
@@ -515,7 +522,7 @@ export default function ReviewPage({ session, onDone, onBack, bridgeSyncStatus, 
 
         </div>
 
-        <EventsSidebar side="right" activeKey={activeKey} onMouseEvent={handleMouseEvent} />
+        <EventsSidebar side="right" activeKey={activeKey} onMouseEvent={onMouseEventStable} />
 
       </div>
 
