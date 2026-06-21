@@ -46,6 +46,26 @@ function fmtTime(s) {
   return `${m}:${sec.toString().padStart(2,'0')}.${ms.toString().padStart(3,'0')}`
 }
 
+// Normalise a stored half to H1 / H2 / EX1 / EX2 for clip filenames.
+function normalizeHalf(h) {
+  const s = String(h || '').toUpperCase().replace(/\s/g, '')
+  if (/^(1H|H1|1|FIRST)/.test(s))  return 'H1'
+  if (/^(2H|H2|2|SECOND)/.test(s)) return 'H2'
+  if (/^(EX1|ET1|E1)/.test(s))     return 'EX1'
+  if (/^(EX2|ET2|E2)/.test(s))     return 'EX2'
+  return s || 'H1'
+}
+
+// Strip characters that aren't allowed in filenames.
+function sanitizeName(s) {
+  return String(s || '').replace(/[\\/:*?"<>|]+/g, '-').replace(/\s+/g, ' ').trim()
+}
+
+// "9:49.553" -> "9-49-553" (filename-safe timestamp)
+function tsForName(s) {
+  return String(s).replace(/[:.]/g, '-')
+}
+
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycby94BMwgE3kY_EUshYzd_Zxx6E-m8fEvi0_ThqOc9raUUKq2LTGV_LC43OOd3uYgqPtJw/exec'
 
 export async function exportSessionToGoogleSheets({ session, tags, quality, tagCount, total, videoPath }) {
@@ -211,19 +231,38 @@ export async function exportSessionToUserDrive({ session, tags, quality, tagCoun
   }
   if (!accessToken) throw new Error('Could not obtain a Google access token')
 
-  // 2. Build the workbook (same layout as the Excel export; one tab for now).
+  // 2. Cut a 10-second clip per error into Downloads/<matchId>_<half>/.
+  const matchId   = (session.matchId || session.sessionId || 'Session').toString()
+  const half      = normalizeHalf(session.half)
+  const subfolder = `${matchId}_${half}`
+  const clipNameFor = (tag) => {
+    const ev = sanitizeName(tag.triggeredEventLabel || tag.triggeredKey || 'event')
+    return `${matchId}_${half}_${ev}_${tsForName(fmtTime(tag.videoTimeSec))}.mp4`
+  }
+  // Source video: remembered from review, else ask the reviewer to pick it.
+  let videoPath = ''
+  try { videoPath = localStorage.getItem('mark_video_path_' + matchId) || '' } catch (e) {}
+  if (!videoPath) { videoPath = (await invoke('pick_video_file')) || '' }
+  if (videoPath) {
+    const specs = tags.map(tag => ({ ts: tag.videoTimeSec || 0, name: clipNameFor(tag) }))
+    await invoke('cut_clips', { videoPath, subfolder, clips: specs })
+  }
+
+  // 3. Build the workbook. "Open at Timestamp" = the clip's filename — a browser
+  // Sheet can't open a local file, so we show where to find it in Downloads.
   const { home, away } = parseTeams(session.matchName)
   const rows = tags.map(tag => {
     const extras = (tag.extras || []).map(extraLabel)
     const team   = tag.team === 'home' ? home : tag.team === 'away' ? away : (tag.team || '')
     return [
-      session.matchId || session.sessionId,
+      matchId,
       session.matchName || '',
       tag.triggeredEventLabel || tag.triggeredKey || '',
       fmtTime(tag.videoTimeSec),
       extras[0] || '', extras[1] || '', extras[2] || '',
       extras[3] || '', extras[4] || '',
       team,
+      videoPath ? clipNameFor(tag) : '',
     ]
   })
   const maxExtras  = Math.max(0, ...rows.map(r => r.slice(4, 9).filter(Boolean).length))
@@ -233,7 +272,7 @@ export async function exportSessionToUserDrive({ session, tags, quality, tagCoun
     ...Array.from({ length: extraCount }, (_, i) => `Extra ${i + 1}`),
     'Team', 'Open at Timestamp',
   ]
-  const trimmedRows = rows.map(r => [ r[0], r[1], r[2], r[3], ...r.slice(4, 4 + extraCount), r[9], '' ])
+  const trimmedRows = rows.map(r => [ r[0], r[1], r[2], r[3], ...r.slice(4, 4 + extraCount), r[9], r[10] ])
   const qualityRow  = [`Quality Score: ${quality}%  |  ${tagCount} errors / ${total} events reviewed`]
   const ws = XLSX.utils.aoa_to_sheet([qualityRow, headers, ...trimmedRows])
   ws['!merges'] = [{ s: { r: 0, c: 0 }, e: { r: 0, c: headers.length - 1 } }]

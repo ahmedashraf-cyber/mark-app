@@ -30,6 +30,9 @@
   },
   "bundle": {
     "active": true,
+    "resources": [
+      "binaries/ffmpeg.exe"
+    ],
     "targets": [
       "nsis",
       "msi"

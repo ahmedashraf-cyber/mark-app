@@ -943,6 +943,101 @@ async fn drive_create_sheet(
 }
 
 
+// --- ffmpeg clip cutting ------------------------------------------------------
+// Resolve the bundled ffmpeg.exe (shipped as a Tauri resource), falling back to
+// common install layouts and finally PATH.
+fn resolve_ffmpeg(app: &tauri::AppHandle) -> String {
+    use tauri::Manager;
+    if let Ok(p) = app
+        .path()
+        .resolve("binaries/ffmpeg.exe", tauri::path::BaseDirectory::Resource)
+    {
+        if p.exists() {
+            return p.to_string_lossy().to_string();
+        }
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            for cand in ["ffmpeg.exe", "binaries/ffmpeg.exe", "resources/binaries/ffmpeg.exe"] {
+                let p = dir.join(cand);
+                if p.exists() {
+                    return p.to_string_lossy().to_string();
+                }
+            }
+        }
+    }
+    "ffmpeg".to_string()
+}
+
+// Cut a 10-second clip (−5s / +5s, frame-accurate) per error into
+// %USERPROFILE%\Downloads\<subfolder>. `clips` = [{ "ts": <sec>, "name": <file> }].
+#[command]
+async fn cut_clips(
+    app: tauri::AppHandle,
+    video_path: String,
+    subfolder: String,
+    clips: Vec<serde_json::Value>,
+) -> Result<Vec<String>, String> {
+    let ffmpeg = resolve_ffmpeg(&app);
+
+    let userprofile = std::env::var("USERPROFILE")
+        .map_err(|_| "Could not locate your Downloads folder.".to_string())?;
+    let out_dir = std::path::PathBuf::from(userprofile)
+        .join("Downloads")
+        .join(&subfolder);
+    std::fs::create_dir_all(&out_dir)
+        .map_err(|e| format!("Could not create clip folder: {}", e))?;
+
+    let mut written: Vec<String> = Vec::new();
+    for c in &clips {
+        let ts = c.get("ts").and_then(|v| v.as_f64()).unwrap_or(0.0);
+        let name = c
+            .get("name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("clip.mp4")
+            .to_string();
+
+        // Fast input-seek near the start, then accurate output-seek the small
+        // remainder → frame-accurate without decoding from 0. Clip starts 5s
+        // before the error and runs 10s (clamped at the video start).
+        let start = (ts - 5.0).max(0.0);
+        let in_seek = (start - 3.0).max(0.0);
+        let out_seek = start - in_seek;
+
+        let in_s = format!("{:.3}", in_seek);
+        let out_s = format!("{:.3}", out_seek);
+        let out_p = out_dir.join(&name).to_string_lossy().to_string();
+
+        let args: Vec<&str> = vec![
+            "-y",
+            "-ss", &in_s,
+            "-i", &video_path,
+            "-ss", &out_s,
+            "-t", "10",
+            "-c:v", "libx264",
+            "-preset", "veryfast",
+            "-crf", "20",
+            "-c:a", "aac",
+            "-movflags", "+faststart",
+            &out_p,
+        ];
+
+        let status = tokio::process::Command::new(&ffmpeg)
+            .args(&args)
+            .status()
+            .await
+            .map_err(|e| format!("Could not run ffmpeg ({}). Is it bundled?", e))?;
+
+        if status.success() {
+            written.push(name);
+        } else {
+            return Err(format!("ffmpeg failed on clip '{}'.", name));
+        }
+    }
+    Ok(written)
+}
+
+
 // --- Google Sheets API via Service Account JWT --------------------------------
 const SA_CLIENT_EMAIL: &str = "mark-reporter@mark-app-498618.iam.gserviceaccount.com";
 const SA_PRIVATE_KEY: &str = "-----BEGIN PRIVATE KEY-----\nMIIEvAIBADANBgkqhkiG9w0BAQEFAASCBKYwggSiAgEAAoIBAQDppEco89tq/jUH\nn7Krqf15QeKUnw03Js9FwLaaocMAtpgtvG0cP3sBBFQkhEAsDLVh1m69jRAKZcN2\n1FOShXhhmlxggl4Z8fkJF+fUqQyPGTtCm9BeeKlDpfNBuWSznQl+gIIn4Gn0YInY\nI0LC0E2umQFNxf7kIhV1D14Ymwn3MmpdXMFjp0kg3odSmp4jwc9by+IVS8GjdctW\nVrOLkxM8wzKi0cMFYtBXJVIRdm6IIxJwyHPVPkyNyYBJARifdy63D71ubfnLCXvq\n5dhyr/ViX8vnzBFLkYDGHss9Uy4r3CymSnfwSSJng0wWtK8MIIQVJEcEpRaL2uk2\n49JhfZ4JAgMBAAECggEABRUOpYsnwMwj9/+8ZE63uwwYwz4Hd1A9ONRK6eeuunn+\nVZuwQumgQcLSmBMWuJk+gSY9NUXXgru5H1avNQl5YiQjB3K73HQemZj0cR7hQqPx\nnaQOibOLDl6SgUw+BB3cdOzo3Thc4v+OQrjs95hjjDKmAYdW9qbwJmJNxsVpQirY\nW3KrQtMDsrw6afuai8CWSlrA6ucKSf1t1XflG6565ZkjnP1NlueTJ1ojK5eeVac9\nnMrn0jLQ4/JCBSZBr7x3KAHLQX6e8929V08X3ObnT1HVyWfzfYQmMOgJA7P/TwG9\nahtRTCktZ4PynDBtVSVMs/3rLxw6qHCi8tZ0eNc5IQKBgQD10Q/ZAkH34jShCwcF\nbQ94Twrri7LcgYtInE5H5anikdT6hRgXXugHYn5S0T0Zsf0QK3l9Zee2bN6ugDjq\nZCqAr4aEqyK+VL+jSODgx9dHngRRSozrZKvr0av3FGkj0ZU1O3X6hwThyfN0RX+W\nO7yL/VFuQyTWpuwg/H7Ki513sQKBgQDzUhknBgwMnfTrnS+gq7f5Wg2boRWXRB2x\nADSzu+SgdFVFySFYpipxwUGjONbkZz88hac0IWC3bDUno1nBj0x1rXU2Mm2s5XTF\nwPaOOjg4SNQD05mz5Grk/aBKYe1nxq/xS1zVvIEhvR5yy9u9O3vOFHMdxH6ZptYj\n83Md1xj52QKBgFuXSSNfnvrg0yFKPZR8/W2jbfsz8zIMJryoWNabMUCVe9jYbJCQ\nsT3HKjBrfCut0RAMUtkxdjPXvuUgK5TSO6/1NtcJ+QkYBMuvZPL8Iy+xJgSwFW/D\n8/cLCdsnRMGu3ryV6jCtzFjg6ZBiMNbmbStv+L5v0DMWwRbNXeTUPpkRAoGAYDcX\noRnADAEuBzlJyxP8FMrqVJ8XBZC22PYG4QeseVJnIchNultCr2bHCL8CIqE9HTaQ\njomgUAem4Tyz0llS17m2fq7kNZkqWsRZ+pXFA2SxCa5TuhHZvyEXkDI3CXFEw3qU\nhCQdP/UjpCs+gg6Sf0QQ3TWFBkc1qFOtMqCKzMkCgYBmPGzmQ2xGEa/b4PnIrblR\nM2Y4e9zCEV6hc/37qy0LJIpe0iZTUPMd8pIyNtZXVWFDsJ/U3ai3zUKCYAJAGct8\nZHnLFBl8rjsWB7woJk6LdVeYItgU/jVAw54n5PwEaajFvZO15q1zsAOjhj/vmksi\nQIGusOLsrprvflY8YpinSQ==\n-----END PRIVATE KEY-----\n";
@@ -1187,6 +1282,7 @@ fn main() {
             google_oauth_sign_in,
             google_oauth_refresh,
             drive_create_sheet,
+            cut_clips,
             get_video_url,
             open_file,
             create_google_sheet,
