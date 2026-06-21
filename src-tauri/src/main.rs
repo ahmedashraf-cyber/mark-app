@@ -23,6 +23,13 @@ use tauri::command;
 use futures_util::{SinkExt, StreamExt};
 use tokio::net::TcpListener;
 use tokio_tungstenite::accept_async;
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
+
+// Windows process flag: spawn child processes (ffmpeg, powershell, rundll32)
+// WITHOUT creating/attaching a console window, so no cmd windows flash on screen.
+#[cfg(target_os = "windows")]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 const BRIDGE_SCRIPT: &str = include_str!("bridge_script.js");
 
@@ -746,9 +753,11 @@ fn open_file(path: String) -> Result<(), String> {
                 .map_err(|e| format!("Failed to open URL: {}", e))?;
         } else {
             // Open file with default app via PowerShell
-            std::process::Command::new("powershell")
-                .args(["-NoProfile", "-Command", &format!("Invoke-Item '{}'", path.replace('\'', "''"))])
-                .spawn()
+            let mut cmd = std::process::Command::new("powershell");
+            cmd.args(["-NoProfile", "-Command", &format!("Invoke-Item '{}'", path.replace('\'', "''"))]);
+            #[cfg(target_os = "windows")]
+            cmd.creation_flags(CREATE_NO_WINDOW);
+            cmd.spawn()
                 .map_err(|e| format!("Failed to open file: {}", e))?;
         }
     }
@@ -1022,8 +1031,11 @@ async fn cut_clips(
             &out_p,
         ];
 
-        let status = tokio::process::Command::new(&ffmpeg)
-            .args(&args)
+        let mut cmd = tokio::process::Command::new(&ffmpeg);
+        cmd.args(&args);
+        #[cfg(target_os = "windows")]
+        cmd.creation_flags(CREATE_NO_WINDOW);
+        let status = cmd
             .status()
             .await
             .map_err(|e| format!("Could not run ffmpeg ({}). Is it bundled?", e))?;
