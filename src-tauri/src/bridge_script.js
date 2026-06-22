@@ -209,7 +209,17 @@
     }
 
     else if (msg.type === 'getQAResults') {
-      // QA Audit mode — read Apollo cache for base events + amendments up to current video time
+      // QA Audit mode — refresh the cache from the server FIRST (it's a stale snapshot;
+      // live reviewer edits only re-enter Apollo on a fetch), wait, then read & score.
+      (async () => {
+        try {
+          const ac = window.apollo && window.apollo.client;
+          if (ac && typeof ac.refetchQueries === 'function') await ac.refetchQueries({ include: 'active' });
+          else if (ac && typeof ac.reFetchObservableQueries === 'function') await ac.reFetchObservableQueries();
+        } catch (refErr) {
+          console.warn('[MARK] QA refetch failed, using cached data:', refErr && refErr.message);
+        }
+        await new Promise(r => setTimeout(r, 3000));
       try {
         const endTs = video.currentTime * 1000; // ms
         const matchId = msg.matchId;
@@ -254,6 +264,19 @@
         const topBase = Object.entries(baseAuthorCounts).sort((a,b) => b[1]-a[1])[0]?.[0];
         collectorIdNum = topBase != null ? parseInt(topBase) : null;
 
+        // Per-author change tally (Rule 2/3): amendments authored in this half.
+        // A reviewer must have made at least one change — Rule 3: a Viewed-Event
+        // author with zero edits/adds is a playthrough, NOT a reviewer.
+        const changeCounts = {};
+        Object.values(cache).forEach(v => {
+          if (!v || v.__typename !== 'Event') return;
+          if (v.matchId !== numMatchId && v.matchId !== String(numMatchId)) return;
+          if (partId && v.partId !== partId) return;
+          if (v.category === 'amendment') changeCounts[v.author] = (changeCounts[v.author] || 0) + 1;
+        });
+        // base events authored by a non-collector = added (missed) events, also count as a change
+        const hasChange = a => (changeCounts[a] || 0) > 0 || (baseAuthorCounts[a] || 0) > 0;
+
         try {
           const telemetryAll = Object.values(cache).filter(v =>
             v.__typename === 'Event' && v.category === 'telemetry' &&
@@ -261,8 +284,11 @@
             v.type === 'event-activation' && (!partId || v.partId === partId)
           );
 
-          // Reviewers = telemetry (Viewed-Event) authors, excluding the main collector
-          reviewerIds = [...new Set(telemetryAll.map(t => t.author))].filter(a => a !== collectorIdNum);
+          // Rule 1 (Viewed Event) + Rule 3 (must have made >=1 edit/add), excluding
+          // the main collector. Drops playthrough viewers who opened events but
+          // changed nothing.
+          reviewerIds = [...new Set(telemetryAll.map(t => t.author))]
+            .filter(a => a !== collectorIdNum && hasChange(a));
           const reviewerSet = new Set(reviewerIds);
 
           // Reviewed events = distinct base events a reviewer OPENED (telemetry key === base key)
@@ -395,6 +421,7 @@
         console.error('[MARK] getQAResults error:', e);
         ws.send(JSON.stringify({ type: 'qaResultsResponse', error: e.message, ts: Date.now() }));
       }
+      })();
     }
   }
 

@@ -582,6 +582,8 @@ export default function AuditPage({ session, onBack, onFullReport }) {
       const reviewerIds = (data.reviewerIds && data.reviewerIds.length)
         ? data.reviewerIds
         : (data.reviewerId != null ? [data.reviewerId] : [])
+      // Normalize so QuickSummary, the table, and the score all read the SAME list
+      data.reviewerIds = reviewerIds
 
       // Calculate score — errors = reviewer edits/deletions + reviewer-added misses
       const errorKeys = computeErrorKeys(data.baseEvents, data.amendments, reviewerIds)
