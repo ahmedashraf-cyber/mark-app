@@ -36,6 +36,7 @@ import TaggedEventsList from '../components/TaggedEventsList'
 import ErrorTimeline from '../components/ErrorTimeline'
 import EventsSidebar from '../components/EventsSidebar'
 import { exportSessionToXlsx } from '../utils/exportSession'
+import { formatHalf } from '../utils/half.js'
 
 export default function ReviewPage({ session, onDone, onBack, bridgeSyncStatus, onBridgeSyncStatus }) {
   const { profile } = useAuth()
@@ -396,7 +397,7 @@ export default function ReviewPage({ session, onDone, onBack, bridgeSyncStatus, 
           <div style={{width:1,height:20,background:'var(--b-1)'}}/>
           <div>
             <div style={{fontSize:13,fontWeight:700,color:'var(--t-1)'}}>{session.matchName}</div>
-            <div style={{fontSize:11,color:'var(--t-3)'}}>{session.half} · {session.matchDate || ''}</div>
+            <div style={{fontSize:11,color:'var(--t-3)'}}>{formatHalf(session.half)} · {session.matchDate || ''}</div>
           </div>
         </div>
         <div style={{display:'flex',alignItems:'center',gap:12}}>

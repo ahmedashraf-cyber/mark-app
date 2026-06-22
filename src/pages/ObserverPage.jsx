@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { db } from '../firebase/config'
 import { collection, query, where, onSnapshot, doc } from 'firebase/firestore'
+import { formatHalf } from '../utils/half.js'
 
 function fmtVideo(s) {
   if (!isFinite(s) || isNaN(s)) return '0:00'
@@ -69,7 +70,7 @@ export default function ObserverPage({ session, onBack }) {
 
         <div style={{ flex: 1, minWidth: 0 }}>
           <span style={{ fontFamily: 'Inter', fontWeight: 800, fontSize: 13, color: 'var(--t-1)' }}>{session.matchName}</span>
-          <span style={{ fontSize: 11, color: 'var(--t-3)', marginLeft: 8 }}>{session.half}</span>
+          <span style={{ fontSize: 11, color: 'var(--t-3)', marginLeft: 8 }}>{formatHalf(session.half)}</span>
         </div>
 
         <span style={{

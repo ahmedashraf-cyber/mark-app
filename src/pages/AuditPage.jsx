@@ -4,6 +4,7 @@ import { db } from '../firebase/config'
 import { collection, addDoc, serverTimestamp, getDocs, query, where } from 'firebase/firestore'
 import { useAuth } from '../hooks/useAuth.jsx'
 import { useSync } from '../hooks/useSync.js'
+import { formatHalf } from '../utils/half.js'
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 const fmt = (s) => {
@@ -424,7 +425,7 @@ function AmendmentsTable({ results, session, reviewerIds }) {
     const csvRows = rows.map(r => [
       session.matchId,
       session.matchName,
-      session.half,
+      formatHalf(session.half),
       r.timestamp,
       r.eventName,
       r.teamId,
@@ -442,7 +443,8 @@ function AmendmentsTable({ results, session, reviewerIds }) {
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = `amendments_${session.matchId}_${session.half}_${Date.now()}.csv`
+    const safe = (s) => String(s ?? '').replace(/[\\/:*?"<>|]/g, '').trim()
+    a.download = `${safe(session.matchId)} - ${safe(session.matchName)} - ${formatHalf(session.half)}.csv`
     a.click()
     URL.revokeObjectURL(url)
   }
@@ -706,7 +708,7 @@ export default function AuditPage({ session, onBack, onFullReport }) {
             {session.matchName}
           </span>
           <span style={{ fontSize: 11, color: 'var(--t-3)', marginLeft: 10 }}>
-            {session.half} · Audit
+            {formatHalf(session.half)} · Audit
           </span>
         </div>
 
@@ -866,34 +868,6 @@ export default function AuditPage({ session, onBack, onFullReport }) {
                 abcScores={abcScores}
                 onFullReport={() => onFullReport(results, score, session)}
               />
-              {results.diagnostics && (
-                <div style={{
-                  marginTop: 10, padding: '10px 12px', borderRadius: 10,
-                  background: 'rgba(255,255,255,0.03)', border: '1px solid var(--border)',
-                  fontFamily: 'JetBrains Mono, monospace', fontSize: 10, color: 'var(--t-3)', lineHeight: 1.7,
-                }}>
-                  <div style={{ color: 'var(--t-2)', fontWeight: 700, marginBottom: 4, letterSpacing: 0.5 }}>
-                    REVIEWER DETECTION ({results.diagnostics.reviewerMethod})
-                  </div>
-                  <div>Counting edits by reviewer(s)&nbsp;
-                    <span style={{ color: 'var(--p2)', fontWeight: 700 }}>
-                      {(results.reviewerIds && results.reviewerIds.length
-                        ? results.reviewerIds
-                        : (results.reviewerId != null ? [results.reviewerId] : []))
-                        .map(id => `#${id}`).join(', ') || '—'}
-                    </span>.
-                  </div>
-                  <div>viewed-by (telemetry), earliest first:&nbsp;
-                    {results.diagnostics.telemetry.map(t => `#${t.author}(${t.views})`).join('  ') || '—'}
-                  </div>
-                  <div>edit authors:&nbsp;
-                    {results.diagnostics.amendmentAuthors.map(a => `#${a.author}(${a.count})`).join('  ') || '—'}
-                  </div>
-                  <div>base/collector authors:&nbsp;
-                    {results.diagnostics.baseAuthors.map(a => `#${a.author}(${a.count})`).join('  ') || '—'}
-                  </div>
-                </div>
-              )}
               <AmendmentsTable results={results} session={session} reviewerIds={results.reviewerIds || (results.reviewerId != null ? [results.reviewerId] : [])} />
             </>
           )}

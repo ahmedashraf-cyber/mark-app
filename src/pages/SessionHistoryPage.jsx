@@ -31,6 +31,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { exportSessionToXlsx, exportSessionToUserDrive } from '../utils/exportSession'
 import { EXTRAS, GK_EXTRAS, GK_WRONG_EXTRAS } from '../components/TagPanel'
 import { SPEED_MIN, SPEED_MAX, SPEED_STEP } from '../data/shortcuts'
+import { formatHalf } from '../utils/half.js'
 
 // ------ Helpers ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 const fmt = (s) => {
@@ -454,7 +455,7 @@ function MatchReport({ session, tags, onBack }) {
             {session.matchName}
           </span>
           <span style={{ fontSize: 11, color: 'var(--t-3)', marginLeft: 10 }}>
-            {session.half} -- {date}
+            {formatHalf(session.half)} -- {date}
           </span>
         </div>
         {!videoLoaded && (
@@ -654,7 +655,7 @@ function SessionCard({ session, onReview, onExport, onExportSheets, loading, isA
         <div style={{ display:'flex', alignItems:'center', gap:6, fontSize:10, color:'var(--t-3)', flexWrap:'wrap' }}>
           <span style={{ fontFamily:'JetBrains Mono, monospace', color:'var(--p2)', fontWeight:600, fontSize:9 }}>{session.matchId}</span>
           <span style={{ color:'var(--b-2)' }}>·</span>
-          <span>{session.half}</span>
+          <span>{formatHalf(session.half)}</span>
           <span style={{ color:'var(--b-2)' }}>·</span>
           <span>{date}</span>
           {isAdmin && session.reviewerEmail && (

@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { invoke } from '@tauri-apps/api/core'
+import { formatHalf } from '../utils/half.js'
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 const fmt = (s) => {
@@ -381,7 +382,7 @@ export default function AuditReportPage({ results, score, session, onBack }) {
             Audit Report
           </span>
           <span style={{ fontSize:11, color:'var(--t-3)', marginLeft:10 }}>
-            {session.matchName} · {session.half}
+            {session.matchName} · {formatHalf(session.half)}
           </span>
         </div>
 
@@ -446,7 +447,7 @@ export default function AuditReportPage({ results, score, session, onBack }) {
                 <div style={{ fontSize:10, fontWeight:800, color:'var(--t-3)', letterSpacing:1.2, marginBottom:14 }}>SESSION INFO</div>
                 {[
                   { label:'Match',    value:session.matchName },
-                  { label:'Half',     value:session.half },
+                  { label:'Half',     value:formatHalf(session.half) },
                   { label:'Match ID', value:session.matchId },
                   { label:'Collector ID', value:String(results.collectorId||'—') },
                   { label:'Reviewer ID',  value:String(results.reviewerId||'—') },

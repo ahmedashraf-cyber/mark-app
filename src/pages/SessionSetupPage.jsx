@@ -4,6 +4,7 @@ import { collection, query, where, getDocs, doc, setDoc, getDoc, serverTimestamp
 import { useAuth } from '../hooks/useAuth.jsx'
 import { useAdmin } from '../hooks/useAdmin.js'
 import { CURRENT_VERSION } from '../hooks/useUpdateCheck'
+import { HALVES, formatHalf } from '../utils/half.js'
 
 const SHEETS_API_KEY   = 'AIzaSyDEO-0MZ4-LOdIJ7aIyscgmLWGN5h8MpNI'
 const MATCHES_SHEET_ID = '1zoh7CmoQKPMLGBEklHXznG1Y8xBS-iuu0phRWn8-wXc'
@@ -141,13 +142,6 @@ async function fetchMatchesFromSheet() {
   console.log('[MARK] Parsed matches:', result.length, '| First:', result[0])
   return result
 }
-
-const HALVES = [
-  { id: '1H', label: '1st Half' },
-  { id: '2H', label: '2nd Half' },
-  { id: 'ET1', label: 'Extra Time 1' },
-  { id: 'ET2', label: 'Extra Time 2' },
-]
 
 export default function SessionSetupPage({ onSessionStart, lastResult, onShowHistory, onWatchSession }) {
   const { profile, logout } = useAuth()
@@ -770,7 +764,7 @@ export default function SessionSetupPage({ onSessionStart, lastResult, onShowHis
                     </div>
                     <div style={{display:'flex',alignItems:'center',gap:5,fontSize:9,color:'var(--t-3)'}}>
                       <span style={{padding:'1px 5px',borderRadius:4,fontWeight:700,fontSize:8,background:isAudit?'rgba(10,132,255,0.12)':'rgba(232,89,12,0.12)',color:isAudit?'#0A84FF':'var(--p2)',border:`1px solid ${isAudit?'rgba(10,132,255,0.2)':'rgba(232,89,12,0.2)'}`}}>{isAudit?'AUDIT':'SCOUT'}</span>
-                      <span>{s.half}</span>
+                      <span>{formatHalf(s.half)}</span>
                       {isLive ? (
                         <><span>·</span><span style={{color:'#FF3B30',fontWeight:700}}>LIVE</span>{reviewer && <><span>·</span><span>{reviewer}</span></>}</>
                       ) : (
