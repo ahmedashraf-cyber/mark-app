@@ -223,65 +223,61 @@
         const numMatchId = typeof matchId === 'string' ? parseInt(matchId) : matchId;
         const EXCLUDED = ['starting-xi', 'half-start', 'squad'];
 
-        // ── Method 1: Telemetry-based (primary — exact) ──────────────────────
-        // Uses event-activation telemetry to find exactly which events the reviewer viewed
+        // ── Method 1: Telemetry-based (primary — EXACT opened events) ─────────
+        // Reviewers = "Viewed Event" authors (event-activation telemetry), minus
+        // the main collector. Reviewed events = the exact distinct events those
+        // reviewers OPENED (telemetry key === base key). No fuzzy time-matching.
         let baseEvents = [];
         let usedTelemetry = false;
+        let reviewerIds = [];
+        let collectorIdNum = null;
+
+        // All base events in this half (the universe)
+        const seenUniverse = new Set();
+        const allBase = Object.values(cache).filter(v => {
+          if (v.__typename !== 'Event') return false;
+          if (v.matchId !== numMatchId && v.matchId !== String(numMatchId)) return false;
+          if (v.category !== 'base') return false;
+          if (!v.payload || typeof v.payload.videoTimestamp !== 'number') return false;
+          if (v.payload.videoTimestamp <= 0) return false;
+          if (EXCLUDED.includes(v.payload.name)) return false;
+          if (partId && v.partId !== partId) return false;
+          if (seenUniverse.has(v.key)) return false;
+          seenUniverse.add(v.key);
+          return true;
+        });
+        const universeKeys = new Set(allBase.map(v => v.key));
+
+        // Main collector = author of the most base events
+        const baseAuthorCounts = {};
+        allBase.forEach(v => { baseAuthorCounts[v.author] = (baseAuthorCounts[v.author] || 0) + 1; });
+        const topBase = Object.entries(baseAuthorCounts).sort((a,b) => b[1]-a[1])[0]?.[0];
+        collectorIdNum = topBase != null ? parseInt(topBase) : null;
 
         try {
-          // Find reviewer author from telemetry events
           const telemetryAll = Object.values(cache).filter(v =>
             v.__typename === 'Event' && v.category === 'telemetry' &&
-            v.matchId === numMatchId && v.type === 'event-activation' &&
-            (!partId || v.partId === partId)
+            (v.matchId === numMatchId || v.matchId === String(numMatchId)) &&
+            v.type === 'event-activation' && (!partId || v.partId === partId)
           );
 
-          if (telemetryAll.length > 0) {
-            // Reviewer is the author of telemetry events
-            const reviewerAuthorId = telemetryAll[0].author;
+          // Reviewers = telemetry (Viewed-Event) authors, excluding the main collector
+          reviewerIds = [...new Set(telemetryAll.map(t => t.author))].filter(a => a !== collectorIdNum);
+          const reviewerSet = new Set(reviewerIds);
 
-            // Collect all video timestamps the reviewer was at
-            const viewedTs = new Set();
-            telemetryAll.filter(t => t.author === reviewerAuthorId).forEach(t => {
-              (t.payload.videoTimestamps || []).forEach(vt => {
-                viewedTs.add(vt.from);
-                viewedTs.add(vt.to);
-              });
-            });
+          // Reviewed events = distinct base events a reviewer OPENED (telemetry key === base key)
+          const openedKeys = new Set(
+            telemetryAll.filter(t => reviewerSet.has(t.author) && universeKeys.has(t.key)).map(t => t.key)
+          );
 
-            if (viewedTs.size > 0) {
-              // All base events in this half
-              const seenBase = new Set();
-              const allBase = Object.values(cache).filter(v => {
-                if (v.__typename !== 'Event') return false;
-                if (v.matchId !== numMatchId && v.matchId !== String(numMatchId)) return false;
-                if (v.category !== 'base') return false;
-                if (!v.payload || typeof v.payload.videoTimestamp !== 'number') return false;
-                if (v.payload.videoTimestamp <= 0) return false;
-                if (EXCLUDED.includes(v.payload.name)) return false;
-                if (partId && v.partId !== partId) return false;
-                if (seenBase.has(v.key)) return false;
-                seenBase.add(v.key);
-                return true;
-              });
+          baseEvents = allBase.filter(v => openedKeys.has(v.key)).map(v => ({
+            id: v.id, key: v.key, name: v.payload.name,
+            videoTimestamp: v.payload.videoTimestamp,
+            teamId: v.payload.teamId, author: v.author,
+            capturedTime: v.capturedTime,
+          }));
 
-              // Match base events to viewed timestamps (within 500ms — avg gap is 674ms)
-              baseEvents = allBase.filter(e => {
-                const ts = e.payload.videoTimestamp;
-                for (const vt of viewedTs) {
-                  if (Math.abs(vt - ts) <= 500) return true;
-                }
-                return false;
-              }).map(v => ({
-                id: v.id, key: v.key, name: v.payload.name,
-                videoTimestamp: v.payload.videoTimestamp,
-                teamId: v.payload.teamId, author: v.author,
-                capturedTime: v.capturedTime,
-              }));
-
-              if (baseEvents.length > 0) usedTelemetry = true;
-            }
-          }
+          if (baseEvents.length > 0) usedTelemetry = true;
         } catch(telErr) {
           console.warn('[MARK] telemetry method failed:', telErr);
         }
@@ -331,24 +327,19 @@
           if (baseByKey[a.key]) a.originalName = baseByKey[a.key].name;
         });
 
-        // Get collector ID = most common author of base events
-        const authorCounts = {};
-        baseEvents.forEach(e => { authorCounts[e.author] = (authorCounts[e.author] || 0) + 1; });
-        const collectorId = Object.entries(authorCounts).sort((a,b) => b[1]-a[1])[0]?.[0];
-        const collectorIdNum = collectorId ? parseInt(collectorId) : null;
+        // collectorIdNum (top base author) and reviewerIds (Viewed-Event telemetry
+        // authors minus the collector) were computed in Method 1. Here we add a
+        // no-telemetry fallback and build the read-only diagnostics so the picks
+        // can be verified by eye.
+        const collectorId = collectorIdNum != null ? String(collectorIdNum) : null;
 
-        // ── Reviewers = "viewed-by" people (event-activation telemetry authors)
-        //    who ALSO make edits and are NOT the main base collector. A match can
-        //    be reviewed by more than one person (or re-reviewed later), so we
-        //    keep ALL of them and count every reviewer's edits. Collectors don't
-        //    generate event-activation telemetry, so this excludes their own
-        //    self-amendments. ───────────────────────────────────────────────────
         const toMs = (c) => {
           if (c == null) return 0;
           const n = Number(c); if (!isNaN(n) && n > 0) return n;
           const d = new Date(c).getTime(); return isNaN(d) ? 0 : d;
         };
-        const amendmentAuthors = new Set(amendments.map(a => a.author));
+
+        // Telemetry breakdown per author (views + first view time) for diagnostics
         const telemetryEvents = Object.values(cache).filter(v =>
           v.__typename === 'Event' && v.category === 'telemetry' &&
           (v.matchId === numMatchId || v.matchId === String(numMatchId)) &&
@@ -363,30 +354,27 @@
         });
         const telSorted = Object.values(telByAuthor).sort((x,y) => x.firstTs - y.firstTs);
 
-        // All reviewers (earliest viewer first), excluding the main base collector.
-        let reviewerIds = telSorted
-          .filter(t => amendmentAuthors.has(t.author) && t.author !== collectorIdNum)
-          .map(t => t.author);
-        let reviewerMethod = reviewerIds.length ? 'viewedby+edits' : 'none';
-        // Fallback (no telemetry, or no viewer made edits): most frequent
-        // non-collector editor — the previous heuristic.
+        let reviewerMethod = reviewerIds.length ? 'viewed-event' : 'none';
+        // Fallback (no telemetry at all): most frequent non-collector editor.
         if (reviewerIds.length === 0) {
           const reviewerCounts = {};
           amendments.forEach(a => { if (a.author !== collectorIdNum) reviewerCounts[a.author] = (reviewerCounts[a.author]||0)+1; });
           const top = Object.entries(reviewerCounts).sort((a,b) => b[1]-a[1])[0]?.[0];
           if (top != null) { reviewerIds = [parseInt(top)]; reviewerMethod = 'fallback-freq'; }
         }
-        const reviewerId = reviewerIds.length ? reviewerIds[0] : null; // primary (earliest), for display/back-compat
+        const reviewerId = reviewerIds.length ? reviewerIds[0] : null; // primary, for display/back-compat
 
-        // Diagnostics (read-only) so the reviewer pick can be verified by eye.
+        // Diagnostics (read-only) so the picks can be verified by eye.
         const amendAuthorCounts = {};
         amendments.forEach(a => { amendAuthorCounts[a.author] = (amendAuthorCounts[a.author]||0)+1; });
         const diagnostics = {
           reviewerMethod,
           reviewerIds,
+          universeBase:     allBase.length,
+          reviewed:         baseEvents.length,
           telemetry:        telSorted.map(t => ({ author: t.author, views: t.views, firstTs: (t.firstTs === Infinity ? 0 : t.firstTs) })),
           amendmentAuthors: Object.entries(amendAuthorCounts).map(([author,count]) => ({ author: parseInt(author), count })),
-          baseAuthors:      Object.entries(authorCounts).map(([author,count]) => ({ author: parseInt(author), count })),
+          baseAuthors:      Object.entries(baseAuthorCounts).map(([author,count]) => ({ author: parseInt(author), count })),
         };
 
         ws.send(JSON.stringify({

@@ -170,7 +170,7 @@ function ScoreCard({ label, score, reviewed, edited, color, isOverall = false })
 function QuickSummary({ results, score, abcScores, onFullReport }) {
   const types = {}
   results.amendments.forEach(a => { types[a.type] = (types[a.type] || 0) + 1 })
-  const uniqueEdited = new Set(results.amendments.map(a => a.key)).size
+  const uniqueEdited = computeErrorKeys(results.baseEvents, results.amendments, results.reviewerIds).size
 
   return (
     <div className="scale-in" style={{
@@ -195,7 +195,7 @@ function QuickSummary({ results, score, abcScores, onFullReport }) {
       }}>
         {[
           { label: 'REVIEWED', value: results.baseEvents.length, color: 'var(--t-1)' },
-          { label: 'EDITED',   value: uniqueEdited,              color: '#FF453A' },
+          { label: 'ERRORS',   value: uniqueEdited,              color: '#FF453A' },
           { label: 'UP TO',    value: fmt(results.videoTime),     color: 'var(--p2)' },
         ].map(s => (
           <div key={s.label} style={{ display: 'flex', alignItems: 'baseline', gap: 5 }}>
@@ -272,6 +272,21 @@ function filterAmendments(amendments, reviewerIds) {
   return amendments.filter(a => set.has(Number(a.author)))
 }
 
+// Error events = reviewed events where a reviewer made a change, counted once
+// per event key:
+//   • a reviewer EDIT or DELETION  → amendment authored by a reviewer, OR
+//   • a reviewer-ADDED event       → the collector missed it; the base event
+//                                     itself is authored by a reviewer.
+// This Set is the numerator behind every score.
+function computeErrorKeys(baseEvents, amendments, reviewerIds) {
+  const set = new Set((reviewerIds || []).map(Number))
+  const errs = new Set()
+  if (set.size === 0) return errs
+  ;(baseEvents || []).forEach(e => { if (set.has(Number(e.author))) errs.add(e.key) })
+  ;(amendments || []).forEach(a => { if (set.has(Number(a.author))) errs.add(a.key) })
+  return errs
+}
+
 function calcGroupScore(group, baseEvents, amendments, refinements, reviewerIds) {
   // Find base events belonging to this group
   const groupBase = baseEvents.filter(e => {
@@ -281,11 +296,12 @@ function calcGroupScore(group, baseEvents, amendments, refinements, reviewerIds)
   if (groupBase.length === 0) return { score: null, reviewed: 0, edited: 0 }
 
   const groupKeys = new Set(groupBase.map(e => e.key))
-  const validAmends = filterAmendments(
+  const errorKeys = computeErrorKeys(
+    groupBase,
     amendments.filter(a => groupKeys.has(a.key)),
     reviewerIds
   )
-  const uniqueEdited = new Set(validAmends.map(a => a.key)).size
+  const uniqueEdited = errorKeys.size
   const score = Math.round(((groupBase.length - uniqueEdited) / groupBase.length) * 100)
   return { score, reviewed: groupBase.length, edited: uniqueEdited }
 }
@@ -331,6 +347,14 @@ function AmendmentsTable({ results, session, reviewerIds }) {
     byKey[a.key].push(a)
   })
 
+  // Include reviewer-ADDED events (collector missed them) that have no amendment,
+  // so the table shows every error event the score counts.
+  baseEvents.forEach(e => {
+    if (reviewerSet.has(Number(e.author)) && !byKey[e.key]) {
+      byKey[e.key] = [{ key: e.key, type: 'added', author: e.author, capturedTime: e.capturedTime, payload: {} }]
+    }
+  })
+
   // Helper: extract clean value from fields object (values only, no keys)
   function cleanFields(fields) {
     if (!fields) return '—'
@@ -367,6 +391,9 @@ function AmendmentsTable({ results, session, reviewerIds }) {
     } else if (mainAmend.type === 'camera') {
       before = '—'
       after = mainAmend.payload?.name || cleanFields(mainAmend.payload?.fields)
+    } else if (mainAmend.type === 'added') {
+      before = '—'
+      after = 'Added (missed)'
     }
 
     const collectorId = base?.author || '—'
@@ -556,9 +583,9 @@ export default function AuditPage({ session, onBack, onFullReport }) {
         ? data.reviewerIds
         : (data.reviewerId != null ? [data.reviewerId] : [])
 
-      // Calculate score
-      const validAmendments = filterAmendments(data.amendments, reviewerIds)
-      const uniqueEdited = new Set(validAmendments.map(a => a.key)).size
+      // Calculate score — errors = reviewer edits/deletions + reviewer-added misses
+      const errorKeys = computeErrorKeys(data.baseEvents, data.amendments, reviewerIds)
+      const uniqueEdited = errorKeys.size
       const total = data.baseEvents.length
       const q = total > 0 ? Math.round(((total - uniqueEdited) / total) * 100) : 0
 
@@ -600,7 +627,7 @@ export default function AuditPage({ session, onBack, onFullReport }) {
         ? data.reviewerIds
         : (data.reviewerId != null ? [data.reviewerId] : [])
       const reviewerAmends = filterAmendments(data.amendments, reviewerIds)
-      const uniqueEdited = new Set(reviewerAmends.map(a => a.key)).size
+      const uniqueEdited = computeErrorKeys(data.baseEvents, data.amendments, reviewerIds).size
       const types = {}
       reviewerAmends.forEach(a => { types[a.type] = (types[a.type] || 0) + 1 })
 
