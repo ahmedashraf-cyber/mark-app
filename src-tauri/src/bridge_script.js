@@ -337,15 +337,54 @@
         const collectorId = Object.entries(authorCounts).sort((a,b) => b[1]-a[1])[0]?.[0];
         const collectorIdNum = collectorId ? parseInt(collectorId) : null;
 
-        // Get reviewer ID = most common amendment author who is NOT the collector
-        const reviewerCounts = {};
-        amendments.forEach(a => {
-          if (a.author !== collectorIdNum) {
-            reviewerCounts[a.author] = (reviewerCounts[a.author] || 0) + 1;
-          }
+        // ── Real reviewer = the "viewed-by" person (event-activation telemetry
+        //    author) who ALSO makes edits. Collectors may view too, so take the
+        //    EARLIEST such author by capturedTime. Only this person's edits count
+        //    as errors — every other author is treated as a collector. ─────────
+        const toMs = (c) => {
+          if (c == null) return 0;
+          const n = Number(c); if (!isNaN(n) && n > 0) return n;
+          const d = new Date(c).getTime(); return isNaN(d) ? 0 : d;
+        };
+        const amendmentAuthors = new Set(amendments.map(a => a.author));
+        const telemetryEvents = Object.values(cache).filter(v =>
+          v.__typename === 'Event' && v.category === 'telemetry' &&
+          (v.matchId === numMatchId || v.matchId === String(numMatchId)) &&
+          v.type === 'event-activation' && (!partId || v.partId === partId)
+        );
+        const telByAuthor = {};
+        telemetryEvents.forEach(t => {
+          const ts = toMs(t.capturedTime);
+          if (!telByAuthor[t.author]) telByAuthor[t.author] = { author: t.author, views: 0, firstTs: ts || Infinity };
+          telByAuthor[t.author].views++;
+          if (ts && ts < telByAuthor[t.author].firstTs) telByAuthor[t.author].firstTs = ts;
         });
-        const reviewerIdNum = Object.entries(reviewerCounts).sort((a,b) => b[1]-a[1])[0]?.[0];
-        const reviewerId = reviewerIdNum ? parseInt(reviewerIdNum) : null;
+        const telSorted = Object.values(telByAuthor).sort((x,y) => x.firstTs - y.firstTs);
+
+        let reviewerId = null;
+        let reviewerMethod = 'none';
+        for (const t of telSorted) {
+          if (amendmentAuthors.has(t.author)) { reviewerId = t.author; reviewerMethod = 'viewedby+edits'; break; }
+        }
+        // Fallback (no telemetry, or no viewer made edits): most frequent
+        // non-collector editor — the previous heuristic.
+        if (reviewerId == null) {
+          const reviewerCounts = {};
+          amendments.forEach(a => { if (a.author !== collectorIdNum) reviewerCounts[a.author] = (reviewerCounts[a.author]||0)+1; });
+          const top = Object.entries(reviewerCounts).sort((a,b) => b[1]-a[1])[0]?.[0];
+          reviewerId = top ? parseInt(top) : null;
+          if (reviewerId != null) reviewerMethod = 'fallback-freq';
+        }
+
+        // Diagnostics (read-only) so the reviewer pick can be verified by eye.
+        const amendAuthorCounts = {};
+        amendments.forEach(a => { amendAuthorCounts[a.author] = (amendAuthorCounts[a.author]||0)+1; });
+        const diagnostics = {
+          reviewerMethod,
+          telemetry:        telSorted.map(t => ({ author: t.author, views: t.views, firstTs: (t.firstTs === Infinity ? 0 : t.firstTs) })),
+          amendmentAuthors: Object.entries(amendAuthorCounts).map(([author,count]) => ({ author: parseInt(author), count })),
+          baseAuthors:      Object.entries(authorCounts).map(([author,count]) => ({ author: parseInt(author), count })),
+        };
 
         ws.send(JSON.stringify({
           type: 'qaResultsResponse',
@@ -355,6 +394,7 @@
           amendments,
           collectorId,
           reviewerId,
+          diagnostics,
           usedTelemetry,
           ts: Date.now(),
         }));

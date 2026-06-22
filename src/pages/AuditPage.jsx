@@ -264,11 +264,11 @@ const REVIEW_GROUPS = {
 }
 
 function filterAmendments(amendments, reviewerId) {
-  // Only count deletions made by the reviewer, not the collector
-  return amendments.filter(a => {
-    if (a.type === 'deletion') return a.author === reviewerId
-    return true
-  })
+  // Count ONLY the real reviewer's edits — every other author is a collector
+  // (e.g. a teammate who only filled the Players/Location task). All edit types
+  // (additions, changes, deletions, freeze-frame) count when the reviewer made them.
+  if (reviewerId == null) return []
+  return amendments.filter(a => a.author === reviewerId)
 }
 
 function calcGroupScore(group, baseEvents, amendments, refinements, reviewerId) {
@@ -292,10 +292,8 @@ function calcGroupScore(group, baseEvents, amendments, refinements, reviewerId) 
 // ── Amendments Table ──────────────────────────────────────────────────────────
 function AmendmentsTable({ results, session, reviewerId }) {
   const { baseEvents } = results
-  // Only count deletions made by the reviewer
-  const amendments = results.amendments.filter(a =>
-    a.type !== 'deletion' || a.author === reviewerId
-  )
+  // Show ONLY the real reviewer's edits (all types) — other authors are collectors.
+  const amendments = results.amendments.filter(a => a.author === reviewerId)
 
   // Build profile lookup from Apollo cache
   const profileMap = {}
@@ -827,6 +825,30 @@ export default function AuditPage({ session, onBack, onFullReport }) {
                 abcScores={abcScores}
                 onFullReport={() => onFullReport(results, score, session)}
               />
+              {results.diagnostics && (
+                <div style={{
+                  marginTop: 10, padding: '10px 12px', borderRadius: 10,
+                  background: 'rgba(255,255,255,0.03)', border: '1px solid var(--border)',
+                  fontFamily: 'JetBrains Mono, monospace', fontSize: 10, color: 'var(--t-3)', lineHeight: 1.7,
+                }}>
+                  <div style={{ color: 'var(--t-2)', fontWeight: 700, marginBottom: 4, letterSpacing: 0.5 }}>
+                    REVIEWER DETECTION ({results.diagnostics.reviewerMethod})
+                  </div>
+                  <div>Counting edits by reviewer&nbsp;
+                    <span style={{ color: 'var(--p2)', fontWeight: 700 }}>#{results.reviewerId ?? '—'}</span>
+                    &nbsp;only.
+                  </div>
+                  <div>viewed-by (telemetry), earliest first:&nbsp;
+                    {results.diagnostics.telemetry.map(t => `#${t.author}(${t.views})`).join('  ') || '—'}
+                  </div>
+                  <div>edit authors:&nbsp;
+                    {results.diagnostics.amendmentAuthors.map(a => `#${a.author}(${a.count})`).join('  ') || '—'}
+                  </div>
+                  <div>base/collector authors:&nbsp;
+                    {results.diagnostics.baseAuthors.map(a => `#${a.author}(${a.count})`).join('  ') || '—'}
+                  </div>
+                </div>
+              )}
               <AmendmentsTable results={results} session={session} reviewerId={results.reviewerId} />
             </>
           )}
