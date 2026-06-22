@@ -1,6 +1,6 @@
 [package]
 name = "mark-app"
-version = "7.4.6"
+version = "7.4.7"
 description = "MARK — Review App for Hudl Egypt"
 authors = ["Ahmed Ashraf"]
 edition = "2021"

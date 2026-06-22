@@ -1,10 +1,10 @@
 (async function(){
-  const BRIDGE_VERSION = '7.3.0-ws';
+  const BRIDGE_VERSION = '7.4.7';
   if(window.__MARK_BRIDGE_VERSION__ === BRIDGE_VERSION){console.log('[MARK] bridge already running (v' + BRIDGE_VERSION + ')');return;}
   if(window.__MARK_BRIDGE_STOP__) window.__MARK_BRIDGE_STOP__();
   window.__MARK_BRIDGE__ = true;
   window.__MARK_BRIDGE_VERSION__ = BRIDGE_VERSION;
-  console.log('[MARK] bridge starting (v4.3.0 — localhost WebSocket)');
+  console.log('[MARK] bridge starting (v' + BRIDGE_VERSION + ' — localhost WebSocket)');
 
   // ── Optional auto-auth tokens (for Firebase session lookup only) ──────────
   const __MARK_FB_API_KEY__ = 'AIzaSyB-HWh2kJgoPDwzYhZWgW6pi8uZK8u9K7U';
@@ -406,6 +406,7 @@
         ws.send(JSON.stringify({
           type: 'qaResultsResponse',
           matchId: numMatchId,
+          bridgeVersion: BRIDGE_VERSION,
           videoTime: video.currentTime,
           baseEvents,
           amendments,

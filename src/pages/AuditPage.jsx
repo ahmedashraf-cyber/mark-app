@@ -906,7 +906,7 @@ export default function AuditPage({ session, onBack, onFullReport }) {
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#30D158" strokeWidth="2.5" strokeLinecap="round">
                 <path d="M20 6L9 17l-5-5"/>
               </svg>
-              Results saved · {results?.usedTelemetry ? 'Telemetry mode' : 'Video time mode'}
+              Results saved · {results?.usedTelemetry ? 'Telemetry mode' : 'Video time mode'} · bridge {results?.bridgeVersion || 'OLD (re-inject!)'}
             </div>
           )}
         </div>
