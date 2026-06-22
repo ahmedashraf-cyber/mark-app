@@ -263,15 +263,16 @@ const REVIEW_GROUPS = {
   }
 }
 
-function filterAmendments(amendments, reviewerId) {
-  // Count ONLY the real reviewer's edits — every other author is a collector
-  // (e.g. a teammate who only filled the Players/Location task). All edit types
-  // (additions, changes, deletions, freeze-frame) count when the reviewer made them.
-  if (reviewerId == null) return []
-  return amendments.filter(a => a.author === reviewerId)
+function filterAmendments(amendments, reviewerIds) {
+  // Count edits by ANY real reviewer (a match may be reviewed by more than one
+  // person / re-reviewed later). Everyone else is a collector — including the
+  // collector's own self-amendments — and is ignored. All edit types count.
+  const set = new Set((reviewerIds || []).map(Number))
+  if (set.size === 0) return []
+  return amendments.filter(a => set.has(Number(a.author)))
 }
 
-function calcGroupScore(group, baseEvents, amendments, refinements, reviewerId) {
+function calcGroupScore(group, baseEvents, amendments, refinements, reviewerIds) {
   // Find base events belonging to this group
   const groupBase = baseEvents.filter(e => {
     const extras = refinements[e.key] || []
@@ -282,7 +283,7 @@ function calcGroupScore(group, baseEvents, amendments, refinements, reviewerId) 
   const groupKeys = new Set(groupBase.map(e => e.key))
   const validAmends = filterAmendments(
     amendments.filter(a => groupKeys.has(a.key)),
-    reviewerId
+    reviewerIds
   )
   const uniqueEdited = new Set(validAmends.map(a => a.key)).size
   const score = Math.round(((groupBase.length - uniqueEdited) / groupBase.length) * 100)
@@ -290,10 +291,11 @@ function calcGroupScore(group, baseEvents, amendments, refinements, reviewerId) 
 }
 
 // ── Amendments Table ──────────────────────────────────────────────────────────
-function AmendmentsTable({ results, session, reviewerId }) {
+function AmendmentsTable({ results, session, reviewerIds }) {
   const { baseEvents } = results
-  // Show ONLY the real reviewer's edits (all types) — other authors are collectors.
-  const amendments = results.amendments.filter(a => a.author === reviewerId)
+  // Show edits by ANY real reviewer (all types) — collectors' edits are ignored.
+  const reviewerSet = new Set((reviewerIds || []).map(Number))
+  const amendments = results.amendments.filter(a => reviewerSet.has(Number(a.author)))
 
   // Build profile lookup from Apollo cache
   const profileMap = {}
@@ -549,8 +551,13 @@ export default function AuditPage({ session, onBack, onFullReport }) {
       const data = await requestQAResults(session.matchId, session.half)
       if (!data) { setError('No data returned — make sure collection app is open on this match'); setLoading(false); return }
 
+      // All reviewers (set) — falls back to the single primary if needed.
+      const reviewerIds = (data.reviewerIds && data.reviewerIds.length)
+        ? data.reviewerIds
+        : (data.reviewerId != null ? [data.reviewerId] : [])
+
       // Calculate score
-      const validAmendments = filterAmendments(data.amendments, data.reviewerId)
+      const validAmendments = filterAmendments(data.amendments, reviewerIds)
       const uniqueEdited = new Set(validAmendments.map(a => a.key)).size
       const total = data.baseEvents.length
       const q = total > 0 ? Math.round(((total - uniqueEdited) / total) * 100) : 0
@@ -569,7 +576,7 @@ export default function AuditPage({ session, onBack, onFullReport }) {
 
       const abc = {}
       for (const [key, group] of Object.entries(REVIEW_GROUPS)) {
-        abc[key] = calcGroupScore(group, data.baseEvents, data.amendments, refinements, data.reviewerId)
+        abc[key] = calcGroupScore(group, data.baseEvents, data.amendments, refinements, reviewerIds)
       }
       setAbcScores(abc)
       setResults(data)
@@ -589,9 +596,13 @@ export default function AuditPage({ session, onBack, onFullReport }) {
 
   async function saveToFirebase(data, q, abc) {
     try {
-      const uniqueEdited = new Set(data.amendments.map(a => a.key)).size
+      const reviewerIds = (data.reviewerIds && data.reviewerIds.length)
+        ? data.reviewerIds
+        : (data.reviewerId != null ? [data.reviewerId] : [])
+      const reviewerAmends = filterAmendments(data.amendments, reviewerIds)
+      const uniqueEdited = new Set(reviewerAmends.map(a => a.key)).size
       const types = {}
-      data.amendments.forEach(a => { types[a.type] = (types[a.type] || 0) + 1 })
+      reviewerAmends.forEach(a => { types[a.type] = (types[a.type] || 0) + 1 })
 
       await addDoc(collection(db, 'mark_audit_sessions'), {
         sessionId:          session.sessionId,
@@ -603,9 +614,10 @@ export default function AuditPage({ session, onBack, onFullReport }) {
         reviewerName:       profile.displayName || profile.email.split('@')[0],
         collectorId:        data.collectorId,
         qaReviewerId:       data.reviewerId,
+        qaReviewerIds:      reviewerIds,
         videoTime:          data.videoTime,
         totalBaseEvents:    data.baseEvents.length,
-        totalAmendments:    data.amendments.length,
+        totalAmendments:    reviewerAmends.length,
         uniqueEditedEvents: uniqueEdited,
         qualityScore:       q,
         qualityScoreA:      abc?.A?.score ?? null,
@@ -834,9 +846,13 @@ export default function AuditPage({ session, onBack, onFullReport }) {
                   <div style={{ color: 'var(--t-2)', fontWeight: 700, marginBottom: 4, letterSpacing: 0.5 }}>
                     REVIEWER DETECTION ({results.diagnostics.reviewerMethod})
                   </div>
-                  <div>Counting edits by reviewer&nbsp;
-                    <span style={{ color: 'var(--p2)', fontWeight: 700 }}>#{results.reviewerId ?? '—'}</span>
-                    &nbsp;only.
+                  <div>Counting edits by reviewer(s)&nbsp;
+                    <span style={{ color: 'var(--p2)', fontWeight: 700 }}>
+                      {(results.reviewerIds && results.reviewerIds.length
+                        ? results.reviewerIds
+                        : (results.reviewerId != null ? [results.reviewerId] : []))
+                        .map(id => `#${id}`).join(', ') || '—'}
+                    </span>.
                   </div>
                   <div>viewed-by (telemetry), earliest first:&nbsp;
                     {results.diagnostics.telemetry.map(t => `#${t.author}(${t.views})`).join('  ') || '—'}
@@ -849,7 +865,7 @@ export default function AuditPage({ session, onBack, onFullReport }) {
                   </div>
                 </div>
               )}
-              <AmendmentsTable results={results} session={session} reviewerId={results.reviewerId} />
+              <AmendmentsTable results={results} session={session} reviewerIds={results.reviewerIds || (results.reviewerId != null ? [results.reviewerId] : [])} />
             </>
           )}
 
