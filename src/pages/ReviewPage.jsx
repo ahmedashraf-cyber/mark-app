@@ -432,33 +432,21 @@ export default function ReviewPage({ session, onDone, onBack, bridgeSyncStatus, 
             onClick={async () => {
               setInjecting(true)
               try {
-                // Pull current user tokens so the bridge can auto-authenticate
-                // in the collection app without showing the sign-in panel.
-                const user = auth.currentUser
-                let idToken = ''
-                let refreshToken = ''
-                let userUid = ''
-                let userEmail = ''
-                if (user) {
-                  try { idToken = await user.getIdToken() } catch(_) {}
-                  refreshToken = user.refreshToken || ''
-                  userUid = user.uid || ''
-                  userEmail = user.email || ''
+                const res = await invoke('patch_tag_once_asar')
+                if (typeof res === 'string' && res.toLowerCase().includes('already')) {
+                  alert('Bridge is already embedded (current version). If the collection app is open, just reload it.')
+                } else {
+                  alert('Bridge embedded \u2713 \u2014 now reopen the collection app. From now on it loads automatically on every page, so sync stays connected across halves, matches and modes.')
                 }
-                await invoke('inject_bridge_script', {
-                  idToken,
-                  refreshToken,
-                  userUid,
-                  userEmail,
-                })
               } catch (e) {
-                console.error('[MARK] inject failed:', e)
+                console.error('[MARK] embed failed:', e)
+                alert(String(e))
               } finally {
                 setInjecting(false)
               }
             }}
           >
-            {injecting ? 'Injecting…' : '⚡ Inject Bridge'}
+            {injecting ? 'Embedding…' : '⚡ Embed Bridge'}
           </button>
           <button className="btn-orange" style={{padding:'7px 18px',fontSize:13}} onClick={handleDoneClick}>
             Done ✓

@@ -566,12 +566,22 @@ export default function AuditPage({ session, onBack, onFullReport }) {
   }
 
   async function handleInjectBridge() {
-    try { await invoke('inject_bridge_script') } catch(e) { console.warn('[MARK] inject:', e) }
+    try {
+      const res = await invoke('patch_tag_once_asar')
+      if (typeof res === 'string' && res.toLowerCase().includes('already')) {
+        alert('Bridge is already embedded (current version). If the collection app is open, just reload it.')
+      } else {
+        alert('Bridge embedded \u2713 \u2014 now reopen the collection app. From now on it loads automatically on every page, so sync stays connected across halves, matches and modes.')
+      }
+    } catch(e) {
+      console.warn('[MARK] embed:', e)
+      alert(String(e))
+    }
   }
 
   async function handleGetResults() {
     if (bridgeStatus !== 'connected') {
-      setError('Bridge not connected — click ⚡ Inject Bridge first')
+      setError('Bridge not connected — click ⚡ Embed Bridge first (with the collection app closed)')
       return
     }
     setLoading(true)
@@ -718,7 +728,7 @@ export default function AuditPage({ session, onBack, onFullReport }) {
         {/* Inject bridge */}
         <button className="btn-ghost" style={{ padding: '5px 14px', fontSize: 12, display: 'flex', alignItems: 'center', gap: 6 }}
           onClick={handleInjectBridge}>
-          <span style={{ fontSize: 14 }}>⚡</span> Inject Bridge
+          <span style={{ fontSize: 14 }}>⚡</span> Embed Bridge
         </button>
 
         {/* Get results */}

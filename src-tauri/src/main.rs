@@ -437,13 +437,24 @@ fn patch_one_shortcut(lnk_path: &std::path::Path) -> Result<bool, String> {
 //   4. Inject our bridge script before </body>
 //   5. Shift offsets of files that come AFTER app.html by the size delta
 //   6. Rebuild and write the file
-// Idempotent — checks for the marker comment and skips if already patched.
-const ASAR_MARKER: &str = "<!-- MARK_BRIDGE_INJECTED v19 -->";
+// Version-specific marker: the guard below only treats the asar as "already
+// patched" when THIS exact version is embedded. An older embed (any prior
+// marker) does not match, so it gets stripped and replaced — that's what was
+// previously frozen by a fixed marker. Bump this whenever the embedded bridge
+// changes so existing installs re-embed the new version.
+const ASAR_MARKER: &str = "<!-- MARK_BRIDGE_INJECTED v7.4.9 -->";
 
 #[command]
 fn patch_tag_once_asar() -> Result<String, String> {
     let asar_path = find_tag_once_asar()?;
-    patch_asar_impl(&asar_path)
+    patch_asar_impl(&asar_path).map_err(|e| {
+        let low = e.to_lowercase();
+        if low.contains("write asar") || low.contains("os error")
+            || low.contains("denied") || low.contains("process") {
+            format!("Couldn't update the collection app — please fully CLOSE it \
+                     (check the system tray too), then click Embed Bridge again. [{e}]")
+        } else { e }
+    })
 }
 
 fn find_tag_once_asar() -> Result<std::path::PathBuf, String> {
