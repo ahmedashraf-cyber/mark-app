@@ -1,5 +1,5 @@
 (async function(){
-  const BRIDGE_VERSION = '7.4.9';
+  const BRIDGE_VERSION = '7.5.0';
   if(window.__MARK_BRIDGE_VERSION__ === BRIDGE_VERSION){console.log('[MARK] bridge already running (v' + BRIDGE_VERSION + ')');return;}
   if(window.__MARK_BRIDGE_STOP__) window.__MARK_BRIDGE_STOP__();
   window.__MARK_BRIDGE__ = true;
@@ -198,10 +198,35 @@
 
     else if (msg.type === 'posSync' && msg.ts > lastPos) {
       lastPos = msg.ts;
-      if (msg.playing && video.paused) video.play();
+      // Match play/pause state.
+      if (msg.playing && video.paused) { try { const p = video.play(); if (p && p.catch) p.catch(()=>{}); } catch(_){} }
       else if (!msg.playing && !video.paused) video.pause();
-      const drift = Math.abs(video.currentTime - msg.currentTime);
-      if (drift > 1.5) video.currentTime = msg.currentTime;
+
+      // Smooth follower sync. A hard `currentTime =` on a PLAYING video forces a
+      // decoder flush → stutter/dropped frames, and on a busy machine the follower
+      // keeps drifting past the threshold and gets seeked every second (stutter
+      // loop). Instead, nudge playbackRate to converge invisibly (the follower is
+      // muted, so a speed change has no audio artifact). Hard-seek only for big
+      // jumps where a nudge would take too long, and exact-align only while paused
+      // (a seek while paused has nothing to stutter).
+      const DEAD_BAND = 0.18;   // s — within this, treat as in-sync
+      const HARD_SEEK = 3.0;    // s — beyond this, one seek is better than nudging
+      const diff = msg.currentTime - video.currentTime; // + => follower is behind
+      const drift = Math.abs(diff);
+
+      if (!msg.playing) {
+        if (drift > 0.05) video.currentTime = msg.currentTime;
+        if (video.playbackRate !== 1) video.playbackRate = 1;
+      } else if (drift > HARD_SEEK) {
+        video.currentTime = msg.currentTime;
+        if (video.playbackRate !== 1) video.playbackRate = 1;
+      } else if (drift > DEAD_BAND) {
+        // Tiered nudge: gentle for small drift, stronger (still smooth) for larger.
+        const rate = drift > 0.75 ? 0.85 : 0.95;
+        video.playbackRate = diff > 0 ? (2 - rate) : rate; // behind → faster, ahead → slower
+      } else if (video.playbackRate !== 1) {
+        video.playbackRate = 1;
+      }
     }
 
     else if (msg.type === 'eventCountRequest') {
