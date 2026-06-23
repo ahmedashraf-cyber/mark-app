@@ -1,5 +1,5 @@
 (async function(){
-  const BRIDGE_VERSION = '7.4.7';
+  const BRIDGE_VERSION = '7.4.8';
   if(window.__MARK_BRIDGE_VERSION__ === BRIDGE_VERSION){console.log('[MARK] bridge already running (v' + BRIDGE_VERSION + ')');return;}
   if(window.__MARK_BRIDGE_STOP__) window.__MARK_BRIDGE_STOP__();
   window.__MARK_BRIDGE__ = true;
@@ -172,7 +172,16 @@
   // Tracks last timestamps to ignore duplicate/out-of-order messages
   let lastNav = 0, lastPos = 0, lastSeek = 0;
 
-  function handleSyncMessage(msg, video) {
+  function handleSyncMessage(msg, _capturedVideo) {
+    // The collection app destroys and recreates its <video> element when you
+    // switch halves, so a reference captured when the socket first connected
+    // goes stale and sync silently dies. Always resolve the LIVE video element
+    // at message time: prefer the attached one if it's still in the DOM, else
+    // fall back to whatever <video> is currently on the page (the poll below
+    // will formally re-attach it within ~1s).
+    const video = (attachedVideo && attachedVideo.isConnected)
+      ? attachedVideo
+      : document.querySelector('video');
     if (!video) return;
 
     if (msg.type === 'navCommand' && msg.ts > lastNav) {
