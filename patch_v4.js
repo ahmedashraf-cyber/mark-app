@@ -4,7 +4,7 @@ const collAsar = 'C:\\Users\\AhmedAshraf\\AppData\\Local\\Programs\\live-collect
 const backupPath = collAsar + '.markbackup_v4';
 
 const NEW_BRIDGE = `(async function(){
-  const BRIDGE_VERSION = '6.2.0-ids';
+  const BRIDGE_VERSION = '6.3.0-autoids';
   if(window.__MARK_BRIDGE_VERSION__ === BRIDGE_VERSION){console.log('[MARK] bridge already running (v' + BRIDGE_VERSION + ')');return;}
   if(window.__MARK_BRIDGE_STOP__) window.__MARK_BRIDGE_STOP__();
   window.__MARK_BRIDGE__ = true;
@@ -262,17 +262,32 @@ const NEW_BRIDGE = `(async function(){
     }, 500);
   })();
 
-  // Re-issue ONE EventHistory query via the app's own client/transport, with
-  // retry + backoff. The app routes operations over a WebSocket-based link that
-  // can report "Socket closed" when idle/backgrounded; a fresh attempt makes the
-  // link reconnect, so a couple of retries clears it. no-cache = network fetch
+  // Re-issue ONE EventHistory query via the app's own client/transport.
+  //
+  // ── "Socket closed" diagnosis ──────────────────────────────────────────────
+  // The app's GraphQL travels over a WebSocket-based Apollo link (graphql-ws),
+  // NOT http — that's why fetch/XHR sniffers saw nothing and why the error is
+  // "Socket closed". graphql-ws connects lazily on the first op and drops the
+  // socket when idle; Chromium also suspends sockets/timers in a BACKGROUND
+  // window. A query fired into a just-dropped socket rejects with "Socket
+  // closed"; graphql-ws reopens on the very next attempt. So: detect socket /
+  // network errors and retry the SAME key on the fresh connection with backoff,
+  // and (see the auto-sweep below) only sweep while the renderer is VISIBLE so
+  // background throttling can't stall the reconnect. no-cache = network fetch
   // that never reads/writes the app's cache (pure observation).
-  async function queryEventHistory(eventKey) {
+  let __socketCloseHits = 0;
+  function isSocketErr(e) {
+    const m = ((e && e.message) || '') + ' ' +
+      ((e && e.networkError && (e.networkError.message || e.networkError)) || '');
+    return /socket|closed|websocket|connection|network|econn|terminat|1006|going away/i.test(String(m));
+  }
+  async function queryEventHistory(eventKey, maxAttempts) {
     const client = window.apollo && window.apollo.client;
     if (!client) throw new Error('apollo not ready');
     const doc = buildEventHistoryDoc();
-    let lastErr = null;
-    for (let attempt = 0; attempt < 4; attempt++) {
+    const max = maxAttempts || 6;
+    let delay = 400, lastErr = null;
+    for (let attempt = 1; attempt <= max; attempt++) {
       try {
         const res = await client.query({ query: doc, variables: { eventKey: eventKey },
           fetchPolicy: 'no-cache', errorPolicy: 'all' });
@@ -280,10 +295,14 @@ const NEW_BRIDGE = `(async function(){
         return true;
       } catch (e) {
         lastErr = e;
-        await new Promise(function (r) { setTimeout(r, 600 * Math.pow(2, attempt)); });
+        if (isSocketErr(e)) __socketCloseHits++;       // transient — retry reopens the socket
+        if (attempt === max) break;
+        await new Promise(function (r) { setTimeout(r, delay); });
+        delay = Math.min(delay * 2, 4000);
       }
     }
-    console.warn('[MARK] EventHistory failed for', eventKey, lastErr && lastErr.message);
+    console.warn('[MARK] EventHistory failed for ' + eventKey + ' after ' + max + ' attempts:',
+      lastErr && (lastErr.message || lastErr));
     return false;
   }
 
@@ -299,14 +318,16 @@ const NEW_BRIDGE = `(async function(){
     try {
       const cache = window.apollo && window.apollo.client && window.apollo.client.cache.extract();
       if (!cache) return identitiesArray();
-      const numMatchId = typeof matchId === 'string' ? parseInt(matchId, 10) : matchId;
+      // matchId is OPTIONAL — when omitted we sweep the whole loaded cache (the
+      // currently-open match). MARK passes it for precision; the auto-sweep does not.
+      const numMatchId = matchId == null ? null : (typeof matchId === 'string' ? parseInt(matchId, 10) : matchId);
       const events = [];
       const vals = Object.values(cache);
       for (let i = 0; i < vals.length; i++) {
         const v = vals[i];
         if (!v || v.__typename !== 'Event') continue;
-        if (v.matchId !== numMatchId && v.matchId !== String(numMatchId)) continue;
-        if (partId != null && v.partId != null && v.partId !== partId) continue;
+        if (numMatchId != null && v.matchId !== numMatchId && v.matchId !== String(numMatchId)) continue;
+        if (numMatchId != null && partId != null && v.partId != null && v.partId !== partId) continue;
         if (v.category !== 'base' && v.category !== 'amendment') continue;
         if (v.author == null || !v.key) continue;
         events.push(v);
@@ -330,7 +351,7 @@ const NEW_BRIDGE = `(async function(){
         if (!keyForId[id]) keyForId[id] = events[i].key;
       }
       const ids = Array.from(target);
-      let queries = 0, consecutiveNoNew = 0;
+      let queries = 0, consecutiveNoNew = 0, firstQuery = true;
       const CAP = 30;        // hard ceiling — never blast the whole match
       const STOP_AFTER = 4;  // stop after N consecutive queries that found nobody new
       for (let i = 0; i < ids.length; i++) {
@@ -339,19 +360,63 @@ const NEW_BRIDGE = `(async function(){
         const key = keyForId[id];
         if (!key) continue;
         const before = __ID__.size;
-        await queryEventHistory(key);
+        // The first query of a sweep warms a cold/idle socket — give it more attempts.
+        await queryEventHistory(key, firstQuery ? 8 : 5);
+        firstQuery = false;
         queries++;
         if (__ID__.size > before) consecutiveNoNew = 0; else consecutiveNoNew++;
         if (queries >= CAP || consecutiveNoNew >= STOP_AFTER) break;
         await new Promise(function (r) { setTimeout(r, 350); });   // throttle ~350ms
       }
-      console.log('[MARK] identity sweep done: ' + queries + ' queries, ' + __ID__.size + ' total identities');
+      console.log('[MARK] identity sweep done: ' + queries + ' queries, ' + __ID__.size +
+        ' identities, ' + __socketCloseHits + ' socket-close retries so far');
       return identitiesArray();
     } catch (e) {
       console.warn('[MARK] sweep error:', e);
       return identitiesArray();
     } finally { __sweepRunning = false; }
   }
+
+  // ── PROACTIVE foreground auto-sweep ────────────────────────────────────────
+  // This is what makes identity capture happen "on its own": while the collection
+  // app is FOREGROUND (which it is during audit-mode review/editing) and a match
+  // is loaded with unresolved authors, sweep automatically. Running only while
+  // visible side-steps Chromium's background socket/timer throttling — by the time
+  // the user switches to MARK and clicks Get Results, everyone is already resolved
+  // and the on-demand call returns instantly. No card is ever opened by hand.
+  let __lastAutoSweep = 0;
+  function unresolvedAuthorCount() {
+    try {
+      const cache = window.apollo && window.apollo.client && window.apollo.client.cache.extract();
+      if (!cache) return { total: 0, unresolved: 0 };
+      const vals = Object.values(cache);
+      const authors = new Set();
+      for (let i = 0; i < vals.length; i++) {
+        const v = vals[i];
+        if (v && v.__typename === 'Event' && v.author != null &&
+            (v.category === 'base' || v.category === 'amendment')) authors.add(String(v.author));
+      }
+      let unresolved = 0;
+      authors.forEach(function (id) { if (!__ID__.has(id)) unresolved++; });
+      return { total: authors.size, unresolved: unresolved };
+    } catch (e) { return { total: 0, unresolved: 0 }; }
+  }
+  async function maybeAutoSweep() {
+    if (__sweepRunning) return;
+    if (document.hidden) return;                  // foreground only — dodge bg throttling
+    if (Date.now() - __lastAutoSweep < 8000) return;
+    const stat = unresolvedAuthorCount();
+    if (stat.total === 0 || stat.unresolved === 0) return;
+    __lastAutoSweep = Date.now();
+    console.log('[MARK] auto-sweep: ' + stat.unresolved + '/' + stat.total + ' authors unresolved');
+    await sweepMatchIdentities();                 // no matchId → whole loaded match
+  }
+  setInterval(maybeAutoSweep, 10000);
+  document.addEventListener('visibilitychange', function () {
+    if (!document.hidden) setTimeout(maybeAutoSweep, 600);
+  });
+  // Manual trigger for console debugging: window.__MARK_SWEEP__()
+  window.__MARK_SWEEP__ = function () { return sweepMatchIdentities(); };
 
   // ── localhost WebSocket connection ────────────────────────────────────────
   // All sync commands (navCommand, posSync, seekCommand) arrive here.
