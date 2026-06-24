@@ -6,6 +6,7 @@ import { useAuth } from '../hooks/useAuth.jsx'
 import { useSync } from '../hooks/useSync.js'
 import { formatHalf } from '../utils/half.js'
 import { loadRoster, saveIdentities, buildIdentityMap, formatPerson, formatPeople } from '../data/roster.js'
+import { SPEED_MIN, SPEED_MAX, SPEED_STEP } from '../data/shortcuts'
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 const fmt = (s) => {
@@ -647,6 +648,7 @@ export default function AuditPage({ session, onBack, onFullReport, initialResult
   const [playing,        setPlaying]        = useState(false)
   const [currentTime,    setCurrentTime]    = useState(0)
   const [duration,       setDuration]       = useState(0)
+  const [speed,          setSpeed]          = useState(1)
   const [bridgeStatus,   setBridgeStatus]   = useState('disconnected')
   const [loading,        setLoading]        = useState(false)
   const [results,        setResults]        = useState(restored)
@@ -850,6 +852,44 @@ export default function AuditPage({ session, onBack, onFullReport, initialResult
     setCurrentTime(v.currentTime)
   }
 
+  function seekBy(seconds) {
+    const v = videoRef.current
+    if (!v) return
+    v.currentTime = Math.max(0, Math.min(v.duration || 0, v.currentTime + seconds))
+    setCurrentTime(v.currentTime)
+  }
+
+  function changeSpeed(valueOrUpdater) {
+    const v = videoRef.current
+    if (!v) return
+    const next = typeof valueOrUpdater === 'function' ? valueOrUpdater(v.playbackRate) : valueOrUpdater
+    v.playbackRate = next
+    setSpeed(next)
+  }
+
+  // Video keyboard controls — same shortcuts as Scout (no collection-app sync here;
+  // Audit drives only its own player). ↑ play/pause · →/← seek 400ms (40ms w/ Shift)
+  // · +/- speed. Disabled while typing in a field.
+  useEffect(() => {
+    if (!videoLoaded) return
+    function handleKey(e) {
+      const tag = (e.target && e.target.tagName) || ''
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || (e.target && e.target.isContentEditable)) return
+      const key = e.key, shift = e.shiftKey
+      if (key === 'ArrowUp') { e.preventDefault(); togglePlay(); return }
+      if (key === 'ArrowRight' || key === 'ArrowLeft') {
+        e.preventDefault()
+        const ms = shift ? 40 : 400
+        seekBy((key === 'ArrowRight' ? 1 : -1) * ms / 1000)
+        return
+      }
+      if (key === '+' || key === '=') { e.preventDefault(); changeSpeed(p => Math.min(SPEED_MAX, Math.round((p + SPEED_STEP) * 100) / 100)); return }
+      if (key === '-' || key === '_') { e.preventDefault(); changeSpeed(p => Math.max(SPEED_MIN, Math.round((p - SPEED_STEP) * 100) / 100)); return }
+    }
+    window.addEventListener('keydown', handleKey)
+    return () => window.removeEventListener('keydown', handleKey)
+  }, [videoLoaded])
+
   return (
     <div style={{ height: '100vh', display: 'flex', flexDirection: 'column', background: 'var(--bg)', overflow: 'hidden' }}>
 
@@ -980,6 +1020,13 @@ export default function AuditPage({ session, onBack, onFullReport, initialResult
             <span style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: 'rgba(255,255,255,0.4)', flexShrink: 0 }}>
               {fmt(duration)}
             </span>
+
+            {/* Playback speed (changed via + / - like Scout) */}
+            {videoLoaded && speed !== 1 && (
+              <span style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: 'var(--p2)', flexShrink: 0, fontWeight: 700 }}>
+                {speed}×
+              </span>
+            )}
 
             {/* Load video (when none) / Replace video (when one is loaded, in case the wrong file was opened) */}
             {!videoLoaded ? (
