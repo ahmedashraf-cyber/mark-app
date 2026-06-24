@@ -755,22 +755,46 @@ export default function SessionHistoryPage({ onBack, initialSession }) {
     async function load() {
       setLoading(true)
       try {
-        // Own sessions
+        // Map an audit-session doc to the shape the history rows expect.
+        const mapAudit = d => {
+          const x = d.data()
+          return {
+            id: d.id, ...x,
+            type: 'audit',
+            mode: 'audit',
+            totalTaggedErrors:   x.uniqueEditedEvents ?? x.totalAmendments ?? 0,
+            totalReviewedEvents: x.totalBaseEvents ?? 0,
+          }
+        }
+
+        // Own Scout sessions
         const q = query(
           collection(db, 'mark_sessions'),
           where('reviewerId', '==', profile.uid),
           where('status', '==', 'completed')
         )
-        const snap = await getDocs(q)
-        const list = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+        // Own Audit sessions (separate collection)
+        const auditQ = query(
+          collection(db, 'mark_audit_sessions'),
+          where('reviewerId', '==', profile.uid)
+        )
+        const [snap, auditSnap] = await Promise.all([getDocs(q), getDocs(auditQ).catch(() => ({ docs: [] }))])
+        const list = [
+          ...snap.docs.map(d => ({ id: d.id, ...d.data() })),
+          ...auditSnap.docs.map(mapAudit),
+        ]
         list.sort((a, b) => (b.completedAt?.toDate?.()?.getTime() || 0) - (a.completedAt?.toDate?.()?.getTime() || 0))
         setSessions(list)
 
-        // Admin: also load ALL sessions
+        // Admin: also load ALL sessions (Scout + Audit)
         if (profile.email === 'ahmed.ashraf@hudl.com') {
           const allQ = query(collection(db, 'mark_sessions'), where('status', '==', 'completed'))
-          const allSnap = await getDocs(allQ)
-          const allList = allSnap.docs.map(d => ({ id: d.id, ...d.data() }))
+          const allAuditQ = query(collection(db, 'mark_audit_sessions'))
+          const [allSnap, allAuditSnap] = await Promise.all([getDocs(allQ), getDocs(allAuditQ).catch(() => ({ docs: [] }))])
+          const allList = [
+            ...allSnap.docs.map(d => ({ id: d.id, ...d.data() })),
+            ...allAuditSnap.docs.map(mapAudit),
+          ]
           allList.sort((a, b) => (b.completedAt?.toDate?.()?.getTime() || 0) - (a.completedAt?.toDate?.()?.getTime() || 0))
           setAllSessions(allList)
         }
@@ -828,10 +852,33 @@ export default function SessionHistoryPage({ onBack, initialSession }) {
   async function handleReview(session) {
     setTagsLoading(true)
     try {
-      const q    = query(collection(db, 'mark_error_tags'), where('sessionId', '==', session.sessionId))
-      const snap = await getDocs(q)
-      setActiveTags(snap.docs.map(d => ({ id: d.id, ...d.data() })))
-      setActiveSession(session)
+      if (session.type === 'audit' || session.mode === 'audit') {
+        // Audit replay: amendments live in a separate collection. Map each to the
+        // tag shape MatchReport/EventCard already render, so click-to-seek works
+        // the same way (seek uses videoTimeSec).
+        const aq   = query(collection(db, 'mark_audit_amendments'), where('sessionId', '==', session.sessionId))
+        const asnap = await getDocs(aq)
+        const tags = asnap.docs.map(d => {
+          const x = d.data()
+          const ms = x.videoTimestamp ?? x.payload?.videoTimestamp ?? null
+          return {
+            id: d.id,
+            videoTimeSec: ms != null ? ms / 1000 : 0,
+            team: 'home',
+            triggeredKey: x.type || 'edit',
+            triggeredEventLabel: x.originalName || x.type || 'edit',
+            extras: [],
+            isMissing: x.type === 'added',
+          }
+        }).sort((a, b) => (a.videoTimeSec || 0) - (b.videoTimeSec || 0))
+        setActiveTags(tags)
+        setActiveSession(session)
+      } else {
+        const q    = query(collection(db, 'mark_error_tags'), where('sessionId', '==', session.sessionId))
+        const snap = await getDocs(q)
+        setActiveTags(snap.docs.map(d => ({ id: d.id, ...d.data() })))
+        setActiveSession(session)
+      }
     } catch(e) {
       console.error('[MARK] load tags:', e)
     } finally {

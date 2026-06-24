@@ -226,6 +226,8 @@ function AppInner() {
         ) : session?.mode === 'audit' ? (
           <AuditPage
             session={session}
+            initialResults={auditResults}
+            initialScore={auditScore}
             onBack={() => setSession(null)}
             onFullReport={(results, score, sess) => {
               setAuditResults(results)

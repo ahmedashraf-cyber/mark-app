@@ -637,20 +637,23 @@ function AmendmentsTable({ results, session, reviewerIds, identityMap, onSeek })
 }
 
 // ── Main AuditPage ─────────────────────────────────────────────────────────────
-export default function AuditPage({ session, onBack, onFullReport }) {
+export default function AuditPage({ session, onBack, onFullReport, initialResults = null, initialScore = null }) {
   const { profile } = useAuth()
   const videoRef    = useRef(null)
+  // Restore prior results only if they belong to THIS match/half (App keeps them
+  // across the full-report round trip; the page remounts and would otherwise reset).
+  const restored = (initialResults && String(initialResults.matchId) === String(session.matchId)) ? initialResults : null
   const [videoLoaded,    setVideoLoaded]    = useState(false)
   const [playing,        setPlaying]        = useState(false)
   const [currentTime,    setCurrentTime]    = useState(0)
   const [duration,       setDuration]       = useState(0)
   const [bridgeStatus,   setBridgeStatus]   = useState('disconnected')
   const [loading,        setLoading]        = useState(false)
-  const [results,        setResults]        = useState(null)
-  const [score,          setScore]          = useState(null)
+  const [results,        setResults]        = useState(restored)
+  const [score,          setScore]          = useState(restored ? initialScore : null)
   const [error,          setError]          = useState('')
   const [saved,          setSaved]          = useState(false)
-  const [abcScores,      setAbcScores]      = useState(null)
+  const [abcScores,      setAbcScores]      = useState(restored ? (restored.abcScores || null) : null)
   const [resolvingIds,   setResolvingIds]   = useState(false)
 
   const { requestQAResults, resolveMatchIdentities } = useSync(setBridgeStatus, session.sessionId)
@@ -736,6 +739,7 @@ export default function AuditPage({ session, onBack, onFullReport }) {
       data.identityMap = buildIdentityMap(seedIdentities, rosterRef.current)
 
       setAbcScores(abc)
+      data.abcScores = abc      // keep on results so it survives report round-trips / remounts
       setResults(data)
       setScore(q)
 
@@ -806,17 +810,20 @@ export default function AuditPage({ session, onBack, onFullReport }) {
       })
 
       // Save amendment details
+      const baseTsByKey = {}
+      ;(data.baseEvents || []).forEach(e => { baseTsByKey[e.key] = e.videoTimestamp })
       for (const a of data.amendments) {
         await addDoc(collection(db, 'mark_audit_amendments'), {
-          sessionId:    session.sessionId,
-          matchId:      session.matchId,
-          amendmentId:  a.id,
-          key:          a.key,
-          type:         a.type,
-          originalName: a.originalName,
-          author:       a.author,
-          capturedTime: a.capturedTime,
-          payload:      a.payload || {},
+          sessionId:      session.sessionId,
+          matchId:        session.matchId,
+          amendmentId:    a.id,
+          key:            a.key,
+          type:           a.type,
+          originalName:   a.originalName,
+          author:         a.author,
+          capturedTime:   a.capturedTime,
+          videoTimestamp: baseTsByKey[a.key] ?? a.payload?.videoTimestamp ?? null,
+          payload:        a.payload || {},
         })
       }
     } catch(e) { console.error('[MARK] save audit:', e) }

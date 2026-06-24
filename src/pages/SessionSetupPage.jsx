@@ -221,7 +221,7 @@ export default function SessionSetupPage({ onSessionStart, lastResult, onShowHis
 
   useEffect(() => {
     if (selectedMatch && selectedHalf) checkHalfLock()
-  }, [selectedMatch, selectedHalf])
+  }, [selectedMatch, selectedHalf, reviewMode])
 
   const filteredMatches = matches.filter(m => {
     const q = matchSearch.toLowerCase()
@@ -236,9 +236,13 @@ export default function SessionSetupPage({ onSessionStart, lastResult, onShowHis
   async function checkHalfLock() {
     if (!selectedMatch || !selectedHalf) return
     setLockStatus('checking')
-    const lockId = `${selectedMatch.productionId}_${selectedHalf.id}`
+    // Mode-aware lock: Scout and Audit are independent activities, so the same
+    // match/half can be open in both. Older Scout locks/sessions used an id without
+    // a mode suffix; only a lock/session of the SAME mode should block.
+    const mode = reviewMode || 'scout'
+    const lockId = `${selectedMatch.productionId}_${selectedHalf.id}_${mode}`
     try {
-      // Check 1: in-progress lock
+      // Check 1: in-progress lock (same mode only)
       const lockDoc = await getDoc(doc(db, 'mark_locks', lockId))
       if (lockDoc.exists()) {
         const data = lockDoc.data()
@@ -249,7 +253,7 @@ export default function SessionSetupPage({ onSessionStart, lastResult, onShowHis
         }
       }
 
-      // Check 2: completed session by any reviewer
+      // Check 2: completed session by any reviewer — same match/half AND same mode
       const completedQ = query(
         collection(db, 'mark_sessions'),
         where('matchId', '==', String(selectedMatch.productionId)),
@@ -257,11 +261,12 @@ export default function SessionSetupPage({ onSessionStart, lastResult, onShowHis
         where('status', '==', 'completed')
       )
       const completedSnap = await getDocs(completedQ)
-      if (!completedSnap.empty) {
-        const completedData = completedSnap.docs[0].data()
+      const sameModeCompleted = completedSnap.docs.filter(d => (d.data().mode || 'scout') === mode)
+      if (sameModeCompleted.length) {
+        const completedData = sameModeCompleted[0].data()
         setLockStatus('completed')
         setLockedBy(completedData.reviewerName || completedData.reviewerEmail || 'A reviewer')
-        setCompletedSession({ id: completedSnap.docs[0].id, ...completedData })
+        setCompletedSession({ id: sameModeCompleted[0].id, ...completedData })
         return
       }
 
@@ -275,8 +280,9 @@ export default function SessionSetupPage({ onSessionStart, lastResult, onShowHis
     if (!selectedMatch || !selectedHalf || lockStatus === 'locked') return
     setLoading(true); setError('')
     const matchId  = selectedMatch.productionId
-    const lockId   = `${matchId}_${selectedHalf.id}`
-    const sessionId = `${profile.uid}_${matchId}_${selectedHalf.id}_${Date.now()}`
+    const mode     = reviewMode || 'scout'
+    const lockId   = `${matchId}_${selectedHalf.id}_${mode}`
+    const sessionId = `${profile.uid}_${matchId}_${selectedHalf.id}_${mode}_${Date.now()}`
     try {
       await setDoc(doc(db, 'mark_locks', lockId), {
         reviewerId:    profile.uid,
@@ -284,12 +290,14 @@ export default function SessionSetupPage({ onSessionStart, lastResult, onShowHis
         reviewerName:  profile.displayName || profile.email.split('@')[0],
         matchId,
         half: selectedHalf.id,
+        mode,
         claimedAt: serverTimestamp(),
       })
       await setDoc(doc(db, 'mark_sessions', sessionId), {
         sessionId,
         matchId,
         half:          selectedHalf.id,
+        mode,
         matchName:     selectedMatch.matchName,
         homeTeam:      selectedMatch.homeTeam,
         awayTeam:      selectedMatch.awayTeam,
@@ -315,7 +323,7 @@ export default function SessionSetupPage({ onSessionStart, lastResult, onShowHis
         homeTeam:  selectedMatch.homeTeam,
         awayTeam:  selectedMatch.awayTeam,
         matchDate: selectedMatch.matchDate,
-        mode:      reviewMode || 'scout',
+        mode,
       })
     } catch (e) {
       setError('Failed to start session: ' + e.message)

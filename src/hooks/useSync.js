@@ -15,6 +15,11 @@ let _onStatusChange = null
 function getWs(onStatusChange) {
   _onStatusChange = onStatusChange
   if (_ws && (_ws.readyState === WebSocket.OPEN || _ws.readyState === WebSocket.CONNECTING)) {
+    // Socket already alive (singleton survives page/mode/half remounts). The new
+    // caller's onStatusChange was just stored above; immediately report the REAL
+    // current state so a freshly-mounted page doesn't stay stuck on 'disconnected'
+    // even though the bridge is still connected.
+    if (_onStatusChange) _onStatusChange(_ws.readyState === WebSocket.OPEN ? 'connected' : 'disconnected')
     return _ws
   }
   _ws = new WebSocket(`ws://127.0.0.1:${WS_PORT}`)
@@ -26,7 +31,7 @@ function getWs(onStatusChange) {
   _ws.onclose = () => {
     _wsReady = false
     if (_onStatusChange) _onStatusChange('disconnected')
-    console.log('[MARK] sync WebSocket closed — will retry on next send')
+    console.log('[MARK] sync WebSocket closed — will retry')
     _ws = null
   }
   _ws.onerror = () => {
@@ -50,10 +55,21 @@ function send(fields, onStatusChange) {
 export function useSync(onStatusChange, sessionId) {
   const heartbeatRef = useRef(null)
 
-  // Connect eagerly when the hook mounts with a sessionId
+  // Connect eagerly when the hook mounts with a sessionId, and keep a lightweight
+  // health check so the connection self-heals after the collection app reloads or
+  // the socket drops — without the user logging out/in. Audit mode sends no sync
+  // signals, so without this it would never reconnect on its own.
   useEffect(() => {
     if (!sessionId) return
     getWs(onStatusChange)
+    const iv = setInterval(() => {
+      if (!_ws || (_ws.readyState !== WebSocket.OPEN && _ws.readyState !== WebSocket.CONNECTING)) {
+        getWs(onStatusChange)               // recreate if closed
+      } else if (_ws.readyState === WebSocket.OPEN && _onStatusChange) {
+        _onStatusChange('connected')        // keep status truthful
+      }
+    }, 2000)
+    return () => clearInterval(iv)
   }, [sessionId, onStatusChange])
 
   // Arrow key discrete nav
