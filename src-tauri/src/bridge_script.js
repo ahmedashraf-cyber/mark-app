@@ -1,5 +1,5 @@
 (async function(){
-  const BRIDGE_VERSION = '7.5.0';
+  const BRIDGE_VERSION = '7.5.1';
   if(window.__MARK_BRIDGE_VERSION__ === BRIDGE_VERSION){console.log('[MARK] bridge already running (v' + BRIDGE_VERSION + ')');return;}
   if(window.__MARK_BRIDGE_STOP__) window.__MARK_BRIDGE_STOP__();
   window.__MARK_BRIDGE__ = true;
@@ -125,6 +125,252 @@
     }
   }
 
+  // ── Identity harvesting (collector/reviewer hrcode + name + email) ─────────
+  // The collection app's GraphQL "EventHistory" op returns, for everyone who
+  // touched an event, an authorInfo object { legacyId, hrcode (LOWERCASE),
+  // firstName, middleName, lastName, email }. legacyId === Event.author. We
+  // harvest it (1) PASSIVELY via a tap on the live Apollo link, and (2) ACTIVELY
+  // via a sweep that re-issues EventHistory itself so names resolve with no
+  // manual "Viewed Event" card opening. Read-only / observational throughout.
+  const __ID__ = window.__MARK_IDENTITIES__ = window.__MARK_IDENTITIES__ || new Map();
+
+  function harvestEventHistory(data) {
+    let added = 0;
+    const rows = (data && data.eventHistory) || [];
+    for (let i = 0; i < rows.length; i++) {
+      const a = rows[i] && rows[i].authorInfo;
+      if (!a || a.legacyId == null) continue;
+      const name = [a.firstName, a.middleName, a.lastName].filter(Boolean).join(' ');
+      const key = String(a.legacyId);
+      const prev = __ID__.get(key);
+      __ID__.set(key, {
+        legacyId: a.legacyId,
+        hrcode: a.hrcode || (prev && prev.hrcode) || null,
+        name: name || (prev && prev.name) || null,
+        email: a.email || (prev && prev.email) || null,
+      });
+      if (!prev) added++;
+    }
+    return added;
+  }
+
+  function identitiesArray() {
+    const out = [];
+    __ID__.forEach(function (v) { out.push(v); });
+    return out;
+  }
+
+  // EventHistory query as a DocumentNode AST — drive the query ourselves with no
+  // gql/parse dependency. The passive tap upgrades it to the app's captured
+  // DocumentNode (window.__MARK_EH_DOC__) when one is seen, for an exact match.
+  let __ehDoc = null;
+  function buildEventHistoryDoc() {
+    if (window.__MARK_EH_DOC__) return window.__MARK_EH_DOC__;
+    if (__ehDoc) return __ehDoc;
+    const field = function (name, args, sel) {
+      return { kind: 'Field', name: { kind: 'Name', value: name },
+        arguments: args || [], directives: [], selectionSet: sel || undefined };
+    };
+    const leaf = ['id','key','capturedTime','eventTime','authorInfo','type','category','payload']
+      .map(function (n) { return field(n); });
+    __ehDoc = { kind: 'Document', definitions: [{
+      kind: 'OperationDefinition', operation: 'query', name: { kind: 'Name', value: 'EventHistory' },
+      variableDefinitions: [{ kind: 'VariableDefinition',
+        variable: { kind: 'Variable', name: { kind: 'Name', value: 'eventKey' } },
+        type: { kind: 'NonNullType', type: { kind: 'NamedType', name: { kind: 'Name', value: 'String' } } }, directives: [] }],
+      directives: [],
+      selectionSet: { kind: 'SelectionSet', selections: [
+        field('eventHistory', [{ kind: 'Argument', name: { kind: 'Name', value: 'eventKey' },
+          value: { kind: 'Variable', name: { kind: 'Name', value: 'eventKey' } } }],
+          { kind: 'SelectionSet', selections: leaf }) ] },
+    }] };
+    return __ehDoc;
+  }
+
+  // PASSIVE tap on the live Apollo link (client.queryManager.link.request — a
+  // concat chain; client.link does NOT route traffic). Harvests every
+  // EventHistory response. Reuses the observable's own ctor. Fail-open + reversible.
+  function installLinkTap() {
+    try {
+      const client = window.apollo && window.apollo.client;
+      if (!client) return false;
+      const qm = client.queryManager || (client.getQueryManager && client.getQueryManager());
+      const link = (qm && qm.link) || client.link;
+      if (!link || !link.request) return false;
+      if (link.__markTapped) return true;
+      const origRequest = link.request.bind(link);
+      link.__markTapped = true;
+      link.request = function (operation, forward) {
+        const ob = origRequest(operation, forward);
+        try {
+          if (!ob || typeof ob.subscribe !== 'function') return ob;
+          if (!operation || operation.operationName !== 'EventHistory') return ob;
+          const Obs = ob.constructor;
+          return new Obs(function (sink) {
+            const sub = ob.subscribe({
+              next: function (result) {
+                try {
+                  if (result && result.data) {
+                    if (!window.__MARK_EH_DOC__ && operation.query) window.__MARK_EH_DOC__ = operation.query;
+                    harvestEventHistory(result.data);
+                  }
+                } catch (e) {}
+                sink.next(result);
+              },
+              error: function (e) { sink.error(e); },
+              complete: function () { sink.complete(); },
+            });
+            return function () { try { sub.unsubscribe(); } catch (e) {} };
+          });
+        } catch (e) { return ob; }
+      };
+      window.__MARK_LINK_RESTORE__ = function () {
+        try { link.request = origRequest; link.__markTapped = false; } catch (e) {}
+      };
+      console.log('[MARK] Apollo identity link tap installed');
+      return true;
+    } catch (e) { console.warn('[MARK] link tap install failed:', e); return false; }
+  }
+  (function waitForApollo() {
+    if (installLinkTap()) return;
+    let tries = 0;
+    const iv = setInterval(function () { tries++; if (installLinkTap() || tries > 120) clearInterval(iv); }, 500);
+  })();
+
+  // "Socket closed" diagnosis: the app's GraphQL rides a WebSocket Apollo link
+  // (graphql-ws) that drops when idle / when the renderer is backgrounded. A
+  // query fired into a just-dropped socket rejects; graphql-ws reopens on the
+  // next attempt. So retry the same key on the reconnected socket with backoff,
+  // and only AUTO-sweep while the page is VISIBLE (below) to dodge bg throttling.
+  let __socketCloseHits = 0;
+  function isSocketErr(e) {
+    const m = ((e && e.message) || '') + ' ' +
+      ((e && e.networkError && (e.networkError.message || e.networkError)) || '');
+    return /socket|closed|websocket|connection|network|econn|terminat|1006|going away/i.test(String(m));
+  }
+  async function queryEventHistory(eventKey, maxAttempts) {
+    const client = window.apollo && window.apollo.client;
+    if (!client) throw new Error('apollo not ready');
+    const doc = buildEventHistoryDoc();
+    const max = maxAttempts || 6;
+    let delay = 400, lastErr = null;
+    for (let attempt = 1; attempt <= max; attempt++) {
+      try {
+        const res = await client.query({ query: doc, variables: { eventKey: eventKey },
+          fetchPolicy: 'no-cache', errorPolicy: 'all' });
+        if (res && res.data) harvestEventHistory(res.data);
+        return true;
+      } catch (e) {
+        lastErr = e;
+        if (isSocketErr(e)) __socketCloseHits++;       // transient — retry reopens the socket
+        if (attempt === max) break;
+        await new Promise(function (r) { setTimeout(r, delay); });
+        delay = Math.min(delay * 2, 4000);
+      }
+    }
+    console.warn('[MARK] EventHistory failed for ' + eventKey + ' after ' + max + ' attempts:',
+      lastErr && (lastErr.message || lastErr));
+    return false;
+  }
+
+  // ACTIVE sweep: resolve every distinct author of a match without opening cards.
+  // Gentle + deduped — one EventHistory returns ~5-7 people, so query one event
+  // per still-unresolved author, stop early, hard-cap. Includes refinement events
+  // so refinement-heavy collectors (few base events) still get a queryable key.
+  let __sweepRunning = false;
+  async function sweepMatchIdentities(matchId, partId, wantedIds) {
+    if (__sweepRunning) return identitiesArray();
+    __sweepRunning = true;
+    try {
+      const cache = window.apollo && window.apollo.client && window.apollo.client.cache.extract();
+      if (!cache) return identitiesArray();
+      const numMatchId = matchId == null ? null : (typeof matchId === 'string' ? parseInt(matchId, 10) : matchId);
+      const events = [];
+      const vals = Object.values(cache);
+      for (let i = 0; i < vals.length; i++) {
+        const v = vals[i];
+        if (!v || v.__typename !== 'Event') continue;
+        if (numMatchId != null && v.matchId !== numMatchId && v.matchId !== String(numMatchId)) continue;
+        if (numMatchId != null && partId != null && v.partId != null && v.partId !== partId) continue;
+        if (v.category !== 'base' && v.category !== 'amendment' && v.category !== 'refinement') continue;
+        if (v.author == null || !v.key) continue;
+        events.push(v);
+      }
+      const target = new Set();
+      for (let i = 0; i < events.length; i++) target.add(String(events[i].author));
+      if (wantedIds && wantedIds.length) {
+        for (let i = 0; i < wantedIds.length; i++) if (wantedIds[i] != null) target.add(String(wantedIds[i]));
+      }
+      // amendments first (most people per event), then base, then refinement.
+      const rank = function (c) { return c === 'amendment' ? 0 : (c === 'base' ? 1 : 2); };
+      events.sort(function (a, b) { return rank(a.category) - rank(b.category); });
+      const keyForId = {};
+      for (let i = 0; i < events.length; i++) {
+        const id = String(events[i].author);
+        if (!keyForId[id]) keyForId[id] = events[i].key;
+      }
+      const ids = Array.from(target);
+      let queries = 0, consecutiveNoNew = 0, firstQuery = true;
+      const CAP = 30;        // hard ceiling — never blast the whole match
+      const STOP_AFTER = 4;  // stop after N consecutive queries that found nobody new
+      for (let i = 0; i < ids.length; i++) {
+        const id = ids[i];
+        if (__ID__.has(id)) continue;          // already resolved (often by an earlier query)
+        const key = keyForId[id];
+        if (!key) continue;
+        const before = __ID__.size;
+        await queryEventHistory(key, firstQuery ? 8 : 5);  // first query warms a cold socket
+        firstQuery = false;
+        queries++;
+        if (__ID__.size > before) consecutiveNoNew = 0; else consecutiveNoNew++;
+        if (queries >= CAP || consecutiveNoNew >= STOP_AFTER) break;
+        await new Promise(function (r) { setTimeout(r, 350); });   // throttle ~350ms
+      }
+      console.log('[MARK] identity sweep done: ' + queries + ' queries, ' + __ID__.size +
+        ' identities, ' + __socketCloseHits + ' socket-close retries so far');
+      return identitiesArray();
+    } catch (e) {
+      console.warn('[MARK] sweep error:', e);
+      return identitiesArray();
+    } finally { __sweepRunning = false; }
+  }
+
+  // PROACTIVE foreground auto-sweep — makes identity capture happen on its own.
+  // While the collection app is VISIBLE (which it is during audit-mode review)
+  // and a match has unresolved authors, sweep automatically. By the time the user
+  // switches to MARK and clicks Get Results, everyone is already resolved.
+  let __lastAutoSweep = 0;
+  function unresolvedAuthorCount() {
+    try {
+      const cache = window.apollo && window.apollo.client && window.apollo.client.cache.extract();
+      if (!cache) return { total: 0, unresolved: 0 };
+      const vals = Object.values(cache);
+      const authors = new Set();
+      for (let i = 0; i < vals.length; i++) {
+        const v = vals[i];
+        if (v && v.__typename === 'Event' && v.author != null &&
+            (v.category === 'base' || v.category === 'amendment' || v.category === 'refinement'))
+          authors.add(String(v.author));
+      }
+      let unresolved = 0;
+      authors.forEach(function (id) { if (!__ID__.has(id)) unresolved++; });
+      return { total: authors.size, unresolved: unresolved };
+    } catch (e) { return { total: 0, unresolved: 0 }; }
+  }
+  async function maybeAutoSweep() {
+    if (__sweepRunning) return;
+    if (document.hidden) return;                   // foreground only — dodge bg throttling
+    if (Date.now() - __lastAutoSweep < 8000) return;
+    const stat = unresolvedAuthorCount();
+    if (stat.total === 0 || stat.unresolved === 0) return;
+    __lastAutoSweep = Date.now();
+    console.log('[MARK] auto-sweep: ' + stat.unresolved + '/' + stat.total + ' authors unresolved');
+    await sweepMatchIdentities();                   // no matchId → whole loaded match
+  }
+  setInterval(maybeAutoSweep, 10000);
+  document.addEventListener('visibilitychange', function () { if (!document.hidden) setTimeout(maybeAutoSweep, 600); });
+  window.__MARK_SWEEP__ = function () { return sweepMatchIdentities(); };   // manual trigger for debugging
+
   // ── localhost WebSocket connection ────────────────────────────────────────
   // All sync commands (navCommand, posSync, seekCommand) arrive here.
   // Firebase is NOT used for sync — zero writes per keypress.
@@ -138,6 +384,7 @@
     ws = null;
     wsConnected = false;
     if (unsubActiveQuery) { unsubActiveQuery(); unsubActiveQuery = null; }
+    try { if (window.__MARK_LINK_RESTORE__) window.__MARK_LINK_RESTORE__(); } catch(_) {}
     console.log('[MARK] old bridge stopped cleanly');
   };
 
@@ -173,6 +420,20 @@
   let lastNav = 0, lastPos = 0, lastSeek = 0;
 
   function handleSyncMessage(msg, _capturedVideo) {
+    // Identity resolution needs no <video> — handle it before the video guard.
+    if (msg.type === 'resolveMatchIdentities') {
+      (async function () {
+        let identities = [], err = null;
+        try { identities = await sweepMatchIdentities(msg.matchId, msg.partId, msg.legacyIds); }
+        catch (e) { err = e && e.message; identities = identitiesArray(); }
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: 'identitiesResponse', identities: identities,
+            error: err, bridgeVersion: BRIDGE_VERSION, reqTs: msg.ts, ts: Date.now() }));
+        }
+      })();
+      return;
+    }
+
     // The collection app destroys and recreates its <video> element when you
     // switch halves, so a reference captured when the socket first connected
     // goes stale and sync silently dies. Always resolve the LIVE video element
@@ -292,23 +553,41 @@
         });
         const universeKeys = new Set(allBase.map(v => v.key));
 
-        // Main collector = author of the most base events
+        // Per-author tallies for THIS half: base, refinement, amendment, views.
         const baseAuthorCounts = {};
         allBase.forEach(v => { baseAuthorCounts[v.author] = (baseAuthorCounts[v.author] || 0) + 1; });
-        const topBase = Object.entries(baseAuthorCounts).sort((a,b) => b[1]-a[1])[0]?.[0];
-        collectorIdNum = topBase != null ? parseInt(topBase) : null;
-
-        // Per-author change tally (Rule 2/3): amendments authored in this half.
-        // A reviewer must have made at least one change — Rule 3: a Viewed-Event
-        // author with zero edits/adds is a playthrough, NOT a reviewer.
-        const changeCounts = {};
+        const refinementCounts = {}, amendmentCounts = {}, viewCounts = {};
         Object.values(cache).forEach(v => {
           if (!v || v.__typename !== 'Event') return;
           if (v.matchId !== numMatchId && v.matchId !== String(numMatchId)) return;
           if (partId && v.partId !== partId) return;
-          if (v.category === 'amendment') changeCounts[v.author] = (changeCounts[v.author] || 0) + 1;
+          if (v.category === 'refinement') refinementCounts[v.author] = (refinementCounts[v.author] || 0) + 1;
+          else if (v.category === 'amendment') amendmentCounts[v.author] = (amendmentCounts[v.author] || 0) + 1;
+          else if (v.category === 'telemetry' && v.type === 'event-activation') viewCounts[v.author] = (viewCounts[v.author] || 0) + 1;
         });
-        // base events authored by a non-collector = added (missed) events, also count as a change
+        const changeCounts = amendmentCounts;   // amendments = changes
+        const topBase = Object.entries(baseAuthorCounts).sort((a,b) => b[1]-a[1])[0]?.[0];
+
+        // ── COLLECTOR(S) — Update #1 ──────────────────────────────────────────
+        // A collector PRODUCES data and never "views": views === 0 AND
+        // (base + refinement) > 600 in this half. There can be MULTIPLE per half
+        // (work is often split by module). Fallback to the top base author when
+        // the threshold finds nobody, so scoring always has a collector.
+        const COLLECTOR_WORK_MIN = 600;
+        const allAuthors = new Set();
+        [baseAuthorCounts, refinementCounts, amendmentCounts, viewCounts].forEach(m =>
+          Object.keys(m).forEach(k => allAuthors.add(parseInt(k))));
+        let collectorIds = [...allAuthors].filter(a =>
+          (viewCounts[a] || 0) === 0 &&
+          ((baseAuthorCounts[a] || 0) + (refinementCounts[a] || 0)) > COLLECTOR_WORK_MIN
+        );
+        if (collectorIds.length === 0 && topBase != null) collectorIds = [parseInt(topBase)];
+        const collectorSet = new Set(collectorIds);
+        collectorIdNum = collectorIds.length ? collectorIds[0] : null;   // primary (back-compat)
+
+        // A reviewer must have made >=1 change — Rule 3: a Viewed-Event author
+        // with zero edits/adds is a playthrough, NOT a reviewer. For a
+        // non-collector, authoring a base event = an added/missed event = a change.
         const hasChange = a => (changeCounts[a] || 0) > 0 || (baseAuthorCounts[a] || 0) > 0;
 
         try {
@@ -318,11 +597,13 @@
             v.type === 'event-activation' && (!partId || v.partId === partId)
           );
 
-          // Rule 1 (Viewed Event) + Rule 3 (must have made >=1 edit/add), excluding
-          // the main collector. Drops playthrough viewers who opened events but
-          // changed nothing.
+          // ── REVIEWER(S) — Update #1 ─────────────────────────────────────────
+          // KEY FIX: the reviewer signal is VIEWS (event-activation), NOT
+          // amendments. Reviewers = distinct view authors, MINUS all collectors,
+          // who also made >=1 change. (Many amendments + 0 views = collector/refiner,
+          // not a reviewer.) Playthrough viewers (0 changes) are dropped.
           reviewerIds = [...new Set(telemetryAll.map(t => t.author))]
-            .filter(a => a !== collectorIdNum && hasChange(a));
+            .filter(a => !collectorSet.has(a) && hasChange(a));
           const reviewerSet = new Set(reviewerIds);
 
           // Reviewed events = distinct base events a reviewer OPENED (telemetry key === base key)
@@ -415,10 +696,10 @@
         const telSorted = Object.values(telByAuthor).sort((x,y) => x.firstTs - y.firstTs);
 
         let reviewerMethod = reviewerIds.length ? 'viewed-event' : 'none';
-        // Fallback (no telemetry at all): most frequent non-collector editor.
+        // Fallback (no telemetry at all): most frequent editor who is not a collector.
         if (reviewerIds.length === 0) {
           const reviewerCounts = {};
-          amendments.forEach(a => { if (a.author !== collectorIdNum) reviewerCounts[a.author] = (reviewerCounts[a.author]||0)+1; });
+          amendments.forEach(a => { if (!collectorSet.has(a.author)) reviewerCounts[a.author] = (reviewerCounts[a.author]||0)+1; });
           const top = Object.entries(reviewerCounts).sort((a,b) => b[1]-a[1])[0]?.[0];
           if (top != null) { reviewerIds = [parseInt(top)]; reviewerMethod = 'fallback-freq'; }
         }
@@ -430,11 +711,17 @@
         const diagnostics = {
           reviewerMethod,
           reviewerIds,
+          collectorIds,
           universeBase:     allBase.length,
           reviewed:         baseEvents.length,
           telemetry:        telSorted.map(t => ({ author: t.author, views: t.views, firstTs: (t.firstTs === Infinity ? 0 : t.firstTs) })),
           amendmentAuthors: Object.entries(amendAuthorCounts).map(([author,count]) => ({ author: parseInt(author), count })),
           baseAuthors:      Object.entries(baseAuthorCounts).map(([author,count]) => ({ author: parseInt(author), count })),
+          // Per-author work profile (base+refinement+amendment+views) so the
+          // collector/reviewer picks can be verified by eye.
+          work: [...allAuthors].map(a => ({ author: a,
+            base: baseAuthorCounts[a]||0, refinement: refinementCounts[a]||0,
+            amendment: amendmentCounts[a]||0, views: viewCounts[a]||0 })),
         };
 
         ws.send(JSON.stringify({
@@ -445,8 +732,10 @@
           baseEvents,
           amendments,
           collectorId,
+          collectorIds,
           reviewerId,
           reviewerIds,
+          identities: identitiesArray(),   // resolved legacyId -> {hrcode,name,email} (passive tap + auto-sweep)
           diagnostics,
           usedTelemetry,
           ts: Date.now(),

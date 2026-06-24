@@ -5,7 +5,7 @@ import { collection, addDoc, serverTimestamp, getDocs, query, where } from 'fire
 import { useAuth } from '../hooks/useAuth.jsx'
 import { useSync } from '../hooks/useSync.js'
 import { formatHalf } from '../utils/half.js'
-import { loadRoster, saveIdentities, buildIdentityMap, formatPerson } from '../data/roster.js'
+import { loadRoster, saveIdentities, buildIdentityMap, formatPerson, formatPeople } from '../data/roster.js'
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 const fmt = (s) => {
@@ -469,6 +469,22 @@ function AmendmentsTable({ results, session, reviewerIds, identityMap }) {
         </button>
       </div>
 
+      {/* Collectors & reviewers for this half — Update #1 yields possibly MULTIPLE collectors */}
+      <div style={{ display:'flex', flexWrap:'wrap', gap:'4px 18px', marginBottom:10, fontSize:11, color:'var(--t-3)' }}>
+        <span>
+          <span style={{ fontWeight:700, color:'var(--t-2)' }}>
+            {(results.collectorIds && results.collectorIds.length > 1) ? 'Collectors: ' : 'Collector: '}
+          </span>
+          {formatPeople(results.collectorIds && results.collectorIds.length ? results.collectorIds : [results.collectorId], idMap, results.collectorId)}
+        </span>
+        <span>
+          <span style={{ fontWeight:700, color:'var(--t-2)' }}>
+            {(reviewerIds && reviewerIds.length > 1) ? 'Reviewers: ' : 'Reviewer: '}
+          </span>
+          {formatPeople(reviewerIds, idMap, results.reviewerId)}
+        </span>
+      </div>
+
       {/* Table */}
       <div style={{ borderRadius:10, border:'1px solid var(--b-1)', overflow:'hidden' }}>
         {/* Header row */}
@@ -680,6 +696,7 @@ export default function AuditPage({ session, onBack, onFullReport }) {
         reviewerEmail:      profile.email,
         reviewerName:       profile.displayName || profile.email.split('@')[0],
         collectorId:        data.collectorId,
+        collectorIds:       data.collectorIds || (data.collectorId != null ? [data.collectorId] : []),
         qaReviewerId:       data.reviewerId,
         qaReviewerIds:      reviewerIds,
         videoTime:          data.videoTime,

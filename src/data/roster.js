@@ -26,6 +26,18 @@ export function formatPerson(entry, fallbackId) {
   return fallbackId != null && fallbackId !== '' ? `#${fallbackId}` : '—'
 }
 
+// Format a LIST of ids as "Name (CODE), Name (CODE)" (Update #1 can yield
+// multiple collectors per half). Falls back to #id per entry when unresolved.
+export function formatPeople(ids, identityMap, fallbackId) {
+  const list = (ids || []).filter(x => x != null && x !== '')
+  if (!list.length) return fallbackId != null && fallbackId !== '' ? formatPerson(undefined, fallbackId) : '—'
+  const seen = new Set()
+  return list
+    .filter(id => { const k = String(id); if (seen.has(k)) return false; seen.add(k); return true })
+    .map(id => formatPerson((identityMap || {})[String(id)], id))
+    .join(', ')
+}
+
 // Keep only the fields we actually have a value for, so a partial source never
 // clobbers a richer one when merged.
 function pick(r) {
