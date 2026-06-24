@@ -447,6 +447,14 @@ function AmendmentsTable({ results, session, reviewerIds, identityMap, onSeek })
     const reviewerName = formatPerson(idMap[String(reviewerAuthorId)], reviewerAuthorId)
     const collectorDisplay = formatPerson(idMap[String(collectorAuthorId)], collectorAuthorId)
 
+    // Split the change into EVENT ASPECT (what part) and EDIT TYPE (the mistake).
+    //   base/camera -> Base · extras -> Extra · location -> Location · players -> Players
+    //   deletion -> Deleted (aspect Base) · added -> Added (aspect Base) · else -> Wrong
+    const ASPECT_OF = { base:'Base', camera:'Base', extras:'Extra', location:'Location', players:'Players', deletion:'Base', added:'Base' }
+    const aspects = [...new Set(types.map(t => ASPECT_OF[t] || 'Base'))]
+    // EDIT TYPE: Added/Deleted take priority over Wrong; only one value per event.
+    const editType = types.includes('added') ? 'Added' : types.includes('deletion') ? 'Deleted' : 'Wrong'
+
     return {
       key,
       eventName:    base?.name || '—',
@@ -454,6 +462,8 @@ function AmendmentsTable({ results, session, reviewerIds, identityMap, onSeek })
       tsSec:        base?.videoTimestamp != null ? base.videoTimestamp / 1000 : null,
       teamId:       base?.teamId || '—',
       types,
+      aspects,
+      editType,
       before,
       after,
       collectorId:  collectorDisplay,
@@ -466,12 +476,18 @@ function AmendmentsTable({ results, session, reviewerIds, identityMap, onSeek })
     return ta - tb
   })
 
-  // Issue 3: distinct CHANGE types present (for the filter pills), and the filtered view.
-  const presentTypes = [...new Set(rows.flatMap(r => r.types))].sort()
-  const visibleRows = activeFilter ? rows.filter(r => r.types.includes(activeFilter)) : rows
+  // Filter pills now span both new columns: aspects (Base/Extra/Location/Players)
+  // and edit types (Added/Deleted/Wrong). A row matches if the active filter is
+  // one of its aspects OR its edit type.
+  const presentAspects = [...new Set(rows.flatMap(r => r.aspects))].sort()
+  const presentEdits = [...new Set(rows.map(r => r.editType))].sort()
+  const presentTypes = [...presentAspects, ...presentEdits]
+  const visibleRows = activeFilter
+    ? rows.filter(r => r.aspects.includes(activeFilter) || r.editType === activeFilter)
+    : rows
 
   function downloadCSV() {
-    const headers = ['Match ID','Match Name','Half','Timestamp','Event Name','Team','Change Types','Before Change','After Change','Collector ID','Reviewer ID','Captured Time']
+    const headers = ['Match ID','Match Name','Half','Timestamp','Event Name','Team','Event Aspect','Edit Type','Before Change','After Change','Collector ID','Reviewer ID','Captured Time']
     const csvRows = rows.map(r => [
       session.matchId,
       session.matchName,
@@ -479,7 +495,8 @@ function AmendmentsTable({ results, session, reviewerIds, identityMap, onSeek })
       r.timestamp,
       r.eventName,
       r.teamId,
-      r.types.join(' + '),
+      r.aspects.join(' + '),
+      r.editType,
       r.before || '—',
       r.after  || '—',
       r.collectorId,
@@ -502,8 +519,13 @@ function AmendmentsTable({ results, session, reviewerIds, identityMap, onSeek })
   if (rows.length === 0) return null
 
   const AMEND_COLORS = {
+    // legacy raw types (kept for any leftover refs)
     deletion: '#FF453A', extras: '#FFD60A', base: '#E8590C',
-    camera: '#BF5AF2', location: '#0A84FF',
+    camera: '#BF5AF2', location: '#0A84FF', players: '#30D158',
+    // EVENT ASPECT labels
+    Base: '#E8590C', Extra: '#FFD60A', Location: '#0A84FF', Players: '#30D158',
+    // EDIT TYPE labels
+    Added: '#30D158', Deleted: '#FF453A', Wrong: '#FF9F0A',
   }
 
   return (
@@ -555,7 +577,7 @@ function AmendmentsTable({ results, session, reviewerIds, identityMap, onSeek })
             }}
           >All ({rows.length})</button>
           {presentTypes.map(t => {
-            const count = rows.filter(r => r.types.includes(t)).length
+            const count = rows.filter(r => r.aspects.includes(t) || r.editType === t).length
             const col = AMEND_COLORS[t] || 'var(--t-3)'
             const on = activeFilter === t
             return (
@@ -578,12 +600,12 @@ function AmendmentsTable({ results, session, reviewerIds, identityMap, onSeek })
         {/* Header row */}
         <div style={{
           display:'grid',
-          gridTemplateColumns:'60px 1fr 60px 110px 130px 130px 70px 70px 70px',
+          gridTemplateColumns:'60px 1fr 60px 130px 90px 120px 120px 70px 70px 70px',
           padding:'7px 14px',
           background:'var(--bg-3)',
           borderBottom:'1px solid var(--b-1)',
         }}>
-          {['TIME','EVENT','TEAM','CHANGE','BEFORE','AFTER','COLLECTOR','REVIEWER','CAPTURED'].map(h => (
+          {['TIME','EVENT','TEAM','EVENT ASPECT','EDIT TYPE','BEFORE','AFTER','COLLECTOR','REVIEWER','CAPTURED'].map(h => (
             <span key={h} style={{ fontSize:9, fontWeight:800, color:'var(--t-3)', letterSpacing:1 }}>{h}</span>
           ))}
         </div>
@@ -595,11 +617,11 @@ function AmendmentsTable({ results, session, reviewerIds, identityMap, onSeek })
             return (
             <div key={r.key} style={{
               display:'grid',
-              gridTemplateColumns:'60px 1fr 60px 110px 130px 130px 70px 70px 70px',
+              gridTemplateColumns:'60px 1fr 60px 130px 90px 120px 120px 70px 70px 70px',
               padding:'7px 14px',
               borderBottom:'1px solid var(--b-1)',
               background: i % 2 === 0 ? 'transparent' : 'rgba(255,255,255,0.01)',
-              borderLeft:`2px solid ${AMEND_COLORS[r.types[0]] || 'var(--b-2)'}`,
+              borderLeft:`2px solid ${AMEND_COLORS[r.aspects[0]] || 'var(--b-2)'}`,
               transition:'background .1s',
               cursor: seekable ? 'pointer' : 'default',
             }}
@@ -611,8 +633,9 @@ function AmendmentsTable({ results, session, reviewerIds, identityMap, onSeek })
               <span style={{ fontSize:11, fontFamily:'JetBrains Mono, monospace', color:'var(--p2)' }}>{r.timestamp}</span>
               <span style={{ fontSize:11, color:'var(--t-1)', fontWeight:600, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{r.eventName}</span>
               <span style={{ fontSize:10, color:'var(--t-3)' }}>{r.teamId}</span>
+              {/* EVENT ASPECT — may be multiple */}
               <div style={{ display:'flex', gap:3, flexWrap:'wrap' }}>
-                {r.types.map((t, j) => (
+                {r.aspects.map((t, j) => (
                   <span key={j} style={{
                     fontSize:9, fontWeight:700, padding:'1px 6px', borderRadius:4,
                     background:`${AMEND_COLORS[t] || 'var(--t-3)'}14`,
@@ -620,6 +643,15 @@ function AmendmentsTable({ results, session, reviewerIds, identityMap, onSeek })
                     border:`1px solid ${AMEND_COLORS[t] || 'var(--t-3)'}30`,
                   }}>{t}</span>
                 ))}
+              </div>
+              {/* EDIT TYPE — single value */}
+              <div>
+                <span style={{
+                  fontSize:9, fontWeight:700, padding:'1px 6px', borderRadius:4,
+                  background:`${AMEND_COLORS[r.editType] || 'var(--t-3)'}14`,
+                  color: AMEND_COLORS[r.editType] || 'var(--t-3)',
+                  border:`1px solid ${AMEND_COLORS[r.editType] || 'var(--t-3)'}30`,
+                }}>{r.editType}</span>
               </div>
               <span style={{ fontSize:10, color:'#FF453A', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }} title={r.before}>{r.before || '—'}</span>
               <span style={{ fontSize:10, color:'#30D158', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }} title={r.after}>{r.after || '—'}</span>
