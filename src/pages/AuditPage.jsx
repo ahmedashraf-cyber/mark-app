@@ -5,6 +5,7 @@ import { collection, addDoc, serverTimestamp, getDocs, query, where } from 'fire
 import { useAuth } from '../hooks/useAuth.jsx'
 import { useSync } from '../hooks/useSync.js'
 import { formatHalf } from '../utils/half.js'
+import { loadRoster, saveIdentities, buildIdentityMap, formatPerson } from '../data/roster.js'
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 const fmt = (s) => {
@@ -308,22 +309,15 @@ function calcGroupScore(group, baseEvents, amendments, refinements, reviewerIds)
 }
 
 // ── Amendments Table ──────────────────────────────────────────────────────────
-function AmendmentsTable({ results, session, reviewerIds }) {
+function AmendmentsTable({ results, session, reviewerIds, identityMap }) {
   const { baseEvents } = results
   // Show edits by ANY real reviewer (all types) — collectors' edits are ignored.
   const reviewerSet = new Set((reviewerIds || []).map(Number))
   const amendments = results.amendments.filter(a => reviewerSet.has(Number(a.author)))
 
-  // Build profile lookup from Apollo cache
-  const profileMap = {}
-  try {
-    const cache = window.apollo?.client?.cache?.extract() || {}
-    Object.values(cache).forEach(v => {
-      if (v.__typename === 'Profile' && v.legacyId) {
-        profileMap[v.legacyId] = `${v.firstName} ${v.lastName}`
-      }
-    })
-  } catch(e) {}
+  // Identity lookup (legacyId -> { hrcode, name, email }) resolved by the bridge
+  // from EventHistory and merged with the persistent Firestore roster.
+  const idMap = identityMap || results.identityMap || {}
 
   // Build refinement lookup (collector's original values) by key+type
   const refinementMap = {}
@@ -397,10 +391,10 @@ function AmendmentsTable({ results, session, reviewerIds }) {
       after = 'Added (missed)'
     }
 
-    const collectorId = base?.author || '—'
+    const collectorAuthorId = base?.author
     const reviewerAuthorId = latestAmend?.author
-    const reviewerName = profileMap[reviewerAuthorId] || `#${reviewerAuthorId}`
-    const collectorDisplay = `#${collectorId}`
+    const reviewerName = formatPerson(idMap[String(reviewerAuthorId)], reviewerAuthorId)
+    const collectorDisplay = formatPerson(idMap[String(collectorAuthorId)], collectorAuthorId)
 
     return {
       key,
@@ -548,8 +542,16 @@ export default function AuditPage({ session, onBack, onFullReport }) {
   const [error,          setError]          = useState('')
   const [saved,          setSaved]          = useState(false)
   const [abcScores,      setAbcScores]      = useState(null)
+  const [resolvingIds,   setResolvingIds]   = useState(false)
 
-  const { requestQAResults } = useSync(setBridgeStatus, session.sessionId)
+  const { requestQAResults, resolveMatchIdentities } = useSync(setBridgeStatus, session.sessionId)
+
+  // Persistent Firestore roster backbone — loaded once, used as a fallback when
+  // a person wasn't resolved live this session.
+  const rosterRef = useRef({})
+  useEffect(() => {
+    loadRoster().then(r => { rosterRef.current = r })
+  }, [])
 
   // Video is loaded manually by the reviewer — no auto-load
 
@@ -619,6 +621,11 @@ export default function AuditPage({ session, onBack, onFullReport }) {
       for (const [key, group] of Object.entries(REVIEW_GROUPS)) {
         abc[key] = calcGroupScore(group, data.baseEvents, data.amendments, refinements, reviewerIds)
       }
+      // Seed the identity map from whatever the bridge already harvested
+      // (passive tap / prior sweep) plus the persistent roster.
+      const seedIdentities = data.identities || []
+      data.identityMap = buildIdentityMap(seedIdentities, rosterRef.current)
+
       setAbcScores(abc)
       setResults(data)
       setScore(q)
@@ -628,6 +635,25 @@ export default function AuditPage({ session, onBack, onFullReport }) {
         await saveToFirebase(data, q, abc)
         setSaved(true)
       }
+
+      // Auto-resolve EVERY collector/reviewer identity in the background — the
+      // bridge sweeps EventHistory so we no longer open each card by hand. Names
+      // fill in a moment after results render; resolved people are persisted to
+      // the roster so future audits show them instantly.
+      const distinctAuthors = [...new Set([
+        ...data.baseEvents.map(e => e.author),
+        ...data.amendments.map(a => a.author),
+      ].filter(x => x != null))]
+      setResolvingIds(true)
+      resolveMatchIdentities(session.matchId, session.half, distinctAuthors)
+        .then(live => {
+          const merged = (live && live.length) ? live : seedIdentities
+          const map = buildIdentityMap(merged, rosterRef.current)
+          setResults(prev => (prev ? { ...prev, identityMap: map } : prev))
+          saveIdentities(merged)
+        })
+        .catch(() => {})
+        .finally(() => setResolvingIds(false))
     } catch(e) {
       setError('Error getting results: ' + e.message)
     } finally {
@@ -878,7 +904,18 @@ export default function AuditPage({ session, onBack, onFullReport }) {
                 abcScores={abcScores}
                 onFullReport={() => onFullReport(results, score, session)}
               />
-              <AmendmentsTable results={results} session={session} reviewerIds={results.reviewerIds || (results.reviewerId != null ? [results.reviewerId] : [])} />
+              {resolvingIds && (
+                <div className="fade-in" style={{
+                  marginTop: 10, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7,
+                  fontSize: 11, color: 'var(--t-3)',
+                }}>
+                  <svg style={{ animation: 'spin 1s linear infinite' }} width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                    <circle cx="12" cy="12" r="10" strokeOpacity=".3"/><path d="M12 2a10 10 0 0 1 10 10"/>
+                  </svg>
+                  Resolving collector &amp; reviewer names…
+                </div>
+              )}
+              <AmendmentsTable results={results} session={session} identityMap={results.identityMap} reviewerIds={results.reviewerIds || (results.reviewerId != null ? [results.reviewerId] : [])} />
             </>
           )}
 

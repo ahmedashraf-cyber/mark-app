@@ -4,12 +4,12 @@ const collAsar = 'C:\\Users\\AhmedAshraf\\AppData\\Local\\Programs\\live-collect
 const backupPath = collAsar + '.markbackup_v4';
 
 const NEW_BRIDGE = `(async function(){
-  const BRIDGE_VERSION = '6.0.1-ws';
+  const BRIDGE_VERSION = '6.2.0-ids';
   if(window.__MARK_BRIDGE_VERSION__ === BRIDGE_VERSION){console.log('[MARK] bridge already running (v' + BRIDGE_VERSION + ')');return;}
   if(window.__MARK_BRIDGE_STOP__) window.__MARK_BRIDGE_STOP__();
   window.__MARK_BRIDGE__ = true;
   window.__MARK_BRIDGE_VERSION__ = BRIDGE_VERSION;
-  console.log('[MARK] bridge starting (v4.3.0 — localhost WebSocket)');
+  console.log('[MARK] bridge starting (v' + BRIDGE_VERSION + ' — localhost WebSocket + identity harvest)');
 
   // ── Optional auto-auth tokens (for Firebase session lookup only) ──────────
   const __MARK_FB_API_KEY__ = 'AIzaSyB-HWh2kJgoPDwzYhZWgW6pi8uZK8u9K7U';
@@ -130,6 +130,229 @@ const NEW_BRIDGE = `(async function(){
     }
   }
 
+  // ── Identity harvesting (collector/reviewer hrcode + name + email) ─────────
+  // The collection app's GraphQL "EventHistory" operation returns, for every
+  // person who touched an event, an authorInfo object:
+  //   { id, email, firstName, middleName, lastName, hrcode, legacyId }
+  // legacyId === Event.author (the numeric id MARK already uses). We harvest it
+  // two ways: (1) a PASSIVE tap on the live Apollo link (zero extra requests),
+  // and (2) an ACTIVE sweep that re-issues EventHistory ourselves so identities
+  // resolve automatically — no need for the user to open each "Viewed Event"
+  // popover one by one. Everything here is read-only / observational.
+  const __ID__ = window.__MARK_IDENTITIES__ = window.__MARK_IDENTITIES__ || new Map();
+
+  function harvestEventHistory(data) {
+    let added = 0;
+    const rows = (data && data.eventHistory) || [];
+    for (let i = 0; i < rows.length; i++) {
+      const a = rows[i] && rows[i].authorInfo;
+      if (!a || a.legacyId == null) continue;
+      const name = [a.firstName, a.middleName, a.lastName].filter(Boolean).join(' ');
+      const key = String(a.legacyId);
+      const prev = __ID__.get(key);
+      const next = {
+        legacyId: a.legacyId,
+        hrcode: a.hrcode || (prev && prev.hrcode) || null,
+        name: name || (prev && prev.name) || null,
+        email: a.email || (prev && prev.email) || null,
+      };
+      __ID__.set(key, next);
+      if (!prev) added++;
+    }
+    return added;
+  }
+
+  function identitiesArray() {
+    const out = [];
+    __ID__.forEach(function (v) { out.push(v); });
+    return out;
+  }
+
+  // EventHistory query as a DocumentNode AST — lets us drive the query ourselves
+  // with NO dependency on gql/parse being exposed in the renderer. This mirrors
+  // the app's own operation verbatim. The passive tap may later replace it with
+  // the captured DocumentNode (window.__MARK_EH_DOC__) for an exact match.
+  let __ehDoc = null;
+  function buildEventHistoryDoc() {
+    if (window.__MARK_EH_DOC__) return window.__MARK_EH_DOC__;
+    if (__ehDoc) return __ehDoc;
+    const field = function (name, args, sel) {
+      return { kind: 'Field', name: { kind: 'Name', value: name },
+        arguments: args || [], directives: [], selectionSet: sel || undefined };
+    };
+    const leaf = ['id','key','capturedTime','eventTime','authorInfo','type','category','payload']
+      .map(function (n) { return field(n); });
+    __ehDoc = {
+      kind: 'Document',
+      definitions: [{
+        kind: 'OperationDefinition', operation: 'query',
+        name: { kind: 'Name', value: 'EventHistory' },
+        variableDefinitions: [{
+          kind: 'VariableDefinition',
+          variable: { kind: 'Variable', name: { kind: 'Name', value: 'eventKey' } },
+          type: { kind: 'NonNullType', type: { kind: 'NamedType', name: { kind: 'Name', value: 'String' } } },
+          directives: [],
+        }],
+        directives: [],
+        selectionSet: { kind: 'SelectionSet', selections: [
+          field('eventHistory',
+            [{ kind: 'Argument', name: { kind: 'Name', value: 'eventKey' },
+               value: { kind: 'Variable', name: { kind: 'Name', value: 'eventKey' } } }],
+            { kind: 'SelectionSet', selections: leaf })
+        ] },
+      }],
+    };
+    return __ehDoc;
+  }
+
+  // PASSIVE tap: wrap the live Apollo link (client.queryManager.link.request)
+  // and harvest every EventHistory response that flows through it. Reuses the
+  // observable's own constructor (zen-observable). Fail-open + reversible.
+  function installLinkTap() {
+    try {
+      const client = window.apollo && window.apollo.client;
+      if (!client) return false;
+      const qm = client.queryManager || (client.getQueryManager && client.getQueryManager());
+      const link = (qm && qm.link) || client.link;
+      if (!link || !link.request) return false;
+      if (link.__markTapped) return true;
+      const origRequest = link.request.bind(link);
+      link.__markTapped = true;
+      link.request = function (operation, forward) {
+        const ob = origRequest(operation, forward);
+        try {
+          if (!ob || typeof ob.subscribe !== 'function') return ob;
+          if (!operation || operation.operationName !== 'EventHistory') return ob;
+          const Obs = ob.constructor;
+          return new Obs(function (sink) {
+            const sub = ob.subscribe({
+              next: function (result) {
+                try {
+                  if (result && result.data) {
+                    if (!window.__MARK_EH_DOC__ && operation.query) window.__MARK_EH_DOC__ = operation.query;
+                    const n = harvestEventHistory(result.data);
+                    if (n) console.log('[MARK] +' + n + ' identities (passive), total ' + __ID__.size);
+                  }
+                } catch (e) {}
+                sink.next(result);
+              },
+              error: function (e) { sink.error(e); },
+              complete: function () { sink.complete(); },
+            });
+            return function () { try { sub.unsubscribe(); } catch (e) {} };
+          });
+        } catch (e) { return ob; }
+      };
+      window.__MARK_LINK_RESTORE__ = function () {
+        try { link.request = origRequest; link.__markTapped = false; } catch (e) {}
+      };
+      console.log('[MARK] Apollo identity link tap installed');
+      return true;
+    } catch (e) { console.warn('[MARK] link tap install failed:', e); return false; }
+  }
+
+  // Poll until Apollo + its link exist (the bridge starts before the app fully
+  // boots), then install the tap once.
+  (function waitForApollo() {
+    if (installLinkTap()) return;
+    let tries = 0;
+    const iv = setInterval(function () {
+      tries++;
+      if (installLinkTap() || tries > 120) clearInterval(iv);
+    }, 500);
+  })();
+
+  // Re-issue ONE EventHistory query via the app's own client/transport, with
+  // retry + backoff. The app routes operations over a WebSocket-based link that
+  // can report "Socket closed" when idle/backgrounded; a fresh attempt makes the
+  // link reconnect, so a couple of retries clears it. no-cache = network fetch
+  // that never reads/writes the app's cache (pure observation).
+  async function queryEventHistory(eventKey) {
+    const client = window.apollo && window.apollo.client;
+    if (!client) throw new Error('apollo not ready');
+    const doc = buildEventHistoryDoc();
+    let lastErr = null;
+    for (let attempt = 0; attempt < 4; attempt++) {
+      try {
+        const res = await client.query({ query: doc, variables: { eventKey: eventKey },
+          fetchPolicy: 'no-cache', errorPolicy: 'all' });
+        if (res && res.data) harvestEventHistory(res.data);
+        return true;
+      } catch (e) {
+        lastErr = e;
+        await new Promise(function (r) { setTimeout(r, 600 * Math.pow(2, attempt)); });
+      }
+    }
+    console.warn('[MARK] EventHistory failed for', eventKey, lastErr && lastErr.message);
+    return false;
+  }
+
+  // ACTIVE sweep: resolve EVERY distinct author for a match WITHOUT opening any
+  // popover. Gentle + deduped — one EventHistory query returns authorInfo for
+  // all ~5-7 people who touched that event, so a handful of queries covers the
+  // whole match. Hard caps + a "no new id" stop condition keep it from ever
+  // blasting all 1300+ events.
+  let __sweepRunning = false;
+  async function sweepMatchIdentities(matchId, partId, wantedIds) {
+    if (__sweepRunning) return identitiesArray();
+    __sweepRunning = true;
+    try {
+      const cache = window.apollo && window.apollo.client && window.apollo.client.cache.extract();
+      if (!cache) return identitiesArray();
+      const numMatchId = typeof matchId === 'string' ? parseInt(matchId, 10) : matchId;
+      const events = [];
+      const vals = Object.values(cache);
+      for (let i = 0; i < vals.length; i++) {
+        const v = vals[i];
+        if (!v || v.__typename !== 'Event') continue;
+        if (v.matchId !== numMatchId && v.matchId !== String(numMatchId)) continue;
+        if (partId != null && v.partId != null && v.partId !== partId) continue;
+        if (v.category !== 'base' && v.category !== 'amendment') continue;
+        if (v.author == null || !v.key) continue;
+        events.push(v);
+      }
+      // Target = everyone who authored anything (+ any ids MARK explicitly asks for).
+      const target = new Set();
+      for (let i = 0; i < events.length; i++) target.add(String(events[i].author));
+      if (wantedIds && wantedIds.length) {
+        for (let i = 0; i < wantedIds.length; i++) {
+          if (wantedIds[i] != null) target.add(String(wantedIds[i]));
+        }
+      }
+      // One representative event key per author (amendments first — they carry
+      // the most distinct people, e.g. collector + every reviewer of that event).
+      events.sort(function (a, b) {
+        return (a.category === 'amendment' ? 0 : 1) - (b.category === 'amendment' ? 0 : 1);
+      });
+      const keyForId = {};
+      for (let i = 0; i < events.length; i++) {
+        const id = String(events[i].author);
+        if (!keyForId[id]) keyForId[id] = events[i].key;
+      }
+      const ids = Array.from(target);
+      let queries = 0, consecutiveNoNew = 0;
+      const CAP = 30;        // hard ceiling — never blast the whole match
+      const STOP_AFTER = 4;  // stop after N consecutive queries that found nobody new
+      for (let i = 0; i < ids.length; i++) {
+        const id = ids[i];
+        if (__ID__.has(id)) continue;          // already resolved (often by an earlier query)
+        const key = keyForId[id];
+        if (!key) continue;
+        const before = __ID__.size;
+        await queryEventHistory(key);
+        queries++;
+        if (__ID__.size > before) consecutiveNoNew = 0; else consecutiveNoNew++;
+        if (queries >= CAP || consecutiveNoNew >= STOP_AFTER) break;
+        await new Promise(function (r) { setTimeout(r, 350); });   // throttle ~350ms
+      }
+      console.log('[MARK] identity sweep done: ' + queries + ' queries, ' + __ID__.size + ' total identities');
+      return identitiesArray();
+    } catch (e) {
+      console.warn('[MARK] sweep error:', e);
+      return identitiesArray();
+    } finally { __sweepRunning = false; }
+  }
+
   // ── localhost WebSocket connection ────────────────────────────────────────
   // All sync commands (navCommand, posSync, seekCommand) arrive here.
   // Firebase is NOT used for sync — zero writes per keypress.
@@ -143,6 +366,7 @@ const NEW_BRIDGE = `(async function(){
     ws = null;
     wsConnected = false;
     if (unsubActiveQuery) { unsubActiveQuery(); unsubActiveQuery = null; }
+    try { if (window.__MARK_LINK_RESTORE__) window.__MARK_LINK_RESTORE__(); } catch(_) {}
     console.log('[MARK] old bridge stopped cleanly');
   };
 
@@ -178,6 +402,22 @@ const NEW_BRIDGE = `(async function(){
   let lastNav = 0, lastPos = 0, lastSeek = 0;
 
   function handleSyncMessage(msg, video) {
+    // Identity resolution does NOT need the video element — handle it first.
+    if (msg.type === 'resolveMatchIdentities') {
+      (async function () {
+        let identities = [];
+        let err = null;
+        try {
+          identities = await sweepMatchIdentities(msg.matchId, msg.partId, msg.legacyIds);
+        } catch (e) { err = e && e.message; identities = identitiesArray(); }
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: 'identitiesResponse', identities: identities,
+            error: err, bridgeVersion: BRIDGE_VERSION, reqTs: msg.ts, ts: Date.now() }));
+        }
+      })();
+      return;
+    }
+
     if (!video) return;
 
     if (msg.type === 'navCommand' && msg.ts > lastNav) {
@@ -287,6 +527,8 @@ const NEW_BRIDGE = `(async function(){
           amendments,
           collectorId,
           reviewerId,
+          identities: identitiesArray(),  // whatever's been harvested so far (passive tap / prior sweep)
+          bridgeVersion: BRIDGE_VERSION,
           ts: Date.now(),
         }));
 

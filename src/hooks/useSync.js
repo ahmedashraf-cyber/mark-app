@@ -170,5 +170,37 @@ export function useSync(onStatusChange, sessionId) {
     })
   }, [sessionId, onStatusChange])
 
-  return { syncNavigation, syncSetPlaying, syncSeek, requestEventCount, requestQAResults }
+  // Ask the bridge to auto-resolve every collector/reviewer identity for a match
+  // (hrcode + name + email) by sweeping EventHistory — no manual popovers.
+  // Resolves to an array of { legacyId, hrcode, name, email }.
+  const resolveMatchIdentities = useCallback((matchId, half, legacyIds) => {
+    return new Promise((resolve) => {
+      const ws = getWs(onStatusChange)
+      if (!ws || ws.readyState !== WebSocket.OPEN) { resolve([]); return }
+
+      const reqTs = Date.now()
+      const partId = half === '2H' ? 2 : 1
+      // The sweep is throttled + retried in the bridge, so give it generous time.
+      const timeout = setTimeout(() => {
+        ws.removeEventListener('message', handler)
+        resolve([])
+      }, 45000)
+
+      ws.send(JSON.stringify({ type: 'resolveMatchIdentities', matchId, partId, legacyIds: legacyIds || [], ts: reqTs }))
+
+      function handler(event) {
+        try {
+          const msg = JSON.parse(event.data)
+          if (msg.type === 'identitiesResponse' && (msg.reqTs === reqTs || msg.ts >= reqTs)) {
+            clearTimeout(timeout)
+            ws.removeEventListener('message', handler)
+            resolve(msg.identities || [])
+          }
+        } catch(e) {}
+      }
+      ws.addEventListener('message', handler)
+    })
+  }, [sessionId, onStatusChange])
+
+  return { syncNavigation, syncSetPlaying, syncSeek, requestEventCount, requestQAResults, resolveMatchIdentities }
 }

@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { formatHalf } from '../utils/half.js'
+import { formatPerson } from '../data/roster.js'
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 const fmt = (s) => {
@@ -449,8 +450,8 @@ export default function AuditReportPage({ results, score, session, onBack }) {
                   { label:'Match',    value:session.matchName },
                   { label:'Half',     value:formatHalf(session.half) },
                   { label:'Match ID', value:session.matchId },
-                  { label:'Collector ID', value:String(results.collectorId||'—') },
-                  { label:'Reviewer ID',  value:String(results.reviewerId||'—') },
+                  { label:'Collector', value:formatPerson((results.identityMap||{})[String(results.collectorId)], results.collectorId) },
+                  { label:'Reviewer',  value:formatPerson((results.identityMap||{})[String(results.reviewerId)], results.reviewerId) },
                 ].map(r => (
                   <div key={r.label} style={{ marginBottom:8 }}>
                     <div style={{ fontSize:9, color:'var(--t-3)', fontWeight:700, letterSpacing:0.5 }}>{r.label}</div>

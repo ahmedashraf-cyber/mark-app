@@ -1,8 +1,9 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { db } from '../firebase/config'
 import { collection, query, where, getDocs, doc, setDoc, getDoc, serverTimestamp, orderBy, limit } from 'firebase/firestore'
 import { useAuth } from '../hooks/useAuth.jsx'
 import { useAdmin } from '../hooks/useAdmin.js'
+import { importRosterCsv } from '../data/roster.js'
 import { CURRENT_VERSION } from '../hooks/useUpdateCheck'
 import { HALVES, formatHalf } from '../utils/half.js'
 
@@ -146,6 +147,22 @@ async function fetchMatchesFromSheet() {
 export default function SessionSetupPage({ onSessionStart, lastResult, onShowHistory, onWatchSession }) {
   const { profile, logout } = useAuth()
   const isAdmin = useAdmin(profile)
+  const rosterFileRef = useRef(null)
+  const [rosterImporting, setRosterImporting] = useState(false)
+
+  async function handleRosterImport(file) {
+    if (!file) return
+    setRosterImporting(true)
+    try {
+      const text = await file.text()
+      const n = await importRosterCsv(text)
+      alert(`Roster import complete — ${n} people written to the roster (legacy_id → hr_code → name → email).`)
+    } catch (e) {
+      alert('Roster import failed: ' + (e?.message || e))
+    } finally {
+      setRosterImporting(false)
+    }
+  }
   const [matchSearch, setMatchSearch]     = useState('')
   const [selectedMatch, setSelectedMatch] = useState(null)
   const [selectedHalf, setSelectedHalf]   = useState(null)
@@ -345,6 +362,20 @@ export default function SessionSetupPage({ onSessionStart, lastResult, onShowHis
             {isAdmin && <span style={{fontSize:11}}>👑</span>}
             <span style={{fontSize:11,color: isAdmin ? '#FFD700' : 'var(--t-3)',fontWeight: isAdmin ? 600 : 400}}>{profile?.email}</span>
           </div>
+          {isAdmin && (
+            <>
+              <input ref={rosterFileRef} type="file" accept=".csv,text/csv" style={{display:'none'}}
+                onChange={e => { handleRosterImport(e.target.files?.[0]); e.target.value = '' }} />
+              <button className="btn-ghost" title="Seed the roster from users_finalized.csv (legacy_id, hr_code, full_name, email, job)"
+                style={{padding:'5px 14px',fontSize:11,display:'flex',alignItems:'center',gap:5}}
+                disabled={rosterImporting} onClick={() => rosterFileRef.current?.click()}>
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                  <path d="M12 3v13M6 11l6 6 6-6"/><path d="M4 20h16"/>
+                </svg>
+                {rosterImporting ? 'Importing…' : 'Import roster'}
+              </button>
+            </>
+          )}
           <button className="btn-ghost" style={{padding:'5px 14px',fontSize:11,display:'flex',alignItems:'center',gap:5}} onClick={() => onShowHistory && onShowHistory(null)}>
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
               <circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/>
