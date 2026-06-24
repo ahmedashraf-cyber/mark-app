@@ -1,5 +1,5 @@
 (async function(){
-  const BRIDGE_VERSION = '7.5.1';
+  const BRIDGE_VERSION = '7.5.2';
   if(window.__MARK_BRIDGE_VERSION__ === BRIDGE_VERSION){console.log('[MARK] bridge already running (v' + BRIDGE_VERSION + ')');return;}
   if(window.__MARK_BRIDGE_STOP__) window.__MARK_BRIDGE_STOP__();
   window.__MARK_BRIDGE__ = true;
@@ -388,7 +388,12 @@
     console.log('[MARK] old bridge stopped cleanly');
   };
 
-  function connectWs(video) {
+  // The localhost WebSocket connection is INDEPENDENT of any <video>. It must
+  // stay alive for the whole bridge lifetime regardless of mode (audit/scout),
+  // half, or whether a <video> exists — audit mode often has no video, so the
+  // socket must not be gated on video attachment. handleSyncMessage resolves
+  // the live <video> itself at message time, so connectWs needs no video ref.
+  function connectWs() {
     if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
     ws = new WebSocket('ws://127.0.0.1:' + WS_PORT);
     ws.onopen = () => {
@@ -401,7 +406,7 @@
       wsConnected = false;
       console.log('[MARK] bridge WebSocket closed — retrying in 2s');
       updatePanelStatus('disconnected');
-      setTimeout(() => connectWs(video), 2000);
+      setTimeout(connectWs, 2000);
     };
     ws.onerror = () => {
       wsConnected = false;
@@ -409,7 +414,7 @@
     ws.onmessage = (event) => {
       try {
         const msg = JSON.parse(event.data);
-        handleSyncMessage(msg, video);
+        handleSyncMessage(msg);
       } catch(e) {
         console.error('[MARK] bad WebSocket message:', e);
       }
@@ -776,8 +781,9 @@
     video.addEventListener('volumechange', () => { if (!video.muted) video.muted = true; });
     console.log('[MARK] video attached');
 
-    // Connect WebSocket to localhost
-    connectWs(video);
+    // NOTE: the localhost WebSocket is connected independently on auth-ready
+    // (see onAuthStateChanged below), NOT here — so the bridge stays connected
+    // in audit mode and across half/mode switches even when no <video> exists.
 
     if (unsubActiveQuery) unsubActiveQuery();
 
@@ -808,6 +814,9 @@
   // Poll for the video element
   setInterval(() => {
     if (!auth.currentUser) return;
+    // Keep the localhost socket alive regardless of mode/video (no-op if already
+    // open/connecting thanks to the guard inside connectWs).
+    connectWs();
     const v = document.querySelector('video');
     if (v && v !== attachedVideo) attachVideo(v, auth.currentUser);
   }, 1000);
@@ -817,6 +826,10 @@
     if (u) {
       console.log('[MARK] auth ready as', u.email);
       panel.style.display = 'none';
+      // Connect the localhost WebSocket as soon as we're authenticated — this is
+      // independent of video, so the bridge stays connected in audit mode and
+      // across half/mode switches (Audit ↔ Scout) with no logout/login needed.
+      connectWs();
       const v = document.querySelector('video');
       if (v) attachVideo(v, u);
     } else {
