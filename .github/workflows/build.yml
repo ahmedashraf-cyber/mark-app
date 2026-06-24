@@ -84,7 +84,10 @@ jobs:
           releaseBody: |
             Download the .msi or .exe installer below.
             Requirements: Windows 10+
-          releaseDraft: false
+          # Publish only when building main; any other ref (e.g. a dispatched
+          # feature branch) produces a DRAFT installer to test — drafts are
+          # excluded from /releases/latest, so the in-app updater won't serve it.
+          releaseDraft: ${{ github.ref != 'refs/heads/main' }}
           prerelease: false
           tauriScript: npx tauri
           args: --target x86_64-pc-windows-msvc
