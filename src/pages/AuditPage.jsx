@@ -309,7 +309,8 @@ function calcGroupScore(group, baseEvents, amendments, refinements, reviewerIds)
 }
 
 // ── Amendments Table ──────────────────────────────────────────────────────────
-function AmendmentsTable({ results, session, reviewerIds, identityMap }) {
+function AmendmentsTable({ results, session, reviewerIds, identityMap, onSeek }) {
+  const [activeFilter, setActiveFilter] = useState(null)   // null = show all; else a CHANGE type
   const { baseEvents } = results
   // Show edits by ANY real reviewer (all types) — collectors' edits are ignored.
   const reviewerSet = new Set((reviewerIds || []).map(Number))
@@ -400,6 +401,7 @@ function AmendmentsTable({ results, session, reviewerIds, identityMap }) {
       key,
       eventName:    base?.name || '—',
       timestamp:    base?.videoTimestamp ? fmt(base.videoTimestamp / 1000) : '—',
+      tsSec:        base?.videoTimestamp != null ? base.videoTimestamp / 1000 : null,
       teamId:       base?.teamId || '—',
       types,
       before,
@@ -413,6 +415,10 @@ function AmendmentsTable({ results, session, reviewerIds, identityMap }) {
     const tb = baseByKey[b.key]?.videoTimestamp || 0
     return ta - tb
   })
+
+  // Issue 3: distinct CHANGE types present (for the filter pills), and the filtered view.
+  const presentTypes = [...new Set(rows.flatMap(r => r.types))].sort()
+  const visibleRows = activeFilter ? rows.filter(r => r.types.includes(activeFilter)) : rows
 
   function downloadCSV() {
     const headers = ['Match ID','Match Name','Half','Timestamp','Event Name','Team','Change Types','Before Change','After Change','Collector ID','Reviewer ID','Captured Time']
@@ -485,6 +491,38 @@ function AmendmentsTable({ results, session, reviewerIds, identityMap }) {
         </span>
       </div>
 
+      {/* Issue 3: filter by CHANGE type */}
+      {presentTypes.length > 1 && (
+        <div style={{ display:'flex', flexWrap:'wrap', gap:6, marginBottom:10, alignItems:'center' }}>
+          <span style={{ fontSize:9, fontWeight:800, color:'var(--t-3)', letterSpacing:1, marginRight:2 }}>FILTER</span>
+          <button
+            onClick={() => setActiveFilter(null)}
+            style={{
+              fontSize:10, fontWeight:700, padding:'3px 10px', borderRadius:6, cursor:'pointer',
+              background: activeFilter === null ? 'var(--p2)' : 'transparent',
+              color: activeFilter === null ? '#fff' : 'var(--t-3)',
+              border:`1px solid ${activeFilter === null ? 'var(--p2)' : 'var(--b-2)'}`,
+            }}
+          >All ({rows.length})</button>
+          {presentTypes.map(t => {
+            const count = rows.filter(r => r.types.includes(t)).length
+            const col = AMEND_COLORS[t] || 'var(--t-3)'
+            const on = activeFilter === t
+            return (
+              <button key={t}
+                onClick={() => setActiveFilter(on ? null : t)}
+                style={{
+                  fontSize:10, fontWeight:700, padding:'3px 10px', borderRadius:6, cursor:'pointer',
+                  background: on ? col : `${col}14`,
+                  color: on ? '#fff' : col,
+                  border:`1px solid ${on ? col : col+'40'}`,
+                }}
+              >{t} ({count})</button>
+            )
+          })}
+        </div>
+      )}
+
       {/* Table */}
       <div style={{ borderRadius:10, border:'1px solid var(--b-1)', overflow:'hidden' }}>
         {/* Header row */}
@@ -502,7 +540,9 @@ function AmendmentsTable({ results, session, reviewerIds, identityMap }) {
 
         {/* Data rows */}
         <div style={{ maxHeight:280, overflowY:'auto' }}>
-          {rows.map((r, i) => (
+          {visibleRows.map((r, i) => {
+            const seekable = r.tsSec != null && typeof onSeek === 'function'
+            return (
             <div key={r.key} style={{
               display:'grid',
               gridTemplateColumns:'60px 1fr 60px 110px 130px 130px 70px 70px 70px',
@@ -511,7 +551,10 @@ function AmendmentsTable({ results, session, reviewerIds, identityMap }) {
               background: i % 2 === 0 ? 'transparent' : 'rgba(255,255,255,0.01)',
               borderLeft:`2px solid ${AMEND_COLORS[r.types[0]] || 'var(--b-2)'}`,
               transition:'background .1s',
+              cursor: seekable ? 'pointer' : 'default',
             }}
+              title={seekable ? `Jump to ${r.timestamp}` : undefined}
+              onClick={() => { if (seekable) onSeek(r.tsSec) }}
               onMouseEnter={e => e.currentTarget.style.background='rgba(255,255,255,0.03)'}
               onMouseLeave={e => e.currentTarget.style.background= i%2===0?'transparent':'rgba(255,255,255,0.01)'}
             >
@@ -536,7 +579,8 @@ function AmendmentsTable({ results, session, reviewerIds, identityMap }) {
                 {r.capturedTime ? new Date(r.capturedTime).toLocaleTimeString('en-GB', {hour:'2-digit',minute:'2-digit'}) : '—'}
               </span>
             </div>
-          ))}
+            )
+          })}
         </div>
       </div>
     </div>
@@ -741,6 +785,15 @@ export default function AuditPage({ session, onBack, onFullReport }) {
     videoRef.current.currentTime = pct * duration
   }
 
+  // Seconds-based seek for amendment row clicks — same approach as SessionHistory's
+  // click-to-seek (sets video.currentTime directly to the event's timestamp).
+  function seekToSeconds(t) {
+    const v = videoRef.current
+    if (!v || t == null || !isFinite(t)) return
+    v.currentTime = Math.max(0, t)
+    setCurrentTime(v.currentTime)
+  }
+
   return (
     <div style={{ height: '100vh', display: 'flex', flexDirection: 'column', background: 'var(--bg)', overflow: 'hidden' }}>
 
@@ -807,11 +860,12 @@ export default function AuditPage({ session, onBack, onFullReport }) {
       {/* ── Main content ── */}
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
 
-        {/* Video area — full width */}
-        <div style={{ background: '#000', position: 'relative', flexShrink: 0, width: '100%' }}>
+        {/* Video area — full width. When results are shown, it occupies ~2/3 of the
+            viewport height and the results/table pane takes the remaining ~1/3. */}
+        <div style={{ background: '#000', position: 'relative', flexShrink: 0, width: '100%', height: results ? '66vh' : 'auto' }}>
           <video
             ref={videoRef}
-            style={{ width: '100%', height: results ? 240 : 400, objectFit: 'contain', display: 'block', transition: 'height .4s cubic-bezier(0.16,1,0.3,1)' }}
+            style={{ width: '100%', height: results ? '100%' : 400, objectFit: 'contain', display: 'block', transition: 'height .4s cubic-bezier(0.16,1,0.3,1)' }}
             onTimeUpdate={e => setCurrentTime(e.target.currentTime)}
             onDurationChange={e => { if (isFinite(e.target.duration)) setDuration(e.target.duration) }}
             onPlay={() => setPlaying(true)}
@@ -871,10 +925,22 @@ export default function AuditPage({ session, onBack, onFullReport }) {
               {fmt(duration)}
             </span>
 
-            {/* Load video button if not loaded */}
-            {!videoLoaded && (
+            {/* Load video (when none) / Replace video (when one is loaded, in case the wrong file was opened) */}
+            {!videoLoaded ? (
               <button className="btn-ghost" style={{ padding: '4px 12px', fontSize: 11, flexShrink: 0 }} onClick={loadVideo}>
                 + Load Video
+              </button>
+            ) : (
+              <button
+                className="btn-ghost"
+                title="Replace the loaded video"
+                style={{ padding: '4px 10px', fontSize: 11, flexShrink: 0, display: 'flex', alignItems: 'center', gap: 5 }}
+                onClick={loadVideo}
+              >
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M3 2v6h6"/><path d="M3 8a9 9 0 1 0 2.6-3.6L3 8"/>
+                </svg>
+                Replace
               </button>
             )}
           </div>
@@ -932,7 +998,7 @@ export default function AuditPage({ session, onBack, onFullReport }) {
                   Resolving collector &amp; reviewer names…
                 </div>
               )}
-              <AmendmentsTable results={results} session={session} identityMap={results.identityMap} reviewerIds={results.reviewerIds || (results.reviewerId != null ? [results.reviewerId] : [])} />
+              <AmendmentsTable results={results} session={session} identityMap={results.identityMap} reviewerIds={results.reviewerIds || (results.reviewerId != null ? [results.reviewerId] : [])} onSeek={seekToSeconds} />
             </>
           )}
 
