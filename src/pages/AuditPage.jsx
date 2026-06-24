@@ -309,6 +309,55 @@ function calcGroupScore(group, baseEvents, amendments, refinements, reviewerIds)
 }
 
 // ── Amendments Table ──────────────────────────────────────────────────────────
+function ModuleScores({ moduleScores }) {
+  if (!moduleScores) return null
+  // Fixed display order; only show modules that have a denominator.
+  const ORDER = ['base', 'pressure', 'players', 'location', 'extras', 'freeze-frame']
+  const LABELS = { base:'Base', pressure:'Pressure', players:'Players', location:'Location', extras:'Extras', 'freeze-frame':'Freeze Frame' }
+  const items = ORDER
+    .map(k => ({ k, ...(moduleScores[k] || {}) }))
+    .filter(m => m.total && m.total > 0 && m.score != null)
+  if (!items.length) return null
+
+  const colorFor = s => s >= 90 ? '#30D158' : s >= 75 ? '#FFD60A' : '#FF453A'
+
+  return (
+    <div className="fade-in" style={{ marginTop: 14 }}>
+      <div style={{ fontSize:10, fontWeight:800, color:'var(--t-3)', letterSpacing:1.2, marginBottom:10 }}>
+        MODULE SCORES
+      </div>
+      <div style={{ display:'grid', gridTemplateColumns:`repeat(${Math.min(items.length, 6)}, 1fr)`, gap:10 }}>
+        {items.map(m => {
+          const col = colorFor(m.score)
+          return (
+            <div key={m.k} style={{
+              background:'var(--bg-2)', border:'1px solid var(--b-1)', borderRadius:12,
+              padding:'12px 10px', textAlign:'center',
+            }}>
+              <div style={{ fontSize:10, fontWeight:700, color:'var(--t-3)', letterSpacing:0.5, marginBottom:6, textTransform:'uppercase' }}>
+                {LABELS[m.k] || m.k}
+              </div>
+              <div style={{ fontFamily:'Inter', fontWeight:800, fontSize:22, color:col, lineHeight:1 }}>
+                {m.score.toFixed(1)}<span style={{ fontSize:12, fontWeight:700 }}>%</span>
+              </div>
+              <div style={{ fontSize:10, color:'var(--t-3)', marginTop:5 }}>
+                {m.errors} err / {m.total}
+              </div>
+              {/* thin score bar */}
+              <div style={{ marginTop:7, height:3, borderRadius:2, background:'var(--b-1)', overflow:'hidden' }}>
+                <div style={{ height:'100%', width:`${m.score}%`, background:col, borderRadius:2 }}/>
+              </div>
+            </div>
+          )
+        })}
+      </div>
+      <div style={{ fontSize:10, color:'var(--t-3)', marginTop:8, lineHeight:1.5 }}>
+        Per-module quality of the collector's work, from the reviewer's edits. Denominator = reviewed events that have each module. An event can count in more than one module.
+      </div>
+    </div>
+  )
+}
+
 function AmendmentsTable({ results, session, reviewerIds, identityMap, onSeek }) {
   const [activeFilter, setActiveFilter] = useState(null)   // null = show all; else a CHANGE type
   const { baseEvents } = results
@@ -998,6 +1047,7 @@ export default function AuditPage({ session, onBack, onFullReport }) {
                   Resolving collector &amp; reviewer names…
                 </div>
               )}
+              <ModuleScores moduleScores={results.moduleScores} />
               <AmendmentsTable results={results} session={session} identityMap={results.identityMap} reviewerIds={results.reviewerIds || (results.reviewerId != null ? [results.reviewerId] : [])} onSeek={seekToSeconds} />
             </>
           )}

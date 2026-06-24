@@ -1,5 +1,5 @@
 (async function(){
-  const BRIDGE_VERSION = '7.5.2';
+  const BRIDGE_VERSION = '7.5.4';
   if(window.__MARK_BRIDGE_VERSION__ === BRIDGE_VERSION){console.log('[MARK] bridge already running (v' + BRIDGE_VERSION + ')');return;}
   if(window.__MARK_BRIDGE_STOP__) window.__MARK_BRIDGE_STOP__();
   window.__MARK_BRIDGE__ = true;
@@ -729,6 +729,74 @@
             amendment: amendmentCounts[a]||0, views: viewCounts[a]||0 })),
         };
 
+        // ── Per-module scores (Update: module-level quality) ──────────────────
+        // Validated method: for each module, denominator = events the reviewer(s)
+        // VIEWED (telemetry/event-activation) that have that module; errors =
+        // those the reviewer CHANGED in that module. Score = clean % (higher=better).
+        //  • base     = viewed base events that are NOT pressure-start/end
+        //  • pressure = viewed base events named pressure-start/pressure-end
+        //  • players/location/extras/freeze-frame = viewed events with a refinement of that type
+        //  • errors: amendment of that type → that module; deletion/base amendment → base or
+        //    pressure (by the event's name); a reviewer-authored base event (added/missed) → base/pressure only.
+        //  • deletions are kept in the denominator; added events are counted.
+        let moduleScores = null;
+        try {
+          const reviewerSetM = new Set((reviewerIds || []).map(Number));
+          const PRESSURE_NAMES = new Set(['pressure-start', 'pressure-end']);
+          const PARTIALS = ['players', 'location', 'extras', 'freeze-frame'];
+          const inHalf = v => v.__typename === 'Event'
+            && (v.matchId === numMatchId || v.matchId === String(numMatchId))
+            && (!partId || v.partId === partId);
+
+          // base record per key (for name lookup / pressure classification)
+          const baseRecByKey = {};
+          Object.values(cache).forEach(v => { if (inHalf(v) && v.category === 'base') baseRecByKey[v.key] = v; });
+          const isPressureKey = k => PRESSURE_NAMES.has(baseRecByKey[k] && baseRecByKey[k].payload && baseRecByKey[k].payload.name);
+
+          // reviewer-viewed event keys (the denominator universe)
+          const viewedKeysM = new Set();
+          Object.values(cache).forEach(v => {
+            if (inHalf(v) && v.category === 'telemetry' && v.type === 'event-activation' && reviewerSetM.has(Number(v.author)))
+              viewedKeysM.add(v.key);
+          });
+
+          // which viewed keys HAVE each partial (a refinement record of that type exists)
+          const hasPartial = {}; PARTIALS.forEach(m => hasPartial[m] = new Set());
+          Object.values(cache).forEach(v => {
+            if (inHalf(v) && v.category === 'refinement' && hasPartial[v.type]) hasPartial[v.type].add(v.key);
+          });
+
+          // errors by module from reviewer amendments + reviewer-added base events
+          const errM = { base: new Set(), pressure: new Set(), players: new Set(), location: new Set(), extras: new Set(), 'freeze-frame': new Set() };
+          Object.values(cache).forEach(v => {
+            if (!inHalf(v) || v.category !== 'amendment' || !reviewerSetM.has(Number(v.author))) return;
+            if (v.type === 'deletion' || v.type === 'base') { (isPressureKey(v.key) ? errM.pressure : errM.base).add(v.key); }
+            else if (errM[v.type]) errM[v.type].add(v.key);
+          });
+          Object.values(cache).forEach(v => {            // added/missed = reviewer-authored base → base/pressure only
+            if (inHalf(v) && v.category === 'base' && reviewerSetM.has(Number(v.author)))
+              (isPressureKey(v.key) ? errM.pressure : errM.base).add(v.key);
+          });
+
+          const viewedArr = [...viewedKeysM];
+          const mk = (denomKeys, errSet) => {
+            const total = denomKeys.length;
+            const errors = denomKeys.filter(k => errSet.has(k)).length;
+            return { total, errors, score: total ? Math.round(((total - errors) / total) * 1000) / 10 : null };
+          };
+
+          const baseDenom = viewedArr.filter(k => baseRecByKey[k] && !isPressureKey(k));
+          const presDenom = viewedArr.filter(k => isPressureKey(k));
+          moduleScores = {
+            base:     mk(baseDenom, errM.base),
+            pressure: mk(presDenom, errM.pressure),
+          };
+          PARTIALS.forEach(m => { moduleScores[m] = mk(viewedArr.filter(k => hasPartial[m].has(k)), errM[m]); });
+        } catch (msErr) {
+          console.warn('[MARK] moduleScores failed:', msErr && msErr.message);
+          moduleScores = null;
+        }
+
         ws.send(JSON.stringify({
           type: 'qaResultsResponse',
           matchId: numMatchId,
@@ -741,6 +809,7 @@
           reviewerId,
           reviewerIds,
           identities: identitiesArray(),   // resolved legacyId -> {hrcode,name,email} (passive tap + auto-sweep)
+          moduleScores,                      // per-module quality { base, pressure, players, location, extras, freeze-frame }
           diagnostics,
           usedTelemetry,
           ts: Date.now(),
