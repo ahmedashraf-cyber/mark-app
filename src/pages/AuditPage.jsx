@@ -908,6 +908,27 @@ export default function AuditPage({ session, onBack, onFullReport, initialResult
         }
         invoke('append_collector_session', { payload: JSON.stringify(sheetRow) })
           .catch(e => console.warn('[MARK] Sheet append failed (non-blocking):', e))
+
+        // Append individual amendment rows to Events tab
+        const evtRows = reviewerAmends
+          .filter(a => a.originalName)  // skip amendments with no event name
+          .map(a => ({
+            hrCode:      collectorHrCode,
+            sessionId:   session.sessionId,
+            matchId:     String(session.matchId),
+            matchName:   session.matchName || '',
+            half:        String(session.half),
+            completedAt: new Date().toISOString(),
+            eventName:   a.originalName || '',
+            errorType:   a.type || '',
+            amendmentId: a.id || '',
+            videoTs:     baseTsByKey[a.key] != null ? String(Math.round(baseTsByKey[a.key]/1000)) : '',
+            markVersion: '7.5.9',
+          }))
+        if (evtRows.length > 0) {
+          invoke('append_collector_events', { payload: JSON.stringify({ rows: evtRows }) })
+            .catch(e => console.warn('[MARK] Events append failed (non-blocking):', e))
+        }
       }
     } catch(e) { console.error('[MARK] save audit:', e) }
   }

@@ -1341,6 +1341,62 @@ async fn append_collector_session(payload: String) -> Result<(), String> {
     Ok(())
 }
 
+// ── Collector Events Sheet — append amendment rows per session ────
+// Called fire-and-forget after audit save. Appends one row per amendment
+// to the Events tab. Column order matches EVT.* constants in FIELD.
+const COLLECTOR_EVENTS_TAB: &str = "Events";
+
+#[command]
+async fn append_collector_events(payload: String) -> Result<(), String> {
+    let data: serde_json::Value = serde_json::from_str(&payload)
+        .map_err(|e| format!("Parse payload: {}", e))?;
+
+    let rows_val = data["rows"].as_array()
+        .ok_or_else(|| "No rows array".to_string())?;
+
+    if rows_val.is_empty() { return Ok(()); }
+
+    // Build array of arrays for Sheets API
+    let values: Vec<serde_json::Value> = rows_val.iter().map(|r| {
+        serde_json::json!([
+            r["hrCode"].as_str().unwrap_or(""),          // A EVT.HR_CODE
+            r["sessionId"].as_str().unwrap_or(""),       // B EVT.SESSION_ID
+            r["matchId"].as_str().unwrap_or(""),         // C EVT.MATCH_ID
+            r["matchName"].as_str().unwrap_or(""),       // D EVT.MATCH_NAME
+            r["half"].as_str().unwrap_or(""),            // E EVT.HALF
+            r["completedAt"].as_str().unwrap_or(""),     // F EVT.COMPLETED_AT
+            r["eventName"].as_str().unwrap_or(""),       // G EVT.EVENT_NAME
+            r["errorType"].as_str().unwrap_or(""),       // H EVT.ERROR_TYPE
+            r["amendmentId"].as_str().unwrap_or(""),     // I EVT.AMENDMENT_ID
+            r["videoTs"].as_str().unwrap_or(""),         // J EVT.VIDEO_TS
+            r["markVersion"].as_str().unwrap_or(""),     // K EVT.MARK_VERSION
+        ])
+    }).collect();
+
+    let token = get_google_access_token().await?;
+    let client = reqwest::Client::new();
+    let range  = format!("{}!A:K", COLLECTOR_EVENTS_TAB);
+    let url    = format!(
+        "https://sheets.googleapis.com/v4/spreadsheets/{}/values/{}:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS",
+        COLLECTOR_SHEET_ID, urlencoding::encode(&range)
+    );
+
+    let resp = client
+        .post(&url)
+        .bearer_auth(&token)
+        .json(&serde_json::json!({ "values": values }))
+        .send()
+        .await
+        .map_err(|e| format!("Events append failed: {}", e))?;
+
+    if !resp.status().is_success() {
+        let body = resp.text().await.unwrap_or_default();
+        return Err(format!("Events append error: {}", &body[..body.len().min(200)]));
+    }
+
+    Ok(())
+}
+
 fn main() {
     let video_path: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
     let port_holder: Arc<Mutex<u16>> = Arc::new(Mutex::new(0));
@@ -1366,6 +1422,7 @@ fn main() {
             send_key_to_collection_app,
             inject_bridge_script,
             append_collector_session,
+            append_collector_events,
             patch_tag_once_shortcuts,
             patch_tag_once_asar,
             pick_video_file,
