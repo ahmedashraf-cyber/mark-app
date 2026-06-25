@@ -818,6 +818,21 @@ export default function AuditPage({ session, onBack, onFullReport, initialResult
       const types = {}
       reviewerAmends.forEach(a => { types[a.type] = (types[a.type] || 0) + 1 })
 
+      // Resolve clean hrCode for the primary collector from the identity map
+      const idMap = data.identityMap || {}
+      const primaryCollectorEntry = idMap[String(data.collectorId)] || null
+      const collectorHrCode = primaryCollectorEntry?.hrcode || primaryCollectorEntry?.hrCode || null
+
+      // Per-module scores (abc keys: A=base, B=pressure, C=extras, D=players, E=location, F=freeze-frame)
+      const moduleScores = {
+        base:        abc?.A?.score ?? null,
+        pressure:    abc?.B?.score ?? null,
+        extras:      abc?.C?.score ?? null,
+        players:     abc?.D?.score ?? null,
+        location:    abc?.E?.score ?? null,
+        freezeFrame: abc?.F?.score ?? null,
+      }
+
       await addDoc(collection(db, 'mark_audit_sessions'), {
         sessionId:          session.sessionId,
         matchId:            session.matchId,
@@ -828,6 +843,7 @@ export default function AuditPage({ session, onBack, onFullReport, initialResult
         reviewerName:       profile.displayName || profile.email.split('@')[0],
         collectorId:        data.collectorId,
         collectorIds:       data.collectorIds || (data.collectorId != null ? [data.collectorId] : []),
+        collectorHrCode,
         qaReviewerId:       data.reviewerId,
         qaReviewerIds:      reviewerIds,
         videoTime:          data.videoTime,
@@ -838,6 +854,7 @@ export default function AuditPage({ session, onBack, onFullReport, initialResult
         qualityScoreA:      abc?.A?.score ?? null,
         qualityScoreB:      abc?.B?.score ?? null,
         qualityScoreC:      abc?.C?.score ?? null,
+        moduleScores,
         amendmentTypes:     types,
         status:             'completed',
         completedAt:        serverTimestamp(),
@@ -859,6 +876,38 @@ export default function AuditPage({ session, onBack, onFullReport, initialResult
           videoTimestamp: baseTsByKey[a.key] ?? a.payload?.videoTimestamp ?? null,
           payload:        a.payload || {},
         })
+      }
+      // Mirror session summary to collector results Sheet (fire-and-forget — never blocks audit save)
+      if (collectorHrCode) {
+        const sheetRow = {
+          hrCode:           collectorHrCode,
+          sessionId:        session.sessionId,
+          matchId:          String(session.matchId),
+          matchName:        session.matchName || '',
+          half:             String(session.half),
+          completedAt:      new Date().toISOString(),
+          scoreOverall:     String(q ?? ''),
+          scoreBase:        String(moduleScores.base ?? ''),
+          scorePressure:    String(moduleScores.pressure ?? ''),
+          scorePlayers:     String(moduleScores.players ?? ''),
+          scoreLocation:    String(moduleScores.location ?? ''),
+          scoreExtras:      String(moduleScores.extras ?? ''),
+          scoreFreeze:      String(moduleScores.freezeFrame ?? ''),
+          totalEvents:      String(data.baseEvents.length),
+          totalErrors:      String(uniqueEdited),
+          errBase:          String(types.base || 0),
+          errLocation:      String(types.location || 0),
+          errExtras:        String(types.extras || 0),
+          errPlayers:       String(types.players || 0),
+          errDeletion:      String(types.deletion || 0),
+          errCamera:        String(types.camera || 0),
+          errAdded:         String(types.added || 0),
+          reviewerEmail:    profile.email || '',
+          collectorDisplay: data.collectorId || '',
+          markVersion:      '7.5.8',
+        }
+        invoke('append_collector_session', { payload: JSON.stringify(sheetRow) })
+          .catch(e => console.warn('[MARK] Sheet append failed (non-blocking):', e))
       }
     } catch(e) { console.error('[MARK] save audit:', e) }
   }

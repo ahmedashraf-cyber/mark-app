@@ -1274,6 +1274,73 @@ async fn create_google_sheet(payload: String) -> Result<String, String> {
     Ok(sheet_url)
 }
 
+// ── Collector Results Sheet — append one session row ──────────────────────────
+// Called fire-and-forget from AuditPage after every completed audit session.
+// Appends a single row to the Sessions tab of the FIELD Collector Results Sheet.
+// Uses the existing service account credentials (get_google_access_token).
+// Column order MUST match the SES.* constants defined in FIELD's index.html.
+const COLLECTOR_SHEET_ID: &str = "1-XbJFxAhR2QYxOQHdwIUVp-XSqol-3VJdHVhSoSkPmw";
+const COLLECTOR_SHEET_TAB: &str = "Sessions";
+
+#[command]
+async fn append_collector_session(payload: String) -> Result<(), String> {
+    let d: serde_json::Value = serde_json::from_str(&payload)
+        .map_err(|e| format!("Parse payload: {}", e))?;
+
+    // Build row array — column order matches SES.* constants (A=0 … Y=24)
+    let row = serde_json::json!([[
+        d["hrCode"].as_str().unwrap_or(""),           // A SES.HR_CODE
+        d["sessionId"].as_str().unwrap_or(""),        // B SES.SESSION_ID
+        d["matchId"].as_str().unwrap_or(""),          // C SES.MATCH_ID
+        d["matchName"].as_str().unwrap_or(""),        // D SES.MATCH_NAME
+        d["half"].as_str().unwrap_or(""),             // E SES.HALF
+        d["completedAt"].as_str().unwrap_or(""),      // F SES.COMPLETED_AT
+        d["scoreOverall"].as_str().unwrap_or(""),     // G SES.SCORE_OVERALL
+        d["scoreBase"].as_str().unwrap_or(""),        // H SES.SCORE_BASE
+        d["scorePressure"].as_str().unwrap_or(""),    // I SES.SCORE_PRESSURE
+        d["scorePlayers"].as_str().unwrap_or(""),     // J SES.SCORE_PLAYERS
+        d["scoreLocation"].as_str().unwrap_or(""),    // K SES.SCORE_LOCATION
+        d["scoreExtras"].as_str().unwrap_or(""),      // L SES.SCORE_EXTRAS
+        d["scoreFreeze"].as_str().unwrap_or(""),      // M SES.SCORE_FREEZE
+        d["totalEvents"].as_str().unwrap_or(""),      // N SES.TOTAL_EVENTS
+        d["totalErrors"].as_str().unwrap_or(""),      // O SES.TOTAL_ERRORS
+        d["errBase"].as_str().unwrap_or(""),          // P SES.ERR_BASE
+        d["errLocation"].as_str().unwrap_or(""),      // Q SES.ERR_LOCATION
+        d["errExtras"].as_str().unwrap_or(""),        // R SES.ERR_EXTRAS
+        d["errPlayers"].as_str().unwrap_or(""),       // S SES.ERR_PLAYERS
+        d["errDeletion"].as_str().unwrap_or(""),      // T SES.ERR_DELETION
+        d["errCamera"].as_str().unwrap_or(""),        // U SES.ERR_CAMERA
+        d["errAdded"].as_str().unwrap_or(""),         // V SES.ERR_ADDED
+        d["reviewerEmail"].as_str().unwrap_or(""),    // W SES.REVIEWER_EMAIL
+        d["collectorDisplay"].as_str().unwrap_or(""), // X SES.COLLECTOR_DISPLAY
+        d["markVersion"].as_str().unwrap_or(""),      // Y SES.MARK_VERSION
+    ]]);
+
+    let token = get_google_access_token().await?;
+    let client = reqwest::Client::new();
+    let range = format!("{}!A:Y", COLLECTOR_SHEET_TAB);
+    let url = format!(
+        "https://sheets.googleapis.com/v4/spreadsheets/{}/values/{}:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS",
+        COLLECTOR_SHEET_ID,
+        urlencoding::encode(&range)
+    );
+
+    let resp = client
+        .post(&url)
+        .bearer_auth(&token)
+        .json(&serde_json::json!({ "values": row }))
+        .send()
+        .await
+        .map_err(|e| format!("Sheet append request failed: {}", e))?;
+
+    if !resp.status().is_success() {
+        let body = resp.text().await.unwrap_or_default();
+        return Err(format!("Sheet append error {}: {}", body.chars().take(200).collect::<String>(), ""));
+    }
+
+    Ok(())
+}
+
 fn main() {
     let video_path: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
     let port_holder: Arc<Mutex<u16>> = Arc::new(Mutex::new(0));
@@ -1298,6 +1365,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             send_key_to_collection_app,
             inject_bridge_script,
+            append_collector_session,
             patch_tag_once_shortcuts,
             patch_tag_once_asar,
             pick_video_file,
