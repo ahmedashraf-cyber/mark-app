@@ -140,3 +140,94 @@ Two operational rules set by the owner:
    version bump updates both — confirm before shipping.
 
 Both are codified in the Conventions section of [CHANGELOG.md](./CHANGELOG.md).
+
+---
+
+## 8. Collector / reviewer identity from the collection app (v7.5.1)
+
+**Problem.** MARK only had numeric author IDs (e.g. #2909). We needed real
+people: HR code (`A-####`), name, email.
+
+**Breakthrough (proven live).** Identity flows through the collection app's
+Apollo GraphQL operation `EventHistory($eventKey:String!)` → field `authorInfo`
+is a JSON blob `{id, email, firstName, middleName, lastName, hrcode (LOWERCASE!),
+legacyId}`. `legacyId` === MARK's numeric author. The bridge taps
+`client.queryManager.link` (NOT `client.link`, which carries no traffic), and
+auto-sweeps all distinct authors of a match by re-issuing `EventHistory`, with
+socket-aware retry (the graphql-ws WebSocket drops when idle → "Socket closed";
+retry on reconnect).
+
+**Roster backbone.** `users_finalized_*.csv` (columns
+`legacy_id, hr_code, full_name, email, job`; ~1912 rows) seeds a persistent
+Firestore roster, merged with live-harvested identities. Some IDs are missing
+from the CSV (e.g. 2909, 1935); some collectors show only a numeric legacyId with
+no `A-` code (e.g. Karim Ahmed 1006245) — MARK then displays the number, which is
+expected, not a bug.
+
+**Recommendation (not yet done):** get the roster as a scheduled API pull from
+the Hudl/StatsBomb data team instead of a static CSV, to fix staleness/coverage.
+
+---
+
+## 9. Collector / reviewer detection rules (corrected, v7.5.1)
+
+- **COLLECTOR** (can be MULTIPLE per half): `views == 0` AND
+  `(base + refinement) > 600`. Fallback: top base-author if none clears the bar.
+- **REVIEWER** (can be MULTIPLE): telemetry/`event-activation` authors MINUS
+  collectors, who made ≥1 change. **Key fix:** the reviewer signal is **views**,
+  not amendments. A viewer with 0 changes is a *playthrough*, dropped.
+- Validated example (a 2-collector half): Alaa (1319 base, 0 views) + Mohamed
+  (2305 refinement, 0 views) = 2 COLLECTORS; Omar (2611 views) = REVIEWER; Eslam
+  (172 views, 0 changes) = playthrough, dropped.
+
+---
+
+## 10. Per-module quality scores — method chosen, denominator unresolved (v7.5.4)
+
+Full detail in [MODULE_SCORES.md](./MODULE_SCORES.md). Summary of decisions:
+- Score = **% clean** per module; error unit = the **event**; **no unique events**
+  (one event can hit several modules).
+- Denominator = **events the reviewer VIEWED** that have the module; pressure is
+  carved out of base (scored on `pressure-start`/`-end` events).
+- **Added/missed events count as BASE only** (NOT the partials) — the analysis
+  team's reference (location 0 / players 0) proved the "added hits all partials"
+  variant wrong.
+- **Deletions kept**, **added counted** (user's explicit choice → base ~375).
+- **OPEN:** MARK's denominators run ~3–7% higher than the analysis team's
+  reference (base 375 vs 350). User chose to keep MARK's method until they
+  confirm the team's exact "reviewed events" rule; scores may be tuned then.
+  Claude did NOT certify MARK's method as more correct than the team's.
+
+---
+
+## 11. The bridge-disconnect fix took two tries (v7.5.2 wrong, v7.5.5 right)
+
+**Symptom.** After moving between modes/halves/matches several times, MARK showed
+"Bridge disconnected" and the only recovery was a full MARK logout + login AND
+Ctrl-R on the collection app.
+
+**Wrong fix (v7.5.2).** Assumed the *bridge's* localhost socket was the problem
+and decoupled it from video attachment. Shipped without a live test. It did NOT
+resolve the issue (a good lesson: do not claim a connection fix works without
+running it).
+
+**Right fix (v7.5.5).** The breakage was on the **MARK side**: `useSync.getWs()`
+returned early when the singleton socket was already open, **without re-wiring the
+freshly-mounted page's `onStatusChange`** — so a remounted AuditPage stayed stuck
+on `disconnected`. Fixed by re-reporting the real socket state on every mount and
+adding a 2 s self-healing reconnect (Audit sends no sync signals, so it never
+reconnected on its own).
+
+**Lesson:** reasoning a fix from code is fine, but a fix to a *runtime
+connection* behaviour is not "done" until the live acceptance test passes. State
+that honestly rather than declaring victory on inference.
+
+---
+
+## 12. Scout vs Audit are independent activities (v7.5.5)
+
+The lock + completed-session machinery was Scout-only and ignored mode, so a
+Scout session blocked Audit on the same match/half. Decision: make locks and
+sessions **mode-aware** (`matchId_half_mode`, `mode` stored on the session doc).
+Scout and Audit can now both use any match/half independently. This also gives
+Session History the `mode` field needed to list Audit sessions.

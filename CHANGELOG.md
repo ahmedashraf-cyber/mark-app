@@ -19,6 +19,110 @@ in-app auto-updater compares the latest GitHub release against
 
 ---
 
+## [7.5.7] — 2026-06-24
+
+### Changed
+- **Audit amendments table: split the `CHANGE` column into two.** Reviewers asked
+  for the change to be categorised on two axes instead of one mixed tag:
+  - **EVENT ASPECT** (what part of the event was touched): `Base` / `Extra` /
+    `Location` / `Players`. Can show **multiple** aspects per event.
+  - **EDIT TYPE** (the nature of the collector's mistake): `Added` (a missing
+    event the reviewer had to add) / `Deleted` (an extra event the reviewer
+    removed) / `Wrong` (a correction). **One** value per event; Added/Deleted
+    take priority over Wrong.
+  - Mapping from raw amendment `type`: `base`+`camera` → aspect **Base**;
+    `extras` → **Extra**; `location` → **Location**; `players` → **Players**;
+    `deletion` → **Base** + edit **Deleted**; `added` → **Base** + edit **Added**;
+    everything else defaults to **Base** / **Wrong** (safe fallback).
+  - Filter pills now span **both** new columns (filter by an aspect *or* by an
+    edit type); CSV export gained the two separate columns. Display only — no
+    scoring change. Bridge untouched (still 7.5.4).
+
+## [7.5.6] — 2026-06-24
+
+### Added
+- **Audit page now has the same video keyboard shortcuts as Scout** (it had none
+  before): **↑** play/pause · **→ / ←** seek 400 ms (40 ms with **Shift**) ·
+  **+ / −** speed (0.25×–2.00× in 0.25 steps, shown as an `N×` badge). The
+  Scout-only *tagging* keys are deliberately NOT included. SessionHistory already
+  had these shortcuts (verified, unchanged). Audit drives only its own player
+  (it is not a sync-driving mode). Bridge untouched.
+
+## [7.5.5] — 2026-06-24
+
+Four Audit issues reported after 7.5.4 testing — all MARK-side React, no bridge
+change (still 7.5.4).
+
+### Fixed
+- **#1 — Bridge "disconnected" after moving between modes/halves/matches (the
+  real fix this time; 7.5.2's attempt did not work).** Root cause was on the
+  **MARK side**, not the bridge: `useSync.getWs()` returned early when the
+  singleton socket was already open **without re-wiring the freshly-mounted
+  page's `onStatusChange`** — so a new AuditPage stayed stuck on `disconnected`
+  even though the bridge was connected. That is why a full MARK logout + Ctrl-R
+  was the only thing that "fixed" it. Now `getWs` re-reports the *real* socket
+  state on every mount, and a 2 s health-check recreates the socket if closed and
+  keeps the status truthful (Audit sends no sync signals, so it never
+  self-reconnected before).
+- **#4 — The same match/half could not be opened in both Scout and Audit.** Locks
+  (`mark_locks`) and the completed-session check ignored mode. Now mode-aware:
+  `lockId = matchId_half_mode`, the completed check filters by mode, and sessions
+  store a `mode` field. Scout and Audit are independent for the same match/half.
+- **#3 — Audit results vanished after Full Report → Back.** The keyed
+  `PageTransition` remounts AuditPage, resetting its local `results`. `App` now
+  passes `initialResults`/`initialScore`; AuditPage seeds state from them when
+  they match the session, and `abcScores` is attached to the results object so
+  the A/B/C cards restore too.
+- **#2 — Audit sessions did not appear in Session History (+ replay).** History
+  only queried `mark_sessions`; Audit sessions live in `mark_audit_sessions`.
+  History now loads both (own + admin), maps audit docs to the row shape, tags
+  `type:'audit'`. Opening an audit session loads `mark_audit_amendments` mapped
+  into the tag shape so click-to-seek works. AuditPage now also saves each
+  amendment's `videoTimestamp` so replay can seek (NOTE: only audits saved on
+  7.5.5+ have this; older ones seek to 0:00).
+
+## [7.5.4] — 2026-06-24
+
+### Added
+- **Per-module quality scores** (Base, Pressure, Players, Location, Extras,
+  Freeze Frame) computed in the bridge and shown as cards between the summary and
+  the amendments table. **Purely additive** — the existing overall audit score is
+  byte-for-byte unchanged. See `MODULE_SCORES.md` for the full validated method
+  and the open denominator question. Bridge 7.5.2 → 7.5.4 (asar marker bumped).
+
+## [7.5.3] — 2026-06-24
+
+### Added / Fixed (Audit UI)
+- **Replace Video** button (↻) once a video is loaded, to swap the wrong file.
+- **Click-to-seek rows** — every amendments row seeks the video to its TIME
+  (matches SessionHistory's seconds-based seek).
+- **CHANGE filter pills** above the table (later superseded by 7.5.7's split).
+- **2/3 video layout** — video occupies 66vh when results show; table scrolls in
+  the bottom third. Bridge untouched.
+
+## [7.5.2] — 2026-06-24
+
+### Fixed (did NOT fully resolve — see 7.5.5 #1)
+- Attempted to fix the bridge disconnect by decoupling the bridge's localhost
+  WebSocket from video attachment (connect on auth-ready + self-heal). This was a
+  real improvement to the **bridge** side, but the actual breakage was the
+  **MARK-side** stale status callback (fixed in 7.5.5). Bridge 7.5.1 → 7.5.2.
+
+## [7.5.1] — 2026-06-24
+
+### Added / Fixed
+- **Collector/reviewer HR-code + name identity resolution.** The bridge harvests
+  identity from the collection app's Apollo `EventHistory` query (`authorInfo`
+  blob, field `hrcode` — lowercase) and auto-sweeps all authors of a match,
+  merging with the persistent Firestore roster (seeded from
+  `users_finalized_*.csv`). Numeric author IDs now render as `Name (A-####)`.
+- **Corrected collector/reviewer detection rules** (see `DECISIONS.md`):
+  collectors can be multiple (views==0 AND base+refinement > 600); reviewers are
+  telemetry/event-activation authors minus collectors who made ≥1 change
+  (playthrough filter). Bridge 7.5.0 → 7.5.1.
+
+---
+
 ## [7.3.6] — 2026-06-16
 
 ### Fixed
