@@ -170,6 +170,204 @@ function ScoreCard({ label, score, reviewed, edited, color, isOverall = false })
 }
 
 // ── Quick summary card ─────────────────────────────────────────────────────────
+// ── ExistingSessionView — full results display from Sheet data ────────────────
+// Shown when a reviewer navigates to a match that was already audited.
+// Reads from the Events tab of the collector Sheet — no Firestore reads.
+// Supports click-to-seek by video timestamp, filter pills, download CSV.
+function ExistingSessionView({ session, onSeek }) {
+  const [activeFilter, setActiveFilter] = useState(null)
+
+  const AMEND_COLORS = {
+    base:'#E8590C', deletion:'#FF453A', extras:'#FFD60A',
+    location:'#0A84FF', players:'#30D158', camera:'#BF5AF2',
+    added:'#30D158', 'freeze-frame':'#AC8CFF', impact:'#FF9F0A',
+    'goal-location':'#0A84FF',
+    // label variants
+    Base:'#E8590C', Extra:'#FFD60A', Location:'#0A84FF', Players:'#30D158',
+    Added:'#30D158', Deleted:'#FF453A', Wrong:'#FF9F0A',
+  }
+  const scoreColor = s => s == null ? 'var(--t-3)' : s >= 90 ? '#30D158' : s >= 80 ? '#FFD60A' : '#FF453A'
+
+  // Parse amendments from Events tab rows: [hrCode,sessionId,matchId,matchName,half,completedAt,eventName,errorType,amendmentId,videoTs,markVersion]
+  const EVT = { HR:0, SID:1, MID:2, MNAME:3, HALF:4, CAT:5, ENAME:6, ETYPE:7, AID:8, VTS:9, VER:10 }
+  const rows = (session.amendments || []).map((a, i) => {
+    const eventName = a[EVT.ENAME] || '—'
+    const errorType = a[EVT.ETYPE] || '—'
+    const vts       = a[EVT.VTS] ? parseFloat(a[EVT.VTS]) : null
+    const ASPECT_OF = { base:'Base', camera:'Base', extras:'Extra', location:'Location', players:'Players', deletion:'Base', added:'Base', 'freeze-frame':'Freeze Frame', impact:'Impact', 'goal-location':'Location' }
+    const aspect    = ASPECT_OF[errorType] || errorType
+    const editType  = errorType === 'deletion' ? 'Deleted' : errorType === 'added' ? 'Added' : 'Wrong'
+    return { i, eventName, errorType, aspect, editType, vts, half: a[EVT.HALF] }
+  }).sort((a, b) => (a.vts || 0) - (b.vts || 0))
+
+  const presentTypes = [...new Set(rows.flatMap(r => [r.aspect, r.editType]))].filter(Boolean).sort()
+  const visible = activeFilter
+    ? rows.filter(r => r.aspect === activeFilter || r.editType === activeFilter || r.errorType === activeFilter)
+    : rows
+
+  // Error type totals for the badge bar
+  const typeCounts = {}
+  rows.forEach(r => { typeCounts[r.errorType] = (typeCounts[r.errorType] || 0) + 1 })
+
+  function fmtTs(sec) {
+    if (sec == null || !isFinite(sec)) return '—'
+    const m = Math.floor(sec / 60), s = Math.floor(sec % 60)
+    return `${m}:${String(s).padStart(2,'0')}`
+  }
+
+  function downloadCSV() {
+    const headers = ['Half','Timestamp','Event Name','Error Type']
+    const csvRows = rows.map(r => [r.half, fmtTs(r.vts), r.eventName, r.errorType])
+    const csv = [headers,...csvRows].map(r=>r.map(v=>`"${String(v??'').replace(/"/g,'""')}"`).join(',')).join('\n')
+    const a = document.createElement('a')
+    a.href = URL.createObjectURL(new Blob([csv],{type:'text/csv'}))
+    a.download = `${session.matchId || 'match'}_amendments.csv`
+    a.click()
+  }
+
+  return (
+    <div className="scale-in" style={{ padding:'0 16px 16px' }}>
+
+      {/* ── Score card bar ── */}
+      <div style={{ background:'var(--bg-2)', border:'1px solid var(--b-1)', borderRadius:16, padding:16, boxShadow:'0 8px 32px rgba(0,0,0,0.5)', marginBottom:14 }}>
+        <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:10, marginBottom:14 }}>
+          <div style={{ background:'var(--bg-3)', border:'1px solid var(--b-1)', borderRadius:12, padding:'14px 10px', textAlign:'center' }}>
+            <div style={{ fontSize:10, fontWeight:700, color:'var(--t-3)', letterSpacing:0.8, marginBottom:6 }}>OVERALL</div>
+            <div style={{ fontFamily:'Inter', fontWeight:900, fontSize:28, color:scoreColor(session.score), lineHeight:1 }}>
+              {session.score != null ? session.score : '—'}<span style={{ fontSize:14 }}>%</span>
+            </div>
+            <div style={{ fontSize:10, color:'var(--t-3)', marginTop:5 }}>{session.totalErrors} err / {session.totalEvents}</div>
+            <div style={{ marginTop:7, height:3, borderRadius:2, background:'var(--b-1)', overflow:'hidden' }}>
+              <div style={{ height:'100%', width:`${session.score||0}%`, background:scoreColor(session.score), borderRadius:2 }}/>
+            </div>
+          </div>
+          <div style={{ background:'var(--bg-3)', border:'1px solid var(--b-1)', borderRadius:12, padding:'14px 10px', textAlign:'center' }}>
+            <div style={{ fontSize:10, fontWeight:700, color:'var(--t-3)', letterSpacing:0.8, marginBottom:6 }}>TOTAL EVENTS</div>
+            <div style={{ fontFamily:'Inter', fontWeight:900, fontSize:28, color:'var(--t-1)', lineHeight:1 }}>{session.totalEvents}</div>
+            <div style={{ fontSize:10, color:'var(--t-3)', marginTop:5 }}>reviewed</div>
+          </div>
+          <div style={{ background:'var(--bg-3)', border:'1px solid var(--b-1)', borderRadius:12, padding:'14px 10px', textAlign:'center' }}>
+            <div style={{ fontSize:10, fontWeight:700, color:'var(--t-3)', letterSpacing:0.8, marginBottom:6 }}>ERRORS</div>
+            <div style={{ fontFamily:'Inter', fontWeight:900, fontSize:28, color:'#FF453A', lineHeight:1 }}>{session.totalErrors}</div>
+            <div style={{ fontSize:10, color:'var(--t-3)', marginTop:5 }}>{rows.length} amendments</div>
+          </div>
+        </div>
+
+        {/* Stats + badges row */}
+        <div style={{ display:'flex', alignItems:'center', gap:16, padding:'10px 12px', background:'var(--bg-3)', borderRadius:10, border:'1px solid var(--b-1)', flexWrap:'wrap' }}>
+          <div style={{ display:'flex', alignItems:'baseline', gap:5 }}>
+            <span style={{ fontFamily:'Inter', fontWeight:900, fontSize:16, color:'var(--t-1)' }}>{session.totalEvents}</span>
+            <span style={{ fontSize:9, fontWeight:700, color:'var(--t-3)', letterSpacing:0.8 }}>REVIEWED</span>
+          </div>
+          <div style={{ display:'flex', alignItems:'baseline', gap:5 }}>
+            <span style={{ fontFamily:'Inter', fontWeight:900, fontSize:16, color:'#FF453A' }}>{session.totalErrors}</span>
+            <span style={{ fontSize:9, fontWeight:700, color:'var(--t-3)', letterSpacing:0.8 }}>ERRORS</span>
+          </div>
+          <div style={{ width:1, height:20, background:'var(--b-2)' }}/>
+          <div style={{ display:'flex', gap:5, flexWrap:'wrap', flex:1 }}>
+            {Object.entries(typeCounts).map(([type, count]) => (
+              <span key={type} style={{ display:'flex', alignItems:'center', gap:3 }}>
+                <AmendBadge type={type}/>
+                <span style={{ fontSize:10, color:'var(--t-3)' }}>×{count}</span>
+              </span>
+            ))}
+          </div>
+          <div style={{ fontSize:11, color:'var(--t-3)' }}>
+            {session.reviewer ? `by ${session.reviewer.split('@')[0]}` : ''}
+            {' · '}{session.completedAt ? new Date(session.completedAt).toLocaleDateString('en-GB',{day:'numeric',month:'short',year:'numeric'}) : ''}
+          </div>
+        </div>
+      </div>
+
+      {/* ── Amendments table ── */}
+      {rows.length > 0 && (
+        <div className="fade-in" style={{ marginTop:4 }}>
+          {/* Header */}
+          <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:10 }}>
+            <div style={{ fontSize:10, fontWeight:800, color:'var(--t-3)', letterSpacing:1.2 }}>
+              AMENDMENTS — {rows.length} EVENTS · CLICK ROW TO SEEK VIDEO
+            </div>
+            <button className="btn-ghost" style={{ padding:'4px 12px', fontSize:11, display:'flex', alignItems:'center', gap:6 }} onClick={downloadCSV}>
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+                <path d="M12 3v13M6 11l6 6 6-6"/><path d="M4 20h16"/>
+              </svg>
+              Download CSV
+            </button>
+          </div>
+
+          {/* Filter pills */}
+          {presentTypes.length > 1 && (
+            <div style={{ display:'flex', flexWrap:'wrap', gap:6, marginBottom:10, alignItems:'center' }}>
+              <span style={{ fontSize:9, fontWeight:800, color:'var(--t-3)', letterSpacing:1, marginRight:2 }}>FILTER</span>
+              <button onClick={() => setActiveFilter(null)} style={{ fontSize:10, fontWeight:700, padding:'3px 10px', borderRadius:6, cursor:'pointer', background:activeFilter===null?'var(--p2)':'transparent', color:activeFilter===null?'#fff':'var(--t-3)', border:`1px solid ${activeFilter===null?'var(--p2)':'var(--b-2)'}` }}>All ({rows.length})</button>
+              {[...new Set(rows.map(r=>r.errorType))].sort().map(t => {
+                const count = rows.filter(r=>r.errorType===t).length
+                const col = AMEND_COLORS[t] || 'var(--t-3)'
+                const on = activeFilter===t
+                return (
+                  <button key={t} onClick={()=>setActiveFilter(on?null:t)} style={{ fontSize:10, fontWeight:700, padding:'3px 10px', borderRadius:6, cursor:'pointer', background:on?col:`${col}14`, color:on?'#fff':col, border:`1px solid ${on?col:col+'40'}` }}>
+                    {t} ({count})
+                  </button>
+                )
+              })}
+            </div>
+          )}
+
+          {/* Table */}
+          <div style={{ borderRadius:10, border:'1px solid var(--b-1)', overflow:'hidden' }}>
+            {/* Header */}
+            <div style={{ display:'grid', gridTemplateColumns:'60px 1fr 110px 80px', padding:'7px 14px', background:'var(--bg-3)', borderBottom:'1px solid var(--b-1)' }}>
+              {['TIME','EVENT NAME','ERROR TYPE','SEEK'].map(h=>(
+                <span key={h} style={{ fontSize:9, fontWeight:800, color:'var(--t-3)', letterSpacing:1 }}>{h}</span>
+              ))}
+            </div>
+            {/* Rows */}
+            <div style={{ maxHeight:340, overflowY:'auto' }}>
+              {visible.map((r, idx) => {
+                const seekable = r.vts != null && typeof onSeek === 'function'
+                const col = AMEND_COLORS[r.errorType] || 'var(--t-3)'
+                return (
+                  <div key={idx}
+                    onClick={() => seekable && onSeek(r.vts)}
+                    style={{
+                      display:'grid', gridTemplateColumns:'60px 1fr 110px 80px',
+                      padding:'8px 14px', borderBottom:'1px solid var(--b-1)',
+                      cursor: seekable ? 'pointer' : 'default',
+                      transition:'background .1s',
+                    }}
+                    onMouseEnter={e=>e.currentTarget.style.background='rgba(255,255,255,0.04)'}
+                    onMouseLeave={e=>e.currentTarget.style.background=''}
+                  >
+                    <span style={{ fontFamily:'var(--font-mono)', fontSize:12, color:'var(--p2)', fontWeight:600 }}>{fmtTs(r.vts)}</span>
+                    <span style={{ fontSize:12, color:'var(--t-1)', fontWeight:500, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{r.eventName}</span>
+                    <span>
+                      <span style={{ fontSize:10, fontWeight:700, padding:'2px 8px', borderRadius:5, background:`${col}18`, color:col, border:`1px solid ${col}40` }}>{r.errorType}</span>
+                    </span>
+                    <span style={{ display:'flex', alignItems:'center', gap:4 }}>
+                      {seekable ? (
+                        <span style={{ fontSize:10, color:'var(--p2)', display:'flex', alignItems:'center', gap:3 }}>
+                          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+                            <polygon points="5,3 19,12 5,21"/>
+                          </svg>
+                          Play
+                        </span>
+                      ) : <span style={{ fontSize:10, color:'var(--t-3)' }}>—</span>}
+                    </span>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        </div>
+      )}
+
+      <div style={{ fontSize:11, color:'var(--t-3)', marginTop:10, textAlign:'center' }}>
+        Data loaded from Sheet · {rows.length} amendment rows · Click <strong style={{ color:'var(--p2)' }}>Re-audit Match</strong> to run a fresh audit
+      </div>
+    </div>
+  )
+}
+
 function QuickSummary({ results, score, abcScores, onFullReport }) {
   const types = {}
   results.amendments.forEach(a => { types[a.type] = (types[a.type] || 0) + 1 })
@@ -1327,48 +1525,11 @@ export default function AuditPage({ session, onBack, onFullReport, initialResult
           {!results && !loading && (
             <div style={{ textAlign: 'center', paddingTop: 40 }}>
               {existingSession ? (
-                // Already audited — show summary from Sheet data
-                <div style={{ maxWidth: 480, margin: '0 auto' }}>
-                  <div style={{ width:56, height:56, borderRadius:16, background:'rgba(34,197,94,0.08)', border:'1px solid rgba(34,197,94,0.25)', display:'flex', alignItems:'center', justifyContent:'center', margin:'0 auto 14px' }}>
-                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#22c55e" strokeWidth="2" strokeLinecap="round"><path d="M9 12l2 2 4-4"/><circle cx="12" cy="12" r="10"/></svg>
-                  </div>
-                  <div style={{ fontFamily:'Inter', fontWeight:700, fontSize:14, color:'var(--t-1)', marginBottom:6 }}>
-                    Match already audited
-                  </div>
-                  <div style={{ fontSize:12, color:'var(--t-3)', lineHeight:1.6, marginBottom:16 }}>
-                    Results loaded from Sheet · {new Date(existingSession.completedAt).toLocaleDateString('en-GB', { weekday:'short', day:'numeric', month:'short', year:'numeric' })}
-                  </div>
-                  <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:10, marginBottom:16 }}>
-                    <div style={{ background:'var(--bg-2)', borderRadius:10, padding:'12px 8px' }}>
-                      <div style={{ fontSize:10, color:'var(--t-3)', marginBottom:4 }}>QUALITY SCORE</div>
-                      <div style={{ fontSize:24, fontWeight:700, color: existingSession.score >= 90 ? '#22c55e' : existingSession.score >= 80 ? '#f59e0b' : '#ef4444' }}>{existingSession.score != null ? existingSession.score + '%' : '—'}</div>
-                    </div>
-                    <div style={{ background:'var(--bg-2)', borderRadius:10, padding:'12px 8px' }}>
-                      <div style={{ fontSize:10, color:'var(--t-3)', marginBottom:4 }}>TOTAL EVENTS</div>
-                      <div style={{ fontSize:24, fontWeight:700, color:'var(--t-1)' }}>{existingSession.totalEvents}</div>
-                    </div>
-                    <div style={{ background:'var(--bg-2)', borderRadius:10, padding:'12px 8px' }}>
-                      <div style={{ fontSize:10, color:'var(--t-3)', marginBottom:4 }}>ERRORS</div>
-                      <div style={{ fontSize:24, fontWeight:700, color:'#f59e0b' }}>{existingSession.totalErrors}</div>
-                    </div>
-                  </div>
-                  {existingSession.amendments.length > 0 && (
-                    <div style={{ textAlign:'left', background:'var(--bg-2)', borderRadius:10, padding:14, maxHeight:200, overflowY:'auto' }}>
-                      <div style={{ fontSize:11, color:'var(--t-3)', marginBottom:8, fontWeight:600 }}>AMENDMENT DETAILS ({existingSession.amendments.length} rows)</div>
-                      {existingSession.amendments.slice(0,10).map((a,i) => (
-                        <div key={i} style={{ display:'flex', gap:10, fontSize:11, color:'var(--t-2)', marginBottom:4 }}>
-                          <span style={{ color:'var(--t-3)', minWidth:60 }}>{a[4]}</span>
-                          <span style={{ fontWeight:500 }}>{a[6]}</span>
-                          <span style={{ color:'var(--t-3)' }}>{a[7]}</span>
-                        </div>
-                      ))}
-                      {existingSession.amendments.length > 10 && <div style={{ fontSize:11, color:'var(--t-3)', marginTop:4 }}>+{existingSession.amendments.length - 10} more rows</div>}
-                    </div>
-                  )}
-                  <div style={{ fontSize:11, color:'var(--t-3)', marginTop:12 }}>
-                    To run a fresh audit, click <strong style={{ color:'var(--p2)' }}>Re-audit Match</strong> above.
-                  </div>
-                </div>
+                // ── Already audited — full results from Sheet ──────────────
+                <ExistingSessionView
+                  session={existingSession}
+                  onSeek={seekToSeconds}
+                />
               ) : checkingSheet ? (
                 <div style={{ fontSize:13, color:'var(--t-3)' }}>Checking for existing audit results…</div>
               ) : (
