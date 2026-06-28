@@ -1013,8 +1013,9 @@ export default function AuditPage({ session, onBack, onFullReport, initialResult
           collectorDisplay: data.collectorId || '',
           markVersion:      '7.5.8',
         }
-        invoke('append_collector_session', { payload: JSON.stringify(sheetRow) })
-          .catch(e => console.warn('[MARK] Sheet append failed (non-blocking):', e))
+        // NOTE: Sheet sync is handled by the GitHub Actions workflow triggered below.
+        // The Rust append commands are intentionally skipped to avoid duplicate rows —
+        // the workflow does a full overwrite of both Sessions and Events tabs.
 
         // Append individual amendment rows to Events tab
         const evtRows = reviewerAmends
@@ -1030,11 +1031,29 @@ export default function AuditPage({ session, onBack, onFullReport, initialResult
             errorType:   a.type || '',
             amendmentId: a.id || '',
             videoTs:     baseTsByKey[a.key] != null ? String(Math.round(baseTsByKey[a.key]/1000)) : '',
-            markVersion: '7.5.9',
+            markVersion: '7.5.11',
           }))
-        if (evtRows.length > 0) {
-          invoke('append_collector_events', { payload: JSON.stringify({ rows: evtRows }) })
-            .catch(e => console.warn('[MARK] Events append failed (non-blocking):', e))
+        // Events tab is also handled by the GitHub workflow full-sync below
+        // (skipping invoke('append_collector_events') to avoid duplicates)
+
+        // Trigger immediate Sheet full-sync via GitHub Actions (fire-and-forget)
+        // Token stored in Tauri build config, not hardcoded here
+        const ghToken = import.meta.env.VITE_GH_SYNC_TOKEN || ''
+        const GH_REPO    = 'ahmedashraf-cyber/hudl-tooling'
+        const GH_WORKFLOW = 'migrate_to_sheet.yml'
+        if (ghToken) {
+          fetch(`https://api.github.com/repos/${GH_REPO}/actions/workflows/${GH_WORKFLOW}/dispatches`, {
+            method: 'POST',
+            headers: {
+              'Authorization': `token ${ghToken}`,
+              'Content-Type': 'application/json',
+              'Accept': 'application/vnd.github.v3+json',
+            },
+            body: JSON.stringify({ ref: 'main' }),
+          }).then(() => console.log('[MARK] Sheet sync triggered'))
+            .catch(e => console.warn('[MARK] Sheet sync trigger failed:', e.message))
+        } else {
+          console.log('[MARK] No sync token — Sheet will sync on next 30-min cron')
         }
       }
     } catch(e) { console.error('[MARK] save audit:', e) }
