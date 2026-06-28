@@ -72,9 +72,10 @@ async function loadAuditSessionsFromSheet(reviewerEmail) {
     })).filter(s => s.sessionId)
 
     // Filter to this reviewer and deduplicate — keep only latest per matchId+half
+    // If reviewerEmail is null → admin mode, return latest per matchId+half across ALL reviewers
     const byKey = {}
     parsed
-      .filter(s => (s.reviewerEmail || '').toLowerCase() === reviewerEmail.toLowerCase())
+      .filter(s => !reviewerEmail || (s.reviewerEmail || '').toLowerCase() === reviewerEmail.toLowerCase())
       .forEach(s => {
         const key = `${s.matchId}_${s.half}`
         const existing = byKey[key]
@@ -800,9 +801,9 @@ export default function SessionHistoryPage({ onBack, initialSession }) {
   const [sessions,      setSessions]      = useState([])
   const [allSessions,   setAllSessions]   = useState([])
   const [loading,       setLoading]       = useState(true)
-  const [adminMode,     setAdminMode]     = useState(false)
-  const [activeSession, setActiveSession] = useState(null)
   const isAdmin = useAdmin(profile)
+  const [adminMode,     setAdminMode]     = useState(isAdmin)  // admin sees all sessions by default
+  const [activeSession, setActiveSession] = useState(null)
   const [activeTags,    setActiveTags]    = useState([])
   const [tagsLoading,   setTagsLoading]   = useState(false)
   const [search,        setSearch]        = useState('')
@@ -834,7 +835,8 @@ export default function SessionHistoryPage({ onBack, initialSession }) {
         const scoutList = snap.docs.map(d => ({ id: d.id, ...d.data() }))
 
         // Own Audit sessions — read from Sheet (latest per matchId+half), fallback to Firestore
-        let auditList = await loadAuditSessionsFromSheet(profile.email)
+        // Admin loads ALL sessions regardless of reviewer
+        let auditList = await loadAuditSessionsFromSheet(isAdmin ? null : profile.email)
         if (!auditList) {
           // Firestore fallback
           const auditQ = query(collection(db, 'mark_audit_sessions'), where('reviewerId', '==', profile.uid))

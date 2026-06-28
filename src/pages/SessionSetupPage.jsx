@@ -277,7 +277,9 @@ export default function SessionSetupPage({ onSessionStart, lastResult, onShowHis
   }
 
   async function handleStartSession() {
-    if (!selectedMatch || !selectedHalf || lockStatus === 'locked') return
+    if (!selectedMatch || !selectedHalf) return
+    // Admin can bypass any lock — locked or completed
+    if (lockStatus === 'locked' && !isAdmin) return
     setLoading(true); setError('')
     const matchId  = selectedMatch.productionId
     const mode     = reviewMode || 'scout'
@@ -331,7 +333,7 @@ export default function SessionSetupPage({ onSessionStart, lastResult, onShowHis
     }
   }
 
-  const canStart = selectedMatch && selectedHalf && lockStatus === 'free' && !loading
+  const canStart = selectedMatch && selectedHalf && (lockStatus === 'free' || isAdmin) && !loading
   // Reset completedSession when selection changes
   // (handled inline via setCompletedSession(null) on selection change)
 
@@ -685,8 +687,8 @@ export default function SessionSetupPage({ onSessionStart, lastResult, onShowHis
               {lockStatus === 'locked' && (
                 <div>
                   <div style={{display:'flex',alignItems:'center',gap:7,marginBottom:4}}>
-                    <div style={{width:7,height:7,borderRadius:'50%',background:'#FF453A',boxShadow:'0 0 6px rgba(255,69,58,0.5)'}}/>
-                    <span style={{fontSize:12,color:'#FF453A',fontWeight:600}}>In progress</span>
+                    <div style={{width:7,height:7,borderRadius:'50%',background:isAdmin?'#FFD700':'#FF453A',boxShadow:`0 0 6px rgba(${isAdmin?'255,215,0':'255,69,58'},0.5)`}}/>
+                    <span style={{fontSize:12,color:isAdmin?'#FFD700':'#FF453A',fontWeight:600}}>{isAdmin?'⚡ In progress — override available':'In progress'}</span>
                   </div>
                   <div style={{fontSize:11,color:'var(--t-3)',paddingLeft:14}}>Being reviewed by {lockedBy}</div>
                 </div>
@@ -724,9 +726,22 @@ export default function SessionSetupPage({ onSessionStart, lastResult, onShowHis
           {/* Start button */}
           <div style={{padding:'16px 20px',borderTop:'1px solid var(--b-1)',flexShrink:0}}>
             {lockStatus === 'completed' ? (
-              <button className="btn-ghost" style={{width:'100%',padding:'13px',fontSize:13,fontWeight:600}}
-                onClick={() => completedSession && onShowHistory && onShowHistory(completedSession)}>
-                View Review →
+              <div style={{display:'flex',flexDirection:'column',gap:8}}>
+                <button className="btn-ghost" style={{width:'100%',padding:'11px',fontSize:13,fontWeight:600}}
+                  onClick={() => completedSession && onShowHistory && onShowHistory(completedSession)}>
+                  View Review →
+                </button>
+                {isAdmin && (
+                  <button className="btn-orange" style={{width:'100%',padding:'11px',fontSize:13,fontWeight:600}}
+                    disabled={loading} onClick={handleStartSession}>
+                    {loading ? 'Starting…' : '⚡ Override & Start New Session →'}
+                  </button>
+                )}
+              </div>
+            ) : lockStatus === 'locked' && isAdmin ? (
+              <button className="btn-orange" style={{width:'100%',padding:'13px',fontSize:14,fontWeight:700,background:'#856404',border:'1px solid rgba(255,215,0,0.3)'}}
+                disabled={!canStart} onClick={handleStartSession}>
+                {loading ? 'Starting…' : '⚡ Override Lock & Start →'}
               </button>
             ) : (
               <button className="btn-orange" style={{width:'100%',padding:'13px',fontSize:14,fontWeight:700}}
