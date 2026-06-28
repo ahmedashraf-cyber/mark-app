@@ -33,6 +33,63 @@ import { EXTRAS, GK_EXTRAS, GK_WRONG_EXTRAS } from '../components/TagPanel'
 import { SPEED_MIN, SPEED_MAX, SPEED_STEP } from '../data/shortcuts'
 import { formatHalf } from '../utils/half.js'
 
+// ── Collector Results Sheet — read audit sessions from here ───────
+const COLLECTOR_SHEET_ID  = '1-XbJFxAhR2QYxOQHdwIUVp-XSqol-3VJdHVhSoSkPmw'
+const COLLECTOR_SHEET_KEY = 'AIzaSyDEO-0MZ4-LOdIJ7aIyscgmLWGN5h8MpNI'
+const SES = {
+  HR_CODE:0, SESSION_ID:1, MATCH_ID:2, MATCH_NAME:3, HALF:4, COMPLETED_AT:5,
+  SCORE_OVERALL:6, SCORE_BASE:7, SCORE_PRESSURE:8, SCORE_PLAYERS:9,
+  SCORE_LOCATION:10, SCORE_EXTRAS:11, SCORE_FREEZE:12,
+  TOTAL_EVENTS:13, TOTAL_ERRORS:14,
+  ERR_BASE:15, ERR_LOCATION:16, ERR_EXTRAS:17, ERR_PLAYERS:18,
+  ERR_DELETION:19, ERR_CAMERA:20, ERR_ADDED:21,
+  REVIEWER_EMAIL:22, COLLECTOR_DISPLAY:23, MARK_VERSION:24, COLLECTOR_NAME:25,
+}
+
+async function loadAuditSessionsFromSheet(reviewerEmail) {
+  try {
+    const url = `https://sheets.googleapis.com/v4/spreadsheets/${COLLECTOR_SHEET_ID}/values/Sessions!A2:Z?key=${COLLECTOR_SHEET_KEY}`
+    const res  = await fetch(url)
+    const data = await res.json()
+    if (data.error) throw new Error(data.error.message)
+    const rows = data.values || []
+
+    // Parse and filter to this reviewer's sessions
+    const parsed = rows.map(r => ({
+      sessionId:      r[SES.SESSION_ID]    || '',
+      matchId:        r[SES.MATCH_ID]      || '',
+      matchName:      r[SES.MATCH_NAME]    || '',
+      half:           r[SES.HALF]          || '',
+      completedAt:    r[SES.COMPLETED_AT]  ? new Date(r[SES.COMPLETED_AT]) : null,
+      qualityScore:   r[SES.SCORE_OVERALL] ? parseFloat(r[SES.SCORE_OVERALL]) : null,
+      totalBaseEvents:parseInt(r[SES.TOTAL_EVENTS])  || 0,
+      totalAmendments:parseInt(r[SES.TOTAL_ERRORS])  || 0,
+      reviewerEmail:  r[SES.REVIEWER_EMAIL]|| '',
+      collectorName:  r[SES.COLLECTOR_NAME]|| '',
+      hrCode:         r[SES.HR_CODE]       || '',
+      type:           'audit',
+      _fromSheet:     true,
+    })).filter(s => s.sessionId)
+
+    // Filter to this reviewer and deduplicate — keep only latest per matchId+half
+    const byKey = {}
+    parsed
+      .filter(s => (s.reviewerEmail || '').toLowerCase() === reviewerEmail.toLowerCase())
+      .forEach(s => {
+        const key = `${s.matchId}_${s.half}`
+        const existing = byKey[key]
+        if (!existing || (s.completedAt && (!existing.completedAt || s.completedAt > existing.completedAt))) {
+          byKey[key] = s
+        }
+      })
+
+    return Object.values(byKey)
+  } catch(e) {
+    console.warn('[MARK] Sheet audit load failed, falling back to Firestore:', e.message)
+    return null // null = fallback to Firestore
+  }
+}
+
 // ------ Helpers ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 const fmt = (s) => {
   if (!isFinite(s) || isNaN(s)) return '0:00'
@@ -767,33 +824,58 @@ export default function SessionHistoryPage({ onBack, initialSession }) {
           }
         }
 
-        // Own Scout sessions
+        // Own Scout sessions (always from Firestore)
         const q = query(
           collection(db, 'mark_sessions'),
           where('reviewerId', '==', profile.uid),
           where('status', '==', 'completed')
         )
-        // Own Audit sessions (separate collection)
-        const auditQ = query(
-          collection(db, 'mark_audit_sessions'),
-          where('reviewerId', '==', profile.uid)
-        )
-        const [snap, auditSnap] = await Promise.all([getDocs(q), getDocs(auditQ).catch(() => ({ docs: [] }))])
-        const list = [
-          ...snap.docs.map(d => ({ id: d.id, ...d.data() })),
-          ...auditSnap.docs.map(mapAudit),
-        ]
-        list.sort((a, b) => (b.completedAt?.toDate?.()?.getTime() || 0) - (a.completedAt?.toDate?.()?.getTime() || 0))
+        const snap = await getDocs(q)
+        const scoutList = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+
+        // Own Audit sessions — read from Sheet (latest per matchId+half), fallback to Firestore
+        let auditList = await loadAuditSessionsFromSheet(profile.email)
+        if (!auditList) {
+          // Firestore fallback
+          const auditQ = query(collection(db, 'mark_audit_sessions'), where('reviewerId', '==', profile.uid))
+          const auditSnap = await getDocs(auditQ).catch(() => ({ docs: [] }))
+          // Deduplicate — keep only latest per matchId+half
+          const byKey = {}
+          auditSnap.docs.map(d => mapAudit(d)).forEach(s => {
+            const key = `${s.matchId}_${s.half}`
+            const existing = byKey[key]
+            const sTime = s.completedAt?.toDate?.()?.getTime() || 0
+            const eTime = existing?.completedAt?.toDate?.()?.getTime() || 0
+            if (!existing || sTime > eTime) byKey[key] = s
+          })
+          auditList = Object.values(byKey)
+        }
+
+        const list = [...scoutList, ...auditList]
+        list.sort((a, b) => {
+          const at = a.completedAt instanceof Date ? a.completedAt.getTime() : (a.completedAt?.toDate?.()?.getTime() || 0)
+          const bt = b.completedAt instanceof Date ? b.completedAt.getTime() : (b.completedAt?.toDate?.()?.getTime() || 0)
+          return bt - at
+        })
         setSessions(list)
 
-        // Admin: also load ALL sessions (Scout + Audit)
+        // Admin: also load ALL sessions (Scout + Audit), deduplicated
         if (profile.email === 'ahmed.ashraf@hudl.com') {
           const allQ = query(collection(db, 'mark_sessions'), where('status', '==', 'completed'))
           const allAuditQ = query(collection(db, 'mark_audit_sessions'))
           const [allSnap, allAuditSnap] = await Promise.all([getDocs(allQ), getDocs(allAuditQ).catch(() => ({ docs: [] }))])
+          // Deduplicate audit sessions — keep latest per matchId+half+reviewerId
+          const auditByKey = {}
+          allAuditSnap.docs.map(d => mapAudit(d)).forEach(s => {
+            const key = `${s.matchId}_${s.half}_${s.reviewerId || s.reviewerEmail}`
+            const existing = auditByKey[key]
+            const sTime = s.completedAt?.toDate?.()?.getTime() || 0
+            const eTime = existing?.completedAt?.toDate?.()?.getTime() || 0
+            if (!existing || sTime > eTime) auditByKey[key] = s
+          })
           const allList = [
             ...allSnap.docs.map(d => ({ id: d.id, ...d.data() })),
-            ...allAuditSnap.docs.map(mapAudit),
+            ...Object.values(auditByKey),
           ]
           allList.sort((a, b) => (b.completedAt?.toDate?.()?.getTime() || 0) - (a.completedAt?.toDate?.()?.getTime() || 0))
           setAllSessions(allList)

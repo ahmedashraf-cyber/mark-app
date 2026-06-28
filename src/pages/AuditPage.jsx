@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { db } from '../firebase/config'
-import { collection, addDoc, serverTimestamp, getDocs, query, where } from 'firebase/firestore'
+import { collection, addDoc, serverTimestamp, getDocs, query, where, deleteDoc, doc } from 'firebase/firestore'
 import { useAuth } from '../hooks/useAuth.jsx'
 import { useSync } from '../hooks/useSync.js'
 import { formatHalf } from '../utils/half.js'
@@ -831,6 +831,30 @@ export default function AuditPage({ session, onBack, onFullReport, initialResult
         players:     abc?.D?.score ?? null,
         location:    abc?.E?.score ?? null,
         freezeFrame: abc?.F?.score ?? null,
+      }
+
+      // ── Delete all previous sessions for this matchId+half by this reviewer ──
+      // This ensures only the LATEST audit session is kept — no duplicate sessions per match+half
+      try {
+        const prevQ = query(
+          collection(db, 'mark_audit_sessions'),
+          where('matchId', '==', String(session.matchId)),
+          where('half',    '==', String(session.half)),
+          where('reviewerId', '==', profile.uid)
+        )
+        const prevSnap = await getDocs(prevQ)
+        for (const prevDoc of prevSnap.docs) {
+          const prevSessionId = prevDoc.data().sessionId || prevDoc.id
+          // Delete amendments for this old session
+          const amendQ = query(collection(db, 'mark_audit_amendments'), where('sessionId', '==', prevSessionId))
+          const amendSnap = await getDocs(amendQ)
+          for (const aDoc of amendSnap.docs) await deleteDoc(doc(db, 'mark_audit_amendments', aDoc.id))
+          // Delete the session doc itself
+          await deleteDoc(doc(db, 'mark_audit_sessions', prevDoc.id))
+        }
+        if (prevSnap.size > 0) console.log(`[MARK] Cleaned ${prevSnap.size} previous session(s) for ${session.matchId} ${session.half}`)
+      } catch(e) {
+        console.warn('[MARK] Could not clean previous sessions:', e.message)
       }
 
       await addDoc(collection(db, 'mark_audit_sessions'), {
