@@ -688,6 +688,9 @@ export default function AuditPage({ session, onBack, onFullReport, initialResult
   const [error,          setError]          = useState('')
   const [saved,          setSaved]          = useState(false)
   const [abcScores,      setAbcScores]      = useState(restored ? (restored.abcScores || null) : null)
+  const [existingSession,setExistingSession]= useState(null)   // session from Sheet if already audited
+  const [checkingSheet,  setCheckingSheet]  = useState(true)   // true while checking Sheet on mount
+  const [reauditConfirm, setReauditConfirm] = useState(false)  // true when confirm dialog is shown
   const [resolvingIds,   setResolvingIds]   = useState(false)
 
   const { requestQAResults, resolveMatchIdentities } = useSync(setBridgeStatus, session.sessionId)
@@ -698,6 +701,79 @@ export default function AuditPage({ session, onBack, onFullReport, initialResult
   useEffect(() => {
     loadRoster().then(r => { rosterRef.current = r })
   }, [])
+
+  // ── Check Sheet for existing session when navigating to this match+half ──
+  const COLLECTOR_SHEET_ID  = '1-XbJFxAhR2QYxOQHdwIUVp-XSqol-3VJdHVhSoSkPmw'
+  const COLLECTOR_SHEET_KEY = 'AIzaSyDEO-0MZ4-LOdIJ7aIyscgmLWGN5h8MpNI'
+  const SES_MATCH_ID = 2, SES_HALF = 4, SES_COMPLETED_AT = 5, SES_SCORE = 6
+  const SES_SESSION_ID = 1, SES_REVIEWER = 22, SES_COLLECTOR = 25, SES_HR = 0
+  const SES_TOTAL_EVENTS = 13, SES_TOTAL_ERRORS = 14
+
+  useEffect(() => {
+    let cancelled = false
+    async function checkSheetForExistingSession() {
+      setCheckingSheet(true)
+      try {
+        const url = `https://sheets.googleapis.com/v4/spreadsheets/${COLLECTOR_SHEET_ID}/values/Sessions!A2:Z?key=${COLLECTOR_SHEET_KEY}`
+        const res  = await fetch(url)
+        const data = await res.json()
+        if (data.error) throw new Error(data.error.message)
+        const rows = data.values || []
+
+        // Find rows matching this matchId + half
+        const matchRows = rows.filter(r =>
+          String(r[SES_MATCH_ID] || '').trim() === String(session.matchId) &&
+          String(r[SES_HALF] || '').trim() === String(session.half)
+        )
+
+        if (!matchRows.length) {
+          if (!cancelled) setCheckingSheet(false)
+          return
+        }
+
+        // Pick the latest by completedAt
+        matchRows.sort((a, b) => {
+          const at = a[SES_COMPLETED_AT] ? new Date(a[SES_COMPLETED_AT]).getTime() : 0
+          const bt = b[SES_COMPLETED_AT] ? new Date(b[SES_COMPLETED_AT]).getTime() : 0
+          return bt - at
+        })
+        const latest = matchRows[0]
+
+        // Load amendments from Events tab for this session
+        const sessionId = latest[SES_SESSION_ID] || ''
+        let amendments = []
+        try {
+          const evtUrl = `https://sheets.googleapis.com/v4/spreadsheets/${COLLECTOR_SHEET_ID}/values/Events!A2:K?key=${COLLECTOR_SHEET_KEY}`
+          const evtRes  = await fetch(evtUrl)
+          const evtData = await evtRes.json()
+          amendments = (evtData.values || []).filter(r => (r[1]||'') === sessionId)
+        } catch(e) { console.warn('[MARK] Events tab load failed:', e.message) }
+
+        if (!cancelled) {
+          setExistingSession({
+            sessionId,
+            matchId:       latest[SES_MATCH_ID] || '',
+            half:          latest[SES_HALF] || '',
+            completedAt:   latest[SES_COMPLETED_AT] || '',
+            score:         latest[SES_SCORE] ? parseFloat(latest[SES_SCORE]) : null,
+            reviewer:      latest[SES_REVIEWER] || '',
+            collector:     latest[SES_COLLECTOR] || '',
+            hrCode:        latest[SES_HR] || '',
+            totalEvents:   parseInt(latest[SES_TOTAL_EVENTS]) || 0,
+            totalErrors:   parseInt(latest[SES_TOTAL_ERRORS]) || 0,
+            amendments,
+            raw: latest,
+          })
+          setCheckingSheet(false)
+        }
+      } catch(e) {
+        console.warn('[MARK] Sheet check failed:', e.message)
+        if (!cancelled) setCheckingSheet(false)
+      }
+    }
+    checkSheetForExistingSession()
+    return () => { cancelled = true }
+  }, [session.matchId, session.half])
 
   // Video is loaded manually by the reviewer — no auto-load
 
@@ -728,6 +804,13 @@ export default function AuditPage({ session, onBack, onFullReport, initialResult
   }
 
   async function handleGetResults() {
+    // ── Guard: if already audited, require confirmation before re-running ──
+    if (existingSession && !reauditConfirm) {
+      setReauditConfirm(true)
+      return
+    }
+    setReauditConfirm(false)
+
     if (bridgeStatus !== 'connected') {
       setError('Bridge not connected — click ⚡ Embed Bridge first (with the collection app closed)')
       return
@@ -1049,38 +1132,75 @@ export default function AuditPage({ session, onBack, onFullReport, initialResult
           <span style={{ fontSize: 14 }}>⚡</span> Embed Bridge
         </button>
 
-        {/* Get results */}
-        <button
-          className="btn-orange"
-          style={{
-            padding: '8px 18px', fontSize: 13,
-            opacity: loading ? 0.7 : 1,
-            display: 'flex', alignItems: 'center', gap: 8,
-          }}
-          disabled={loading}
-          onClick={handleGetResults}
-        >
-          {loading ? (
-            <>
-              <svg style={{ animation: 'spin 1s linear infinite' }} width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5">
-                <circle cx="12" cy="12" r="10" strokeOpacity=".3"/>
-                <path d="M12 2a10 10 0 0 1 10 10"/>
-              </svg>
-              Reading results…
-            </>
-          ) : (
-            <>
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round">
-                <path d="M9 19l-7-7 7-7"/><path d="M15 5l7 7-7 7"/>
-              </svg>
-              Get Audit Results
-            </>
-          )}
+        {/* Get results — blocked with confirmation if already audited */}
+        {reauditConfirm ? (
+          <div style={{ display:'flex', alignItems:'center', gap:8, background:'rgba(232,89,12,0.12)', border:'1px solid rgba(232,89,12,0.4)', borderRadius:8, padding:'6px 12px' }}>
+            <span style={{ fontSize:12, color:'#E8590C', fontWeight:600 }}>Re-audit will overwrite existing results. Confirm?</span>
+            <button className="btn-orange" style={{ padding:'4px 12px', fontSize:12 }} onClick={handleGetResults}>Yes, re-audit</button>
+            <button className="btn-ghost" style={{ padding:'4px 10px', fontSize:12 }} onClick={() => setReauditConfirm(false)}>Cancel</button>
+          </div>
+        ) : (
+          <button
+            className="btn-orange"
+            style={{ padding:'8px 18px', fontSize:13, opacity: loading ? 0.7 : 1, display:'flex', alignItems:'center', gap:8 }}
+            disabled={loading || checkingSheet}
+            onClick={handleGetResults}
+            title={existingSession ? `Already audited on ${new Date(existingSession.completedAt).toLocaleDateString('en-GB')} — click to re-audit` : ''}
+          >
+            {loading ? (
+              <>
+                <svg style={{ animation:'spin 1s linear infinite' }} width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5">
+                  <circle cx="12" cy="12" r="10" strokeOpacity=".3"/><path d="M12 2a10 10 0 0 1 10 10"/>
+                </svg>
+                Reading results…
+              </>
+            ) : checkingSheet ? (
+              <>
+                <svg style={{ animation:'spin 1s linear infinite' }} width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5">
+                  <circle cx="12" cy="12" r="10" strokeOpacity=".3"/><path d="M12 2a10 10 0 0 1 10 10"/>
+                </svg>
+                Checking…
+              </>
+            ) : existingSession ? (
+              <>
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round">
+                  <path d="M9 19l-7-7 7-7"/><path d="M15 5l7 7-7 7"/>
+                </svg>
+                Re-audit Match
+              </>
+            ) : (
+              <>
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round">
+                  <path d="M9 19l-7-7 7-7"/><path d="M15 5l7 7-7 7"/>
+                </svg>
+                Get Audit Results
+              </>
+            )}
+          </button>
+        )}
         </button>
       </header>
 
       {/* ── Main content ── */}
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+
+        {/* ── Existing session banner — shown when match already audited, no new results yet ── */}
+        {existingSession && !results && !loading && (
+          <div style={{ background:'rgba(34,197,94,0.08)', borderBottom:'0.5px solid rgba(34,197,94,0.25)', padding:'10px 20px', display:'flex', alignItems:'center', gap:16, flexShrink:0 }}>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#22c55e" strokeWidth="2" strokeLinecap="round"><path d="M9 12l2 2 4-4"/><circle cx="12" cy="12" r="10"/></svg>
+            <div style={{ flex:1 }}>
+              <span style={{ fontSize:13, fontWeight:600, color:'#22c55e' }}>Already audited</span>
+              <span style={{ fontSize:12, color:'var(--t-3)', marginLeft:10 }}>
+                Score: <strong style={{ color:'var(--t-1)' }}>{existingSession.score != null ? existingSession.score + '%' : '—'}</strong>
+                {' · '}{existingSession.totalEvents} events
+                {' · '}{existingSession.totalErrors} errors
+                {' · '}{existingSession.reviewer ? `Reviewed by ${existingSession.reviewer.split('@')[0]}` : ''}
+                {' · '}{existingSession.completedAt ? new Date(existingSession.completedAt).toLocaleDateString('en-GB', { day:'numeric', month:'short', year:'numeric' }) : ''}
+              </span>
+            </div>
+            <span style={{ fontSize:11, color:'var(--t-3)' }}>Data loaded from Sheet · {existingSession.amendments.length} amendment rows</span>
+          </div>
+        )}
 
         {/* Video area — full width. When results are shown, it occupies ~2/3 of the
             viewport height and the results/table pane takes the remaining ~1/3. */}
@@ -1188,23 +1308,68 @@ export default function AuditPage({ session, onBack, onFullReport, initialResult
         <div style={{ flex: 1, overflowY: 'auto', padding: '16px' }}>
           {!results && !loading && (
             <div style={{ textAlign: 'center', paddingTop: 40 }}>
-              <div style={{
-                width: 56, height: 56, borderRadius: 16, background: 'rgba(232,89,12,0.08)',
-                border: '1px solid rgba(232,89,12,0.2)',
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                margin: '0 auto 14px',
-              }}>
-                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="var(--p2)" strokeWidth="2" strokeLinecap="round">
-                  <path d="M9 19l-7-7 7-7"/><path d="M15 5l7 7-7 7"/>
-                </svg>
-              </div>
-              <div style={{ fontFamily: 'Inter', fontWeight: 700, fontSize: 14, color: 'var(--t-2)', marginBottom: 6 }}>
-                Ready to audit
-              </div>
-              <div style={{ fontSize: 12, color: 'var(--t-3)', lineHeight: 1.6, maxWidth: 320, margin: '0 auto' }}>
-                Make sure the collection app is open on this match and the bridge is injected.
-                When done reviewing, click <strong style={{ color: 'var(--p2)' }}>Get Audit Results</strong>.
-              </div>
+              {existingSession ? (
+                // Already audited — show summary from Sheet data
+                <div style={{ maxWidth: 480, margin: '0 auto' }}>
+                  <div style={{ width:56, height:56, borderRadius:16, background:'rgba(34,197,94,0.08)', border:'1px solid rgba(34,197,94,0.25)', display:'flex', alignItems:'center', justifyContent:'center', margin:'0 auto 14px' }}>
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#22c55e" strokeWidth="2" strokeLinecap="round"><path d="M9 12l2 2 4-4"/><circle cx="12" cy="12" r="10"/></svg>
+                  </div>
+                  <div style={{ fontFamily:'Inter', fontWeight:700, fontSize:14, color:'var(--t-1)', marginBottom:6 }}>
+                    Match already audited
+                  </div>
+                  <div style={{ fontSize:12, color:'var(--t-3)', lineHeight:1.6, marginBottom:16 }}>
+                    Results loaded from Sheet · {new Date(existingSession.completedAt).toLocaleDateString('en-GB', { weekday:'short', day:'numeric', month:'short', year:'numeric' })}
+                  </div>
+                  <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:10, marginBottom:16 }}>
+                    <div style={{ background:'var(--bg-2)', borderRadius:10, padding:'12px 8px' }}>
+                      <div style={{ fontSize:10, color:'var(--t-3)', marginBottom:4 }}>QUALITY SCORE</div>
+                      <div style={{ fontSize:24, fontWeight:700, color: existingSession.score >= 90 ? '#22c55e' : existingSession.score >= 80 ? '#f59e0b' : '#ef4444' }}>{existingSession.score != null ? existingSession.score + '%' : '—'}</div>
+                    </div>
+                    <div style={{ background:'var(--bg-2)', borderRadius:10, padding:'12px 8px' }}>
+                      <div style={{ fontSize:10, color:'var(--t-3)', marginBottom:4 }}>TOTAL EVENTS</div>
+                      <div style={{ fontSize:24, fontWeight:700, color:'var(--t-1)' }}>{existingSession.totalEvents}</div>
+                    </div>
+                    <div style={{ background:'var(--bg-2)', borderRadius:10, padding:'12px 8px' }}>
+                      <div style={{ fontSize:10, color:'var(--t-3)', marginBottom:4 }}>ERRORS</div>
+                      <div style={{ fontSize:24, fontWeight:700, color:'#f59e0b' }}>{existingSession.totalErrors}</div>
+                    </div>
+                  </div>
+                  {existingSession.amendments.length > 0 && (
+                    <div style={{ textAlign:'left', background:'var(--bg-2)', borderRadius:10, padding:14, maxHeight:200, overflowY:'auto' }}>
+                      <div style={{ fontSize:11, color:'var(--t-3)', marginBottom:8, fontWeight:600 }}>AMENDMENT DETAILS ({existingSession.amendments.length} rows)</div>
+                      {existingSession.amendments.slice(0,10).map((a,i) => (
+                        <div key={i} style={{ display:'flex', gap:10, fontSize:11, color:'var(--t-2)', marginBottom:4 }}>
+                          <span style={{ color:'var(--t-3)', minWidth:60 }}>{a[4]}</span>
+                          <span style={{ fontWeight:500 }}>{a[6]}</span>
+                          <span style={{ color:'var(--t-3)' }}>{a[7]}</span>
+                        </div>
+                      ))}
+                      {existingSession.amendments.length > 10 && <div style={{ fontSize:11, color:'var(--t-3)', marginTop:4 }}>+{existingSession.amendments.length - 10} more rows</div>}
+                    </div>
+                  )}
+                  <div style={{ fontSize:11, color:'var(--t-3)', marginTop:12 }}>
+                    To run a fresh audit, click <strong style={{ color:'var(--p2)' }}>Re-audit Match</strong> above.
+                  </div>
+                </div>
+              ) : checkingSheet ? (
+                <div style={{ fontSize:13, color:'var(--t-3)' }}>Checking for existing audit results…</div>
+              ) : (
+                // Not yet audited
+                <>
+                  <div style={{ width:56, height:56, borderRadius:16, background:'rgba(232,89,12,0.08)', border:'1px solid rgba(232,89,12,0.2)', display:'flex', alignItems:'center', justifyContent:'center', margin:'0 auto 14px' }}>
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="var(--p2)" strokeWidth="2" strokeLinecap="round">
+                      <path d="M9 19l-7-7 7-7"/><path d="M15 5l7 7-7 7"/>
+                    </svg>
+                  </div>
+                  <div style={{ fontFamily:'Inter', fontWeight:700, fontSize:14, color:'var(--t-2)', marginBottom:6 }}>
+                    Ready to audit
+                  </div>
+                  <div style={{ fontSize:12, color:'var(--t-3)', lineHeight:1.6, maxWidth:320, margin:'0 auto' }}>
+                    Make sure the collection app is open on this match and the bridge is injected.
+                    When done reviewing, click <strong style={{ color:'var(--p2)' }}>Get Audit Results</strong>.
+                  </div>
+                </>
+              )}
             </div>
           )}
 
