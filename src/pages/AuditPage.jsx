@@ -1178,7 +1178,6 @@ export default function AuditPage({ session, onBack, onFullReport, initialResult
             )}
           </button>
         )}
-        </button>
       </header>
 
       {/* ── Main content ── */}
