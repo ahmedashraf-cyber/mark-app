@@ -1104,6 +1104,16 @@ export default function AuditPage({ session, onBack, onFullReport, initialResult
       const primaryCollectorEntry = idMap[String(data.collectorId)] || null
       const collectorHrCode = primaryCollectorEntry?.hrcode || primaryCollectorEntry?.hrCode || null
 
+      // Resolve the REAL QA reviewer of record from the identity map — this is
+      // the person whose review decisions are reflected in the amendments,
+      // NOT the MARK operator who happens to be logged in on this machine.
+      // Falls back to the operator's own identity only if the real reviewer
+      // can't be resolved (e.g. brand new person not yet in the roster).
+      const primaryReviewerEntry = idMap[String(data.reviewerId)] || null
+      const resolvedReviewerName  = primaryReviewerEntry?.name  || profile.displayName || profile.email.split('@')[0]
+      const resolvedReviewerEmail = primaryReviewerEntry?.email || profile.email
+      const resolvedReviewerHrCode = primaryReviewerEntry?.hrcode || primaryReviewerEntry?.hrCode || null
+
       // Per-module scores (abc keys: A=base, B=pressure, C=extras, D=players, E=location, F=freeze-frame)
       const moduleScores = {
         base:        abc?.A?.score ?? null,
@@ -1144,8 +1154,14 @@ export default function AuditPage({ session, onBack, onFullReport, initialResult
         matchName:          session.matchName,
         half:               session.half,
         reviewerId:         profile.uid,
-        reviewerEmail:      profile.email,
-        reviewerName:       profile.displayName || profile.email.split('@')[0],
+        reviewerEmail:      resolvedReviewerEmail,
+        reviewerName:       resolvedReviewerName,
+        reviewerHrCode:     resolvedReviewerHrCode,
+        // Operator = whoever was actually logged into MARK on this machine —
+        // kept separately for audit-trail purposes, never shown as "the reviewer"
+        operatorUid:        profile.uid,
+        operatorEmail:      profile.email,
+        operatorName:       profile.displayName || profile.email.split('@')[0],
         collectorId:        data.collectorId,
         collectorIds:       data.collectorIds || (data.collectorId != null ? [data.collectorId] : []),
         collectorHrCode,
