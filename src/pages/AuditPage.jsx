@@ -507,6 +507,36 @@ function calcGroupScore(group, baseEvents, amendments, refinements, reviewerIds)
   return { score, reviewed: groupBase.length, edited: uniqueEdited }
 }
 
+// ── Per-event-type quality scores ───────────────────────────────────────────
+// e.g. "pass" had 20 total occurrences in this match, 10 were wrong → 50%.
+// Same numerator logic as calcGroupScore (computeErrorKeys), just grouped by
+// the event's own name instead of a module group. This is the true quality
+// score per event type — replaces the old "errors ÷ session count" rate,
+// which could exceed 100% since one event type can have more errors than
+// there are sessions.
+function calcEventTypeScores(baseEvents, amendments, reviewerIds) {
+  const byName = {}
+  ;(baseEvents || []).forEach(e => {
+    const name = e.name || 'unknown'
+    if (!byName[name]) byName[name] = []
+    byName[name].push(e)
+  })
+  const result = {}
+  for (const [name, events] of Object.entries(byName)) {
+    const keys = new Set(events.map(e => e.key))
+    const relatedAmends = (amendments || []).filter(a => keys.has(a.key))
+    const errorKeys = computeErrorKeys(events, relatedAmends, reviewerIds)
+    const total = events.length
+    const errors = errorKeys.size
+    result[name] = {
+      total,
+      errors,
+      score: total > 0 ? Math.round(((total - errors) / total) * 100) : null,
+    }
+  }
+  return result
+}
+
 // ── Amendments Table ──────────────────────────────────────────────────────────
 function ModuleScores({ moduleScores }) {
   if (!moduleScores) return null
@@ -1048,6 +1078,9 @@ export default function AuditPage({ session, onBack, onFullReport, initialResult
       for (const [key, group] of Object.entries(REVIEW_GROUPS)) {
         abc[key] = calcGroupScore(group, data.baseEvents, data.amendments, refinements, reviewerIds)
       }
+
+      // Per-event-type quality scores (e.g. "pass": 20 total, 10 errors → 50%)
+      const eventTypeScores = calcEventTypeScores(data.baseEvents, data.amendments, reviewerIds)
       // Seed the identity map from whatever the bridge already harvested
       // (passive tap / prior sweep) plus the persistent roster.
       const seedIdentities = data.identities || []
@@ -1176,6 +1209,7 @@ export default function AuditPage({ session, onBack, onFullReport, initialResult
         qualityScoreB:      abc?.B?.score ?? null,
         qualityScoreC:      abc?.C?.score ?? null,
         moduleScores,
+        eventTypeScores,
         amendmentTypes:     types,
         status:             'completed',
         completedAt:        serverTimestamp(),
