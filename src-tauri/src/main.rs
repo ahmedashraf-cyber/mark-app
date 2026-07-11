@@ -442,7 +442,7 @@ fn patch_one_shortcut(lnk_path: &std::path::Path) -> Result<bool, String> {
 // marker) does not match, so it gets stripped and replaced — that's what was
 // previously frozen by a fixed marker. Bump this whenever the embedded bridge
 // changes so existing installs re-embed the new version.
-const ASAR_MARKER: &str = "<!-- MARK_BRIDGE_INJECTED v7.5.25 -->";
+const ASAR_MARKER: &str = "<!-- MARK_BRIDGE_INJECTED v7.5.27 -->";
 
 #[command]
 fn patch_tag_once_asar() -> Result<String, String> {
@@ -1537,6 +1537,115 @@ async fn drive_upload_file(
 }
 
 // ─── Save a text/CSV string to a local path ──────────────────────────────────
+// ─── Upload CSV as Google Sheet with MARK visual identity ────────────────────
+// Uploads a CSV file, converts it to a native Google Sheet, then applies
+// MARK dark identity formatting: dark header row, orange summary, auto-width.
+#[command]
+async fn upload_csv_as_sheet(
+    token: String,
+    file_path: String,
+    file_name: String,
+    parent_folder_id: String,
+) -> Result<String, String> {
+    let bytes = std::fs::read(&file_path)
+        .map_err(|e| format!("Could not read file {}: {}", file_path, e))?;
+    let client = reqwest::Client::new();
+    let boundary = "MARKsheetboundary7a2c9b";
+    // Strip .csv suffix for the sheet name
+    let sheet_name = file_name.trim_end_matches(".csv");
+    let metadata = serde_json::json!({
+        "name": sheet_name,
+        "mimeType": "application/vnd.google-apps.spreadsheet",
+        "parents": [parent_folder_id]
+    });
+    let mut body: Vec<u8> = Vec::new();
+    body.extend_from_slice(format!("--{}\r\n", boundary).as_bytes());
+    body.extend_from_slice(b"Content-Type: application/json; charset=UTF-8\r\n\r\n");
+    body.extend_from_slice(metadata.to_string().as_bytes());
+    body.extend_from_slice(format!("\r\n--{}\r\n", boundary).as_bytes());
+    body.extend_from_slice(b"Content-Type: text/csv\r\n\r\n");
+    body.extend_from_slice(&bytes);
+    body.extend_from_slice(format!("\r\n--{}--\r\n", boundary).as_bytes());
+    let upload_resp: serde_json::Value = client
+        .post("https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&supportsAllDrives=true&fields=id,webViewLink")
+        .header("Authorization", format!("Bearer {}", token))
+        .header("Content-Type", format!("multipart/related; boundary={}", boundary))
+        .body(body)
+        .send()
+        .await
+        .map_err(|e| format!("Sheet upload failed: {}", e))?
+        .json()
+        .await
+        .map_err(|e| format!("Sheet upload parse failed: {}", e))?;
+    if let Some(err) = upload_resp.get("error") {
+        return Err(format!("Sheet upload error: {}", err));
+    }
+    let sheet_id = upload_resp["id"].as_str().unwrap_or("").to_string();
+    let web_link = upload_resp["webViewLink"].as_str().unwrap_or("").to_string();
+    if sheet_id.is_empty() { return Ok(web_link); }
+
+    // ── Apply MARK visual formatting via Sheets batchUpdate ──────────────────
+    // Row 1 = summary title (orange bg, white bold text)
+    // Row 15 = errors table header (dark bg, orange bold text)
+    // Rows 16+ = data rows (alternating dark/darker)
+    let format_url = format!("https://sheets.googleapis.com/v4/spreadsheets/{}/batchUpdate", sheet_id);
+    let requests = serde_json::json!({
+        "requests": [
+            // Freeze first row
+            { "updateSheetProperties": { "properties": { "sheetId": 0, "gridProperties": { "frozenRowCount": 1 } }, "fields": "gridProperties.frozenRowCount" } },
+            // Row 1: summary header — orange background (#E8590C), white bold
+            { "repeatCell": {
+                "range": { "sheetId": 0, "startRowIndex": 0, "endRowIndex": 1 },
+                "cell": { "userEnteredFormat": {
+                    "backgroundColor": { "red": 0.910, "green": 0.349, "blue": 0.047 },
+                    "textFormat": { "foregroundColor": { "red": 1.0, "green": 1.0, "blue": 1.0 }, "bold": true, "fontSize": 11 },
+                    "horizontalAlignment": "LEFT"
+                }},
+                "fields": "userEnteredFormat(backgroundColor,textFormat,horizontalAlignment)"
+            }},
+            // Row 15 (index 14): errors table header — very dark (#0F0F0F), orange text bold
+            { "repeatCell": {
+                "range": { "sheetId": 0, "startRowIndex": 14, "endRowIndex": 15 },
+                "cell": { "userEnteredFormat": {
+                    "backgroundColor": { "red": 0.059, "green": 0.059, "blue": 0.059 },
+                    "textFormat": { "foregroundColor": { "red": 0.910, "green": 0.349, "blue": 0.047 }, "bold": true, "fontSize": 10 },
+                    "horizontalAlignment": "LEFT"
+                }},
+                "fields": "userEnteredFormat(backgroundColor,textFormat,horizontalAlignment)"
+            }},
+            // Data rows (16 onwards, index 15+): dark bg (#141414), light text
+            { "repeatCell": {
+                "range": { "sheetId": 0, "startRowIndex": 15, "endRowIndex": 500 },
+                "cell": { "userEnteredFormat": {
+                    "backgroundColor": { "red": 0.078, "green": 0.078, "blue": 0.078 },
+                    "textFormat": { "foregroundColor": { "red": 0.88, "green": 0.88, "blue": 0.88 }, "fontSize": 10 },
+                    "horizontalAlignment": "LEFT"
+                }},
+                "fields": "userEnteredFormat(backgroundColor,textFormat,horizontalAlignment)"
+            }},
+            // Summary rows (2-13): slightly lighter dark (#1A1A1A)
+            { "repeatCell": {
+                "range": { "sheetId": 0, "startRowIndex": 1, "endRowIndex": 14 },
+                "cell": { "userEnteredFormat": {
+                    "backgroundColor": { "red": 0.102, "green": 0.102, "blue": 0.102 },
+                    "textFormat": { "foregroundColor": { "red": 0.78, "green": 0.78, "blue": 0.78 }, "fontSize": 10 },
+                    "horizontalAlignment": "LEFT"
+                }},
+                "fields": "userEnteredFormat(backgroundColor,textFormat,horizontalAlignment)"
+            }},
+            // Auto-resize all columns
+            { "autoResizeDimensions": { "dimensions": { "sheetId": 0, "dimension": "COLUMNS", "startIndex": 0, "endIndex": 15 } } }
+        ]
+    });
+    let _ = client
+        .post(&format_url)
+        .header("Authorization", format!("Bearer {}", token))
+        .json(&requests)
+        .send()
+        .await;
+    Ok(web_link)
+}
+
 #[command]
 fn save_text_file(path: String, content: String) -> Result<(), String> {
     // Ensure parent directory exists
@@ -1567,6 +1676,7 @@ fn save_text_file(path: String, content: String) -> Result<(), String> {
             create_google_sheet,
             drive_create_folder,
             drive_upload_file,
+            upload_csv_as_sheet,
             save_text_file,
             get_google_access_token_cmd,
             get_userprofile,

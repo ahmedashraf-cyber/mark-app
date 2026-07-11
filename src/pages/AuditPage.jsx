@@ -1590,8 +1590,12 @@ export default function AuditPage({ session, onBack, onFullReport, initialResult
       // ── Helpers ──────────────────────────────────────────────────────────
       const safe = (s) => String(s ?? '').replace(/[\\/:*?"<>|]/g, '').trim()
       const fmtHalf = (h) => {
-        const m = { '1': '1st Half', '2': '2nd Half', 'first_half': '1st Half', 'second_half': '2nd Half',
-                    'et1': 'ET 1', 'et2': 'ET 2', 'first': '1st Half', 'second': '2nd Half' }
+        const m = {
+          '1h': '1st Half', '2h': '2nd Half', 'et1': 'ET 1', 'et2': 'ET 2',
+          '1': '1st Half', '2': '2nd Half',
+          'first_half': '1st Half', 'second_half': '2nd Half',
+          'first': '1st Half', 'second': '2nd Half',
+        }
         return m[String(h).toLowerCase()] || String(h)
       }
 
@@ -1799,11 +1803,12 @@ export default function AuditPage({ session, onBack, onFullReport, initialResult
       const csvFileName  = `${matchId}_${matchName}_${halfSafe}_${safe(collectorHr)}.csv`
 
       // Clip list: one per error row that has a timestamp
+      // Timestamp format: MM:SS.mmm → sanitize for filename → MM-SS.mmm
       const clipsWithTs = errorRows.filter(r => r.tsSec !== null)
       const clipDefs = clipsWithTs.map(r => {
-        const evtSafe = safe(r.eventName).slice(0, 40)
-        const tsFmt   = r.timestamp.replace(':', 'm') + 's'
-        const errSafe = safe(r.errorTypeLabel || r.module || 'error').slice(0, 30)
+        const evtSafe = safe(r.eventName).slice(0, 35)
+        const tsFmt   = r.timestamp.replace(':', '-')   // 03:13.350 → 03-13.350
+        const errSafe = safe(r.errorTypeLabel || r.module || 'error').slice(0, 25)
         return { ts: r.tsSec, name: `${evtSafe}_${tsFmt}_${errSafe}.mp4` }
       })
 
@@ -1850,7 +1855,7 @@ export default function AuditPage({ session, onBack, onFullReport, initialResult
 
       let driveLink = ''
       try {
-        const csvLink = await invoke('drive_upload_file', {
+        const csvLink = await invoke('upload_csv_as_sheet', {
           token, filePath: csvLocalPath, fileName: csvFileName, parentFolderId: subFolderId,
         })
         driveLink = csvLink
@@ -1867,8 +1872,9 @@ export default function AuditPage({ session, onBack, onFullReport, initialResult
         setExportState(s => ({ ...s, step: i + 2 }))
       }
 
-      // ── Done ─────────────────────────────────────────────────────────────
-      setExportState({ phase: 'done', step: total, total, done: true, driveLink })
+      // ── Done — driveLink points to the folder ────────────────────────────
+      const folderUrl = `https://drive.google.com/drive/folders/${subFolderId}`
+      setExportState({ phase: 'done', step: total, total, done: true, driveLink: folderUrl })
 
     } catch(e) {
       setExportState(null)
@@ -2459,18 +2465,16 @@ export default function AuditPage({ session, onBack, onFullReport, initialResult
                   </div>
                   <div style={{ display: 'flex', gap: 8 }}>
                     {exportState.driveLink && (
-                      <a
-                        href={exportState.driveLink}
-                        target="_blank"
-                        rel="noreferrer"
+                      <button
+                        onClick={() => invoke('open_file', { path: exportState.driveLink })}
                         style={{
                           padding: '5px 12px', borderRadius: 10, fontSize: 11, fontWeight: 600,
                           background: 'rgba(48,209,88,0.1)', color: '#30D158',
-                          border: '0.5px solid rgba(48,209,88,0.25)', textDecoration: 'none',
+                          border: '0.5px solid rgba(48,209,88,0.25)', cursor: 'pointer',
                         }}
                       >
                         Open in Drive ↗
-                      </a>
+                      </button>
                     )}
                     <button
                       className="btn-ghost"
