@@ -920,6 +920,11 @@ export default function AuditPage({ session, onBack, onFullReport, initialResult
   const [checkingSheet,  setCheckingSheet]  = useState(true)   // true while checking Sheet on mount
   const [reauditConfirm, setReauditConfirm] = useState(false)  // true when confirm dialog is shown
   const [resolvingIds,   setResolvingIds]   = useState(false)
+  const [exportState,    setExportState]    = useState(null)   // null | { phase, step, total, done, driveLink }
+
+  // Master Drive folder ID — all sessions go inside sub-folders here
+  // Set once via Settings or first-run prompt, persisted to localStorage
+  const MASTER_DRIVE_FOLDER_ID = localStorage.getItem('mark_master_drive_folder') || ''
 
   const { requestQAResults, resolveMatchIdentities } = useSync(setBridgeStatus, session.sessionId)
 
@@ -1119,6 +1124,202 @@ export default function AuditPage({ session, onBack, onFullReport, initialResult
       setError('Error getting results: ' + e.message)
     } finally {
       setLoading(false)
+    }
+  }
+
+  // ── Export CSV + cut error clips + upload all to Drive ───────────────────
+  async function handleExportAndUpload() {
+    if (!results) return
+
+    // 1. Require master folder ID
+    let masterFolderId = localStorage.getItem('mark_master_drive_folder') || ''
+    if (!masterFolderId) {
+      const input = window.prompt(
+        'First-time setup: Paste your Google Drive master folder ID.\n\n' +
+        'Open the Drive folder in your browser → copy the ID from the URL:\n' +
+        'drive.google.com/drive/folders/[THIS_PART_IS_THE_ID]'
+      )
+      if (!input || !input.trim()) { setError('Export cancelled — no Drive folder ID provided.'); return }
+      masterFolderId = input.trim()
+      localStorage.setItem('mark_master_drive_folder', masterFolderId)
+    }
+
+    // 2. Require video path
+    const videoPath = localStorage.getItem(`mark_video_path_${session.matchId}`) || ''
+    if (!videoPath) {
+      setError('No video loaded — click "Load Video" and select the match video first, then export.')
+      return
+    }
+
+    setExportState({ phase: 'starting', step: 0, total: 0, done: false, driveLink: '' })
+    setError('')
+
+    try {
+      // ── Helpers ──────────────────────────────────────────────────────────
+      const safe = (s) => String(s ?? '').replace(/[\\/:*?"<>|]/g, '').trim()
+      const fmtHalf = (h) => {
+        const m = { '1': '1st Half', '2': '2nd Half', 'first_half': '1st Half', 'second_half': '2nd Half',
+                    'et1': 'ET 1', 'et2': 'ET 2', 'first': '1st Half', 'second': '2nd Half' }
+        return m[String(h).toLowerCase()] || String(h)
+      }
+
+      // Build the display identity map for the CSV
+      const idMap = results.identityMap || {}
+      const reviewerIds = results.reviewerIds || (results.reviewerId != null ? [results.reviewerId] : [])
+      const primaryCollectorEntry = idMap[String(results.collectorId)] || null
+      const collectorHr = primaryCollectorEntry?.hrcode || primaryCollectorEntry?.hrCode || String(results.collectorId)
+      const collectorName = primaryCollectorEntry?.name || `Collector ${results.collectorId}`
+      const primaryReviewerEntry = idMap[String(results.reviewerId)] || null
+      const reviewerName = primaryReviewerEntry?.name || profile.displayName || 'Reviewer'
+
+      const matchId   = safe(session.matchId)
+      const matchName = safe(session.matchName)
+      const halfLabel = fmtHalf(session.half)
+      const halfSafe  = safe(halfLabel)
+
+      // ── Build the errors rows (same logic as AmendmentsTable) ────────────
+      const ASPECT_OF = { base:'Base', camera:'Base', extras:'Extra', location:'Location', players:'Players', deletion:'Base', added:'Base' }
+      const baseByKey = {}
+      ;(results.baseEvents || []).forEach(e => { baseByKey[e.key] = e })
+      const reviewerSet = new Set(reviewerIds.map(Number))
+      const filteredAmends = (results.amendments || []).filter(a => reviewerSet.has(Number(a.author)))
+      const amendsByKey = {}
+      filteredAmends.forEach(a => {
+        if (!amendsByKey[a.key]) amendsByKey[a.key] = []
+        amendsByKey[a.key].push(a)
+      })
+
+      const fmt = (sec) => {
+        const t = Math.floor(sec)
+        return `${String(Math.floor(t / 60)).padStart(2,'0')}:${String(t % 60).padStart(2,'0')}`
+      }
+
+      const errorRows = Object.entries(amendsByKey).map(([key, amends]) => {
+        const base = baseByKey[key]
+        const types = [...new Set(amends.map(a => a.type))]
+        const aspects = [...new Set(types.map(t => ASPECT_OF[t] || 'Base'))]
+        const editType = types.includes('added') ? 'Added' : types.includes('deletion') ? 'Deleted' : 'Wrong'
+        const latestAmend = amends.sort((a,b) => (b.capturedTime||0)-(a.capturedTime||0))[0]
+        const before = amends.find(a => a.before)?.before || ''
+        const after  = amends.find(a => a.after)?.after  || ''
+        const tsSec  = base?.videoTimestamp != null ? base.videoTimestamp / 1000 : null
+        const collDisplay = idMap[String(base?.author)]?.name || `Collector ${base?.author}`
+        return {
+          key,
+          eventName: base?.name || '—',
+          timestamp: tsSec !== null ? fmt(tsSec) : '—',
+          tsSec,
+          teamId: base?.teamId || '—',
+          types,
+          aspects,
+          editType,
+          before,
+          after,
+          collectorDisplay: collDisplay,
+          reviewerName,
+          capturedTime: latestAmend?.capturedTime ? new Date(latestAmend.capturedTime).toISOString() : '',
+        }
+      }).sort((a, b) => (a.tsSec ?? 0) - (b.tsSec ?? 0))
+
+      // ── Build CSV content ────────────────────────────────────────────────
+      const csvQ = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`
+      const csvLines = []
+
+      // Summary block
+      const abcLabels = { A:'Base', B:'Pressure', C:'Extras', D:'Players', E:'Location', F:'Freeze Frame' }
+      csvLines.push(['AUDIT SESSION SUMMARY'].map(csvQ).join(','))
+      csvLines.push(['Match ID', matchId].map(csvQ).join(','))
+      csvLines.push(['Match Name', session.matchName].map(csvQ).join(','))
+      csvLines.push(['Half', halfLabel].map(csvQ).join(','))
+      csvLines.push(['Collector HR Code', collectorHr].map(csvQ).join(','))
+      csvLines.push(['Collector Name', collectorName].map(csvQ).join(','))
+      csvLines.push(['Reviewer', reviewerName].map(csvQ).join(','))
+      csvLines.push(['Overall Score', `${score}%`].map(csvQ).join(','))
+      csvLines.push(['Total Events', String(results.baseEvents?.length ?? 0)].map(csvQ).join(','))
+      csvLines.push(['Total Errors', String(errorRows.length)].map(csvQ).join(','))
+      // Module scores
+      if (abcScores) {
+        Object.entries(abcScores).forEach(([key, val]) => {
+          csvLines.push([`${abcLabels[key] || key} Score`, val?.score != null ? `${Math.round(val.score)}%` : '—'].map(csvQ).join(','))
+        })
+      }
+      csvLines.push([]) // blank line separator
+
+      // Errors table header
+      csvLines.push(['Match ID','Match Name','Half','Timestamp','Event Name','Team','Aspect','Edit Type','Before','After','Collector','Reviewer','Captured At'].map(csvQ).join(','))
+      errorRows.forEach(r => {
+        csvLines.push([
+          session.matchId, session.matchName, halfLabel, r.timestamp,
+          r.eventName, r.teamId, r.aspects.join(' + '), r.editType,
+          r.before, r.after, r.collectorDisplay, r.reviewerName, r.capturedTime,
+        ].map(csvQ).join(','))
+      })
+      const csvContent = csvLines.map(l => Array.isArray(l) ? '' : l).join('\r\n')
+
+      // ── Folder name & file names ─────────────────────────────────────────
+      const folderName   = `${matchId}_${matchName}_${halfSafe}_${safe(collectorHr)}`
+      const csvFileName  = `${matchId}_${matchName}_${halfSafe}_${safe(collectorHr)}.csv`
+
+      // Clip list: one per error row that has a timestamp
+      const clipsWithTs = errorRows.filter(r => r.tsSec !== null)
+      const clipDefs = clipsWithTs.map(r => {
+        const evtSafe = safe(r.eventName).slice(0, 40)
+        const tsFmt   = r.timestamp.replace(':', 'm') + 's'
+        const errSafe = safe(r.editType + '_' + r.aspects.join('_')).slice(0, 30)
+        return { ts: r.tsSec, name: `${evtSafe}_${tsFmt}_${errSafe}.mp4` }
+      })
+
+      const total = 2 + clipDefs.length // CSV upload + folder create + N clips
+      setExportState({ phase: 'cutting', step: 0, total, done: false, driveLink: '' })
+
+      // ── 1. Get Drive token ───────────────────────────────────────────────
+      const token = await invoke('get_google_access_token_cmd')
+
+      // ── 2. Create match sub-folder inside master folder ──────────────────
+      setExportState(s => ({ ...s, phase: 'folder', step: 0 }))
+      const subFolderId = await invoke('drive_create_folder', {
+        token, name: folderName, parentId: masterFolderId,
+      })
+
+      // ── 3. Cut all clips locally ─────────────────────────────────────────
+      setExportState(s => ({ ...s, phase: 'cutting', step: 0, total: clipDefs.length + 1 }))
+      let cutFiles = []
+      if (clipDefs.length > 0) {
+        cutFiles = await invoke('cut_clips', {
+          videoPath, subfolder: folderName, clips: clipDefs,
+        })
+      }
+      setExportState(s => ({ ...s, step: cutFiles.length }))
+
+      // ── 4. Save CSV locally then upload ─────────────────────────────────
+      const userprofile = await invoke('get_userprofile')
+      const csvLocalPath = `${userprofile}\\Downloads\\${folderName}\\${csvFileName}`
+      await invoke('save_text_file', { path: csvLocalPath, content: csvContent })
+      setExportState(s => ({ ...s, phase: 'uploading', step: 0, total: cutFiles.length + 1 }))
+
+      let driveLink = ''
+      const csvLink = await invoke('drive_upload_file', {
+        token, filePath: csvLocalPath, fileName: csvFileName, parentFolderId: subFolderId,
+      })
+      driveLink = csvLink
+      setExportState(s => ({ ...s, step: 1 }))
+
+      // ── 5. Upload each clip ──────────────────────────────────────────────
+      for (let i = 0; i < cutFiles.length; i++) {
+        const clipName = cutFiles[i]
+        const localPath = `${userprofile}\\Downloads\\${folderName}\\${clipName}`
+        await invoke('drive_upload_file', {
+          token, filePath: localPath, fileName: clipName, parentFolderId: subFolderId,
+        })
+        setExportState(s => ({ ...s, step: i + 2 }))
+      }
+
+      // ── Done ─────────────────────────────────────────────────────────────
+      setExportState({ phase: 'done', step: total, total, done: true, driveLink })
+
+    } catch(e) {
+      setExportState(null)
+      setError('Export failed: ' + e.message)
     }
   }
 
@@ -1623,6 +1824,102 @@ export default function AuditPage({ session, onBack, onFullReport, initialResult
               )}
               <ModuleScores moduleScores={results.moduleScores} />
               <AmendmentsTable results={results} session={session} identityMap={results.identityMap} reviewerIds={results.reviewerIds || (results.reviewerId != null ? [results.reviewerId] : [])} onSeek={seekToSeconds} />
+
+              {/* ── Export & Upload to Drive ── */}
+              {!exportState && (
+                <div className="fade-in" style={{ marginTop: 16, display: 'flex', justifyContent: 'center' }}>
+                  <button
+                    className="btn-orange"
+                    style={{ padding: '9px 22px', fontSize: 13, display: 'flex', alignItems: 'center', gap: 8 }}
+                    onClick={handleExportAndUpload}
+                  >
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round">
+                      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                      <polyline points="17 8 12 3 7 8"/>
+                      <line x1="12" y1="3" x2="12" y2="15"/>
+                    </svg>
+                    Export CSV + Clips → Drive
+                  </button>
+                </div>
+              )}
+
+              {/* ── Progress bar ── */}
+              {exportState && !exportState.done && (
+                <div className="fade-in" style={{
+                  marginTop: 16, background: 'var(--bg-1)', border: '0.5px solid var(--b-1)',
+                  borderRadius: 16, padding: '14px 18px',
+                }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+                    <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--t-2)' }}>
+                      {exportState.phase === 'folder'    && '📁 Creating Drive folder…'}
+                      {exportState.phase === 'cutting'   && `✂️  Cutting clip ${exportState.step} of ${exportState.total - 1}…`}
+                      {exportState.phase === 'uploading' && `☁️  Uploading ${exportState.step} of ${exportState.total}…`}
+                      {exportState.phase === 'starting'  && 'Starting export…'}
+                    </span>
+                    <span style={{ fontSize: 11, fontFamily: 'JetBrains Mono, monospace', color: 'var(--t-3)' }}>
+                      {exportState.total > 0 ? `${Math.round((exportState.step / exportState.total) * 100)}%` : '…'}
+                    </span>
+                  </div>
+                  <div style={{ height: 4, background: 'var(--bg-3)', borderRadius: 999, overflow: 'hidden' }}>
+                    <div style={{
+                      height: '100%',
+                      width: exportState.total > 0 ? `${Math.round((exportState.step / exportState.total) * 100)}%` : '5%',
+                      background: 'linear-gradient(90deg, var(--p), var(--p2))',
+                      borderRadius: 999,
+                      transition: 'width 0.4s var(--ease)',
+                    }}/>
+                  </div>
+                  <div style={{ marginTop: 7, fontSize: 11, color: 'var(--t-3)' }}>
+                    This may take 1–3 minutes depending on the number of errors and your connection.
+                  </div>
+                </div>
+              )}
+
+              {/* ── Done banner ── */}
+              {exportState?.done && (
+                <div className="fade-in" style={{
+                  marginTop: 16, background: 'rgba(48,209,88,0.06)', border: '0.5px solid rgba(48,209,88,0.2)',
+                  borderRadius: 16, padding: '12px 18px',
+                  display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12,
+                }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#30D158" strokeWidth="2.5" strokeLinecap="round">
+                      <path d="M20 6L9 17l-5-5"/>
+                    </svg>
+                    <div>
+                      <div style={{ fontSize: 12, fontWeight: 700, color: '#30D158' }}>
+                        Uploaded to Drive — {exportState.total - 1} clips + CSV
+                      </div>
+                      <div style={{ fontSize: 11, color: 'var(--t-3)', marginTop: 2 }}>
+                        Clips saved locally to Downloads folder too
+                      </div>
+                    </div>
+                  </div>
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    {exportState.driveLink && (
+                      <a
+                        href={exportState.driveLink}
+                        target="_blank"
+                        rel="noreferrer"
+                        style={{
+                          padding: '5px 12px', borderRadius: 10, fontSize: 11, fontWeight: 600,
+                          background: 'rgba(48,209,88,0.1)', color: '#30D158',
+                          border: '0.5px solid rgba(48,209,88,0.25)', textDecoration: 'none',
+                        }}
+                      >
+                        Open in Drive ↗
+                      </a>
+                    )}
+                    <button
+                      className="btn-ghost"
+                      style={{ padding: '5px 12px', fontSize: 11 }}
+                      onClick={() => setExportState(null)}
+                    >
+                      Re-export
+                    </button>
+                  </div>
+                </div>
+              )}
             </>
           )}
 

@@ -1415,6 +1415,137 @@ fn main() {
         rt.block_on(std::future::pending::<()>());
     });
 
+// ─── Expose service-account token to JS ──────────────────────────────────────
+#[command]
+async fn get_google_access_token_cmd() -> Result<String, String> {
+    get_google_access_token().await
+}
+
+// ─── Return %USERPROFILE% to JS ──────────────────────────────────────────────
+#[command]
+fn get_userprofile() -> Result<String, String> {
+    std::env::var("USERPROFILE").map_err(|_| "USERPROFILE not set".to_string())
+}
+
+// ─── Drive: create a folder inside a parent folder ───────────────────────────
+#[command]
+async fn drive_create_folder(
+    token: String,
+    name: String,
+    parent_id: String,
+) -> Result<String, String> {
+    let client = reqwest::Client::new();
+    let meta = serde_json::json!({
+        "name": name,
+        "mimeType": "application/vnd.google-apps.folder",
+        "parents": [parent_id]
+    });
+    // Check if folder already exists first to avoid duplicates
+    let q = format!(
+        "name='{}' and '{}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false",
+        name.replace('\'', "\\'"), parent_id
+    );
+    let search: serde_json::Value = client
+        .get("https://www.googleapis.com/drive/v3/files")
+        .query(&[("q", q.as_str()), ("fields", "files(id)"), ("spaces", "drive")])
+        .header("Authorization", format!("Bearer {}", token))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?
+        .json()
+        .await
+        .map_err(|e| e.to_string())?;
+    if let Some(arr) = search["files"].as_array() {
+        if let Some(existing) = arr.first() {
+            if let Some(id) = existing["id"].as_str() {
+                return Ok(id.to_string());
+            }
+        }
+    }
+    // Create new folder
+    let resp: serde_json::Value = client
+        .post("https://www.googleapis.com/drive/v3/files?fields=id")
+        .header("Authorization", format!("Bearer {}", token))
+        .json(&meta)
+        .send()
+        .await
+        .map_err(|e| format!("Drive folder create failed: {}", e))?
+        .json()
+        .await
+        .map_err(|e| format!("Drive folder parse failed: {}", e))?;
+    if let Some(err) = resp.get("error") {
+        return Err(format!("Drive folder error: {}", err));
+    }
+    resp["id"]
+        .as_str()
+        .map(|s| s.to_string())
+        .ok_or_else(|| "No folder id returned".to_string())
+}
+
+// ─── Drive: upload a local file into a Drive folder ──────────────────────────
+#[command]
+async fn drive_upload_file(
+    token: String,
+    file_path: String,
+    file_name: String,
+    parent_folder_id: String,
+) -> Result<String, String> {
+    let bytes = std::fs::read(&file_path)
+        .map_err(|e| format!("Could not read file {}: {}", file_path, e))?;
+
+    // Detect MIME type from extension
+    let mime = if file_path.ends_with(".mp4") {
+        "video/mp4"
+    } else if file_path.ends_with(".csv") {
+        "text/csv"
+    } else {
+        "application/octet-stream"
+    };
+
+    let client = reqwest::Client::new();
+    let boundary = "MARKuploadboundary9f3e1a";
+    let metadata = serde_json::json!({
+        "name": file_name,
+        "parents": [parent_folder_id]
+    });
+
+    let mut body: Vec<u8> = Vec::new();
+    body.extend_from_slice(format!("--{}\r\n", boundary).as_bytes());
+    body.extend_from_slice(b"Content-Type: application/json; charset=UTF-8\r\n\r\n");
+    body.extend_from_slice(metadata.to_string().as_bytes());
+    body.extend_from_slice(format!("\r\n--{}\r\n", boundary).as_bytes());
+    body.extend_from_slice(format!("Content-Type: {}\r\n\r\n", mime).as_bytes());
+    body.extend_from_slice(&bytes);
+    body.extend_from_slice(format!("\r\n--{}--\r\n", boundary).as_bytes());
+
+    let resp: serde_json::Value = client
+        .post("https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,webViewLink")
+        .header("Authorization", format!("Bearer {}", token))
+        .header("Content-Type", format!("multipart/related; boundary={}", boundary))
+        .body(body)
+        .send()
+        .await
+        .map_err(|e| format!("Drive upload failed: {}", e))?
+        .json()
+        .await
+        .map_err(|e| format!("Drive upload parse failed: {}", e))?;
+
+    if let Some(err) = resp.get("error") {
+        return Err(format!("Drive upload error: {}", err));
+    }
+    Ok(resp["webViewLink"].as_str().unwrap_or("").to_string())
+}
+
+// ─── Save a text/CSV string to a local path ──────────────────────────────────
+#[command]
+fn save_text_file(path: String, content: String) -> Result<(), String> {
+    // Ensure parent directory exists
+    if let Some(parent) = std::path::Path::new(&path).parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    std::fs::write(&path, content.as_bytes()).map_err(|e| e.to_string())
+}
+
     tauri::Builder::default()
         .plugin(tauri_plugin_fs::init())
         .manage(VideoState { path: video_path, port: port_holder })
@@ -1434,6 +1565,11 @@ fn main() {
             get_video_url,
             open_file,
             create_google_sheet,
+            drive_create_folder,
+            drive_upload_file,
+            save_text_file,
+            get_google_access_token_cmd,
+            get_userprofile,
         ])
         .run(tauri::generate_context!())
         .expect("error while running MARK");
