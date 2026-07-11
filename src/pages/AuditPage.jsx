@@ -605,10 +605,33 @@ function AmendmentsTable({ results, session, reviewerIds, identityMap, onSeek })
   // ── Player map from lineupPlayers ──────────────────────────────────────────
   const playerMap = {}
   const teamMap = {}
+  // Build from lineupPlayers array (bridge payload)
   ;(results.lineupPlayers || []).forEach(p => {
     playerMap[p.id] = { name: p.nickname || p.name || '', jersey: p.jersey, teamName: p.teamName || '', teamId: p.teamId }
     teamMap[p.teamId] = p.teamName || ''
   })
+  // Merge from lineupPlayerMap (pre-built in handleGetResults)
+  Object.entries(results.lineupPlayerMap || {}).forEach(([id, p]) => {
+    if (!playerMap[Number(id)]) playerMap[Number(id)] = { name: p.nickname || p.name || '', jersey: p.jersey, teamName: p.teamName || '', teamId: p.teamId }
+    if (p.teamId) teamMap[p.teamId] = p.teamName || ''
+  })
+  // Fallback: read directly from Apollo cache (covers restored sessions where lineupPlayers not persisted)
+  if (Object.keys(playerMap).length === 0) {
+    try {
+      const apolloCache = window.apollo?.client?.cache?.extract() || {}
+      const matchObj = Object.values(apolloCache).find(v => v.__typename === 'Match')
+      const resolveRef = (ref) => ref?.__ref ? apolloCache[ref.__ref] : ref
+      ;[resolveRef(matchObj?.home), resolveRef(matchObj?.away)].forEach(team => {
+        if (!team?.players) return
+        ;(team.players || []).forEach(ref => {
+          const p = resolveRef(ref)
+          if (!p?.id) return
+          playerMap[p.id] = { name: p.nickname || p.name || '', jersey: p.jersey_number, teamName: team.name || '', teamId: team.id }
+          teamMap[team.id] = team.name || ''
+        })
+      })
+    } catch(e) {}
+  }
   const resolvePlayer = (id) => {
     if (id == null) return null
     const p = playerMap[id]
