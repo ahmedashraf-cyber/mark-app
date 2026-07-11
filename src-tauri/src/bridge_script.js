@@ -797,6 +797,48 @@
           moduleScores = null;
         }
 
+        // ── Lineup players (home + away with team info) ───────────────────────
+        // Used by MARK to resolve player names/jersey numbers in amendments
+        let lineupPlayers = [];
+        try {
+          const matchObj = Object.values(cache).find(function(v) { return v.__typename === 'Match'; });
+          const resolveRef = function(ref) { return ref && ref.__ref ? cache[ref.__ref] : ref; };
+          const homeTeam = resolveRef(matchObj && matchObj.home);
+          const awayTeam = resolveRef(matchObj && matchObj.away);
+          [{ team: homeTeam, side: 'home' }, { team: awayTeam, side: 'away' }].forEach(function(t) {
+            if (!t.team || !t.team.players) return;
+            t.team.players.forEach(function(ref) {
+              const p = resolveRef(ref);
+              if (!p || !p.id) return;
+              lineupPlayers.push({
+                id: p.id,
+                name: p.name || '',
+                nickname: p.nickname || '',
+                jersey: p.jersey_number,
+                teamId: t.team.id,
+                teamName: t.team.name || '',
+                side: t.side,
+              });
+            });
+          });
+        } catch(lpErr) {
+          console.warn('[MARK] lineupPlayers failed:', lpErr && lpErr.message);
+          lineupPlayers = [];
+        }
+
+        // ── Refinements for reviewed events ──────────────────────────────────
+        // Collect all refinements (extras, location, players, freeze-frame, etc.)
+        // for the base events in range. Sent as { key_type: payload } map so
+        // MARK can show Before/After without needing the Apollo cache on the MARK side.
+        const refinements = {};
+        Object.values(cache).forEach(function(v) {
+          if (v.__typename !== 'Event') return;
+          if (v.category !== 'refinement') return;
+          if (!baseKeysInRange.has(v.key)) return;
+          if (v.matchId !== numMatchId && v.matchId !== String(numMatchId)) return;
+          refinements[v.key + '_' + v.type] = v.payload || {};
+        });
+
         ws.send(JSON.stringify({
           type: 'qaResultsResponse',
           matchId: numMatchId,
@@ -804,12 +846,14 @@
           videoTime: video.currentTime,
           baseEvents,
           amendments,
+          refinements,
           collectorId,
           collectorIds,
           reviewerId,
           reviewerIds,
-          identities: identitiesArray(),   // resolved legacyId -> {hrcode,name,email} (passive tap + auto-sweep)
-          moduleScores,                      // per-module quality { base, pressure, players, location, extras, freeze-frame }
+          identities: identitiesArray(),
+          lineupPlayers,
+          moduleScores,
           diagnostics,
           usedTelemetry,
           ts: Date.now(),

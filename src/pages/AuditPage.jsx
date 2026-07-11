@@ -609,24 +609,30 @@ function AmendmentsTable({ results, session, reviewerIds, identityMap, onSeek })
   ;(results.lineupPlayers || []).forEach(p => {
     playerMap[p.id] = { name: p.nickname || p.name || '', jersey: p.jersey, teamName: p.teamName || '', teamId: p.teamId }
     teamMap[p.teamId] = p.teamName || ''
+    teamMap[String(p.teamId)] = p.teamName || ''
   })
   // Merge from lineupPlayerMap (pre-built in handleGetResults)
   Object.entries(results.lineupPlayerMap || {}).forEach(([id, p]) => {
     if (!playerMap[Number(id)]) playerMap[Number(id)] = { name: p.nickname || p.name || '', jersey: p.jersey, teamName: p.teamName || '', teamId: p.teamId }
-    if (p.teamId) teamMap[p.teamId] = p.teamName || ''
+    if (p.teamId) { teamMap[p.teamId] = p.teamName || ''; teamMap[String(p.teamId)] = p.teamName || '' }
   })
-  // Fallback: always also read from Apollo cache (most accurate when match is open)
+  // Also merge from results.teamMap directly
+  Object.entries(results.teamMap || {}).forEach(([id, name]) => {
+    teamMap[id] = name; teamMap[String(id)] = name
+  })
+  // Fallback: always also read from Apollo cache
   try {
     const apolloCache = window.apollo?.client?.cache?.extract() || {}
     const matchObj = Object.values(apolloCache).find(v => v.__typename === 'Match')
     const resolveRef = (ref) => ref?.__ref ? apolloCache[ref.__ref] : ref
     ;[resolveRef(matchObj?.home), resolveRef(matchObj?.away)].forEach(team => {
       if (!team?.players) return
+      teamMap[team.id] = team.name || ''
+      teamMap[String(team.id)] = team.name || ''
       ;(team.players || []).forEach(ref => {
         const p = resolveRef(ref)
         if (!p?.id) return
         playerMap[p.id] = { name: p.nickname || p.name || '', jersey: p.jersey_number, teamName: team.name || '', teamId: team.id }
-        teamMap[team.id] = team.name || ''
       })
     })
   } catch(e) {}
@@ -781,7 +787,7 @@ function AmendmentsTable({ results, session, reviewerIds, identityMap, onSeek })
     const reviewerAuthorId = latestAmend?.author
     const collector = resolveIdentity(collectorId)
     const reviewer = resolveIdentity(reviewerAuthorId)
-    const teamName = teamMap[base?.teamId] || (base?.teamId ? `Team ${base.teamId}` : '—')
+    const teamName = teamMap[base?.teamId] || teamMap[String(base?.teamId)] || teamMap[Number(base?.teamId)] || (base?.teamId ? `Team ${base.teamId}` : '—')
 
     // Build before/after structured data
     let before = null
@@ -1419,20 +1425,10 @@ export default function AuditPage({ session, onBack, onFullReport, initialResult
       data.lineupPlayerMap = lineupPlayerMap
       data.teamMap = teamMap
 
-      // ── Build refinementData from Apollo cache — survives Firebase restore ──
-      // Store key_type → payload for all refinements of reviewed events.
-      // This is needed when results are restored and Apollo cache is empty.
-      const refinementData = {}
-      try {
-        const apolloCache = window.apollo?.client?.cache?.extract() || {}
-        Object.values(apolloCache).forEach(v => {
-          if (v.__typename === 'Event' && v.category === 'refinement') {
-            const k = `${v.key}_${v.type}`
-            refinementData[k] = v.payload || {}
-          }
-        })
-      } catch(e) {}
-      data.refinementData = refinementData
+      // ── Use refinements sent directly from bridge ──────────────────────────
+      // Bridge sends { key_type: payload } for all refinements of reviewed events.
+      // This is authoritative — no need to read Apollo cache separately.
+      data.refinementData = data.refinements || {}
 
       // ── Step A: Filter system amendments ────────────────────────────────
       // Remove pressure-pair links (base + pairKey + no author) and
