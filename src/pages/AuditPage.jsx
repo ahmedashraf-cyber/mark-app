@@ -1533,6 +1533,7 @@ export default function AuditPage({ session, onBack, onFullReport, initialResult
         abc[key] = calcGroupScore(REVIEW_GROUPS[key], data.baseEvents, data.amendments, refinements, reviewerIds)
       }
       const eventTypeScores = calcEventTypeScores(data.baseEvents, data.amendments, reviewerIds)
+      data.eventTypeScores = eventTypeScores
 
       const seedIdentities = data.identities || []
       data.identityMap = buildIdentityMap(seedIdentities, rosterRef.current)
@@ -1962,7 +1963,7 @@ export default function AuditPage({ session, onBack, onFullReport, initialResult
         qualityScoreB:      abc?.B?.score ?? null,
         qualityScoreC:      abc?.C?.score ?? null,
         moduleScores,
-        eventTypeScores,
+        eventTypeScores:    data.eventTypeScores || {},
         amendmentTypes:     types,
         status:             'completed',
         completedAt:        serverTimestamp(),
