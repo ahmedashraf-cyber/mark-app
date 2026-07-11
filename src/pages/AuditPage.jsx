@@ -1263,35 +1263,50 @@ export default function AuditPage({ session, onBack, onFullReport, initialResult
       setExportState({ phase: 'cutting', step: 0, total, done: false, driveLink: '' })
 
       // ── 1. Get Drive token ───────────────────────────────────────────────
-      const token = await invoke('get_google_access_token_cmd')
+      let token
+      try {
+        token = await invoke('get_google_access_token_cmd')
+      } catch(e) { throw new Error('Token failed: ' + (e?.message || JSON.stringify(e))) }
 
       // ── 2. Create match sub-folder inside master folder ──────────────────
       setExportState(s => ({ ...s, phase: 'folder', step: 0 }))
-      const subFolderId = await invoke('drive_create_folder', {
-        token, name: folderName, parentId: masterFolderId,
-      })
+      let subFolderId
+      try {
+        subFolderId = await invoke('drive_create_folder', {
+          token, name: folderName, parentId: masterFolderId,
+        })
+      } catch(e) { throw new Error('Folder create failed: ' + (e?.message || JSON.stringify(e))) }
 
       // ── 3. Cut all clips locally ─────────────────────────────────────────
       setExportState(s => ({ ...s, phase: 'cutting', step: 0, total: clipDefs.length + 1 }))
       let cutFiles = []
       if (clipDefs.length > 0) {
-        cutFiles = await invoke('cut_clips', {
-          videoPath, subfolder: folderName, clips: clipDefs,
-        })
+        try {
+          cutFiles = await invoke('cut_clips', {
+            videoPath, subfolder: folderName, clips: clipDefs,
+          })
+        } catch(e) { throw new Error('Clip cutting failed: ' + (e?.message || JSON.stringify(e))) }
       }
       setExportState(s => ({ ...s, step: cutFiles.length }))
 
       // ── 4. Save CSV locally then upload ─────────────────────────────────
-      const userprofile = await invoke('get_userprofile')
+      let userprofile
+      try {
+        userprofile = await invoke('get_userprofile')
+      } catch(e) { throw new Error('get_userprofile failed: ' + (e?.message || JSON.stringify(e))) }
       const csvLocalPath = `${userprofile}\\Downloads\\${folderName}\\${csvFileName}`
-      await invoke('save_text_file', { path: csvLocalPath, content: csvContent })
+      try {
+        await invoke('save_text_file', { path: csvLocalPath, content: csvContent })
+      } catch(e) { throw new Error('save_text_file failed: ' + (e?.message || JSON.stringify(e))) }
       setExportState(s => ({ ...s, phase: 'uploading', step: 0, total: cutFiles.length + 1 }))
 
       let driveLink = ''
-      const csvLink = await invoke('drive_upload_file', {
-        token, filePath: csvLocalPath, fileName: csvFileName, parentFolderId: subFolderId,
-      })
-      driveLink = csvLink
+      try {
+        const csvLink = await invoke('drive_upload_file', {
+          token, filePath: csvLocalPath, fileName: csvFileName, parentFolderId: subFolderId,
+        })
+        driveLink = csvLink
+      } catch(e) { throw new Error('CSV upload failed: ' + (e?.message || JSON.stringify(e))) }
       setExportState(s => ({ ...s, step: 1 }))
 
       // ── 5. Upload each clip ──────────────────────────────────────────────
