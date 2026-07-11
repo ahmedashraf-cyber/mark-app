@@ -924,7 +924,7 @@ export default function AuditPage({ session, onBack, onFullReport, initialResult
 
   // Master Drive folder ID — all sessions go inside sub-folders here
   // Set once via Settings or first-run prompt, persisted to localStorage
-  const MASTER_DRIVE_FOLDER_ID = localStorage.getItem('mark_master_drive_folder') || ''
+  const MASTER_DRIVE_FOLDER_ID = '1TeuEJqnKiGrCmZZfpfOKFMzwa3KBxO0A'
 
   const { requestQAResults, resolveMatchIdentities } = useSync(setBridgeStatus, session.sessionId)
 
@@ -1132,17 +1132,7 @@ export default function AuditPage({ session, onBack, onFullReport, initialResult
     if (!results) return
 
     // 1. Require master folder ID
-    let masterFolderId = localStorage.getItem('mark_master_drive_folder') || ''
-    if (!masterFolderId) {
-      const input = window.prompt(
-        'First-time setup: Paste your Google Drive master folder ID.\n\n' +
-        'Open the Drive folder in your browser → copy the ID from the URL:\n' +
-        'drive.google.com/drive/folders/[THIS_PART_IS_THE_ID]'
-      )
-      if (!input || !input.trim()) { setError('Export cancelled — no Drive folder ID provided.'); return }
-      masterFolderId = input.trim()
-      localStorage.setItem('mark_master_drive_folder', masterFolderId)
-    }
+    const masterFolderId = '1TeuEJqnKiGrCmZZfpfOKFMzwa3KBxO0A'
 
     // 2. Require video path
     const videoPath = localStorage.getItem(`mark_video_path_${session.matchId}`) || ''
