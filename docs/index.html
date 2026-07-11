@@ -1,0 +1,1136 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MARK & FIELD — Documentation</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=DM+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg:     #080808;
+    --bg-2:   #111111;
+    --bg-3:   #1a1a1a;
+    --bg-4:   #222222;
+    --b-1:    rgba(255,255,255,0.06);
+    --b-2:    rgba(255,255,255,0.10);
+    --t-1:    #f5f5f5;
+    --t-2:    #a0a0a0;
+    --t-3:    #555555;
+    --orange: #E8590C;
+    --blue:   #0A84FF;
+    --green:  #30D158;
+    --red:    #FF453A;
+    --yellow: #FFD60A;
+  }
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  html { scroll-behavior: smooth; }
+
+  body {
+    background: var(--bg);
+    color: var(--t-1);
+    font-family: 'DM Sans', sans-serif;
+    font-size: 14px;
+    line-height: 1.7;
+    min-height: 100vh;
+  }
+
+  /* ── Layout ── */
+  .shell {
+    display: grid;
+    grid-template-columns: 240px 1fr;
+    min-height: 100vh;
+  }
+
+  /* ── Sidebar ── */
+  .sidebar {
+    background: var(--bg-2);
+    border-right: 1px solid var(--b-1);
+    padding: 32px 0;
+    position: sticky;
+    top: 0;
+    height: 100vh;
+    overflow-y: auto;
+  }
+
+  .sidebar-logo {
+    padding: 0 20px 28px;
+    border-bottom: 1px solid var(--b-1);
+    margin-bottom: 20px;
+  }
+
+  .sidebar-logo .mark {
+    font-family: 'Inter', sans-serif;
+    font-weight: 900;
+    font-size: 20px;
+    color: var(--t-1);
+    letter-spacing: -0.5px;
+  }
+
+  .sidebar-logo .mark span {
+    color: var(--orange);
+  }
+
+  .sidebar-logo .field {
+    font-family: 'Inter', sans-serif;
+    font-weight: 900;
+    font-size: 20px;
+    color: var(--t-2);
+    letter-spacing: -0.5px;
+    margin-left: 6px;
+  }
+
+  .sidebar-logo .ver {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    color: var(--t-3);
+    margin-top: 4px;
+    display: block;
+  }
+
+  .nav-section {
+    padding: 0 8px;
+    margin-bottom: 8px;
+  }
+
+  .nav-label {
+    font-family: 'Inter', sans-serif;
+    font-size: 9px;
+    font-weight: 800;
+    letter-spacing: 1.4px;
+    text-transform: uppercase;
+    color: var(--t-3);
+    padding: 6px 12px 4px;
+  }
+
+  .nav-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 7px 12px;
+    border-radius: 7px;
+    font-size: 12.5px;
+    font-weight: 500;
+    color: var(--t-2);
+    cursor: pointer;
+    text-decoration: none;
+    transition: all .15s;
+    margin-bottom: 1px;
+  }
+
+  .nav-item:hover { background: rgba(255,255,255,0.04); color: var(--t-1); }
+  .nav-item.active { background: rgba(232,89,12,0.12); color: var(--orange); }
+
+  .nav-dot {
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: currentColor;
+    opacity: 0.6;
+    flex-shrink: 0;
+  }
+
+  /* ── Main ── */
+  .main {
+    padding: 48px 64px;
+    max-width: 960px;
+  }
+
+  /* ── Hero ── */
+  .hero {
+    margin-bottom: 64px;
+    padding-bottom: 48px;
+    border-bottom: 1px solid var(--b-1);
+  }
+
+  .hero-eyebrow {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--orange);
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    margin-bottom: 14px;
+  }
+
+  .hero h1 {
+    font-family: 'Inter', sans-serif;
+    font-size: 42px;
+    font-weight: 900;
+    letter-spacing: -1.5px;
+    line-height: 1.1;
+    color: var(--t-1);
+    margin-bottom: 16px;
+  }
+
+  .hero h1 .accent { color: var(--orange); }
+
+  .hero-sub {
+    font-size: 16px;
+    color: var(--t-2);
+    max-width: 560px;
+    line-height: 1.6;
+    margin-bottom: 28px;
+  }
+
+  .badges {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+
+  .badge {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    font-weight: 500;
+    padding: 4px 10px;
+    border-radius: 5px;
+    border: 1px solid;
+  }
+
+  .badge-orange { color: var(--orange); border-color: rgba(232,89,12,0.3); background: rgba(232,89,12,0.08); }
+  .badge-blue   { color: var(--blue);   border-color: rgba(10,132,255,0.3); background: rgba(10,132,255,0.08); }
+  .badge-green  { color: var(--green);  border-color: rgba(48,209,88,0.3);  background: rgba(48,209,88,0.08); }
+  .badge-grey   { color: var(--t-3);    border-color: rgba(255,255,255,0.1); background: rgba(255,255,255,0.03); }
+
+  /* ── Sections ── */
+  .section {
+    margin-bottom: 72px;
+    scroll-margin-top: 32px;
+  }
+
+  .section-eyebrow {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    font-weight: 600;
+    color: var(--orange);
+    letter-spacing: 1.2px;
+    text-transform: uppercase;
+    margin-bottom: 8px;
+  }
+
+  .section h2 {
+    font-family: 'Inter', sans-serif;
+    font-size: 26px;
+    font-weight: 800;
+    letter-spacing: -0.6px;
+    color: var(--t-1);
+    margin-bottom: 20px;
+    line-height: 1.2;
+  }
+
+  .section h3 {
+    font-family: 'Inter', sans-serif;
+    font-size: 16px;
+    font-weight: 700;
+    color: var(--t-1);
+    margin: 28px 0 10px;
+    letter-spacing: -0.2px;
+  }
+
+  .section h4 {
+    font-family: 'Inter', sans-serif;
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--t-2);
+    margin: 20px 0 8px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+
+  .section p {
+    color: var(--t-2);
+    margin-bottom: 14px;
+    max-width: 720px;
+  }
+
+  .section p strong { color: var(--t-1); font-weight: 600; }
+
+  /* ── Cards ── */
+  .card-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+    gap: 12px;
+    margin: 20px 0;
+  }
+
+  .card {
+    background: var(--bg-2);
+    border: 1px solid var(--b-1);
+    border-radius: 12px;
+    padding: 20px;
+    transition: border-color .15s;
+  }
+
+  .card:hover { border-color: var(--b-2); }
+
+  .card-icon {
+    width: 32px; height: 32px;
+    border-radius: 8px;
+    display: flex; align-items: center; justify-content: center;
+    margin-bottom: 12px;
+    font-size: 16px;
+  }
+
+  .card-title {
+    font-family: 'Inter', sans-serif;
+    font-weight: 700;
+    font-size: 13px;
+    color: var(--t-1);
+    margin-bottom: 6px;
+  }
+
+  .card-desc {
+    font-size: 12px;
+    color: var(--t-3);
+    line-height: 1.5;
+  }
+
+  /* ── Table ── */
+  .tbl-wrap { overflow-x: auto; margin: 16px 0; }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12.5px;
+  }
+
+  thead th {
+    font-family: 'Inter', sans-serif;
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    color: var(--orange);
+    background: var(--bg-3);
+    padding: 10px 14px;
+    text-align: left;
+    border-bottom: 1px solid var(--b-2);
+  }
+
+  tbody td {
+    padding: 9px 14px;
+    border-bottom: 1px solid var(--b-1);
+    color: var(--t-2);
+    vertical-align: top;
+  }
+
+  tbody tr:hover td { background: rgba(255,255,255,0.015); }
+  tbody td:first-child { color: var(--t-1); font-weight: 500; }
+
+  /* ── Code ── */
+  pre, code {
+    font-family: 'JetBrains Mono', monospace;
+  }
+
+  pre {
+    background: var(--bg-3);
+    border: 1px solid var(--b-1);
+    border-radius: 8px;
+    padding: 16px 18px;
+    overflow-x: auto;
+    font-size: 12px;
+    color: #c9d1d9;
+    line-height: 1.6;
+    margin: 14px 0;
+  }
+
+  code {
+    background: rgba(255,255,255,0.07);
+    color: var(--orange);
+    font-size: 11.5px;
+    padding: 2px 6px;
+    border-radius: 4px;
+  }
+
+  pre code { background: none; color: inherit; padding: 0; font-size: inherit; }
+
+  /* ── Timeline ── */
+  .timeline { margin: 20px 0; }
+
+  .timeline-item {
+    display: grid;
+    grid-template-columns: 90px 1fr;
+    gap: 0 20px;
+    margin-bottom: 2px;
+    position: relative;
+  }
+
+  .timeline-item::before {
+    content: '';
+    position: absolute;
+    left: 97px;
+    top: 18px;
+    bottom: -2px;
+    width: 1px;
+    background: var(--b-1);
+  }
+
+  .timeline-item:last-child::before { display: none; }
+
+  .timeline-ver {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--orange);
+    padding-top: 14px;
+    text-align: right;
+  }
+
+  .timeline-body {
+    background: var(--bg-2);
+    border: 1px solid var(--b-1);
+    border-radius: 10px;
+    padding: 14px 16px;
+    margin-bottom: 8px;
+  }
+
+  .timeline-body h4 {
+    font-family: 'Inter', sans-serif;
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--t-1);
+    margin: 0 0 6px;
+    text-transform: none;
+    letter-spacing: 0;
+  }
+
+  .timeline-body p {
+    font-size: 12px;
+    color: var(--t-3);
+    margin: 0;
+    max-width: none;
+  }
+
+  .tl-tag {
+    display: inline-block;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 9px;
+    font-weight: 600;
+    padding: 2px 6px;
+    border-radius: 3px;
+    margin-right: 4px;
+    margin-bottom: 4px;
+  }
+
+  .tl-fix    { background: rgba(255,69,58,0.12); color: var(--red); }
+  .tl-feat   { background: rgba(48,209,88,0.12); color: var(--green); }
+  .tl-change { background: rgba(232,89,12,0.12); color: var(--orange); }
+  .tl-crit   { background: rgba(255,69,58,0.2);  color: var(--red); border: 1px solid rgba(255,69,58,0.3); }
+
+  /* ── Callout ── */
+  .callout {
+    border-radius: 10px;
+    padding: 16px 18px;
+    margin: 16px 0;
+    display: flex;
+    gap: 12px;
+    align-items: flex-start;
+  }
+
+  .callout-icon { font-size: 16px; flex-shrink: 0; margin-top: 1px; }
+  .callout-body { font-size: 13px; line-height: 1.6; }
+  .callout-body strong { font-weight: 700; display: block; margin-bottom: 4px; }
+
+  .callout-orange { background: rgba(232,89,12,0.08); border: 1px solid rgba(232,89,12,0.2); }
+  .callout-orange .callout-body { color: #d4a070; }
+  .callout-red    { background: rgba(255,69,58,0.08);  border: 1px solid rgba(255,69,58,0.2); }
+  .callout-red .callout-body { color: #d47070; }
+  .callout-green  { background: rgba(48,209,88,0.08);  border: 1px solid rgba(48,209,88,0.2); }
+  .callout-green .callout-body { color: #70d490; }
+  .callout-blue   { background: rgba(10,132,255,0.08); border: 1px solid rgba(10,132,255,0.2); }
+  .callout-blue .callout-body { color: #70a0d4; }
+
+  /* ── Stat row ── */
+  .stat-row {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin: 16px 0;
+  }
+
+  .stat {
+    background: var(--bg-2);
+    border: 1px solid var(--b-1);
+    border-radius: 10px;
+    padding: 16px 20px;
+    min-width: 120px;
+  }
+
+  .stat-val {
+    font-family: 'Inter', sans-serif;
+    font-size: 28px;
+    font-weight: 900;
+    color: var(--orange);
+    letter-spacing: -1px;
+    line-height: 1;
+    margin-bottom: 4px;
+  }
+
+  .stat-label {
+    font-size: 11px;
+    color: var(--t-3);
+    font-weight: 500;
+  }
+
+  /* ── Role pills ── */
+  .role-list { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; }
+
+  .role-pill {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 12px;
+    border-radius: 999px;
+    font-size: 12px;
+    font-weight: 600;
+    border: 1px solid;
+  }
+
+  .role-done   { color: var(--green);  border-color: rgba(48,209,88,0.3); background: rgba(48,209,88,0.06); }
+  .role-pend   { color: var(--t-3);    border-color: var(--b-1);          background: var(--bg-3); }
+  .role-orange { color: var(--orange); border-color: rgba(232,89,12,0.3); background: rgba(232,89,12,0.06); }
+
+  .dot { width: 5px; height: 5px; border-radius: 50%; background: currentColor; }
+
+  /* ── Error type grid ── */
+  .error-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+    gap: 8px;
+    margin: 14px 0;
+  }
+
+  .error-chip {
+    background: var(--bg-3);
+    border: 1px solid var(--b-1);
+    border-radius: 7px;
+    padding: 10px 12px;
+    font-size: 12px;
+  }
+
+  .error-chip-name { color: var(--t-1); font-weight: 600; margin-bottom: 2px; }
+  .error-chip-desc { color: var(--t-3); font-size: 11px; }
+
+  /* ── Divider ── */
+  .divider {
+    border: none;
+    border-top: 1px solid var(--b-1);
+    margin: 48px 0;
+  }
+
+  /* ── Score compare ── */
+  .score-compare {
+    display: flex;
+    gap: 16px;
+    margin: 16px 0;
+    flex-wrap: wrap;
+  }
+
+  .score-box {
+    background: var(--bg-2);
+    border: 1px solid var(--b-1);
+    border-radius: 10px;
+    padding: 16px 20px;
+    min-width: 160px;
+  }
+
+  .score-box.wrong { border-color: rgba(255,69,58,0.3); }
+  .score-box.right { border-color: rgba(48,209,88,0.3); }
+
+  .score-box-label { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.8px; color: var(--t-3); margin-bottom: 4px; }
+  .score-box-val { font-family: 'Inter', sans-serif; font-size: 36px; font-weight: 900; letter-spacing: -1.5px; line-height: 1; }
+  .score-box.wrong .score-box-val { color: var(--red); }
+  .score-box.right .score-box-val { color: var(--green); }
+  .score-box-sub { font-size: 11px; color: var(--t-3); margin-top: 4px; }
+
+  /* ── Footer ── */
+  .footer {
+    border-top: 1px solid var(--b-1);
+    padding: 32px 64px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 12px;
+    color: var(--t-3);
+  }
+
+  .footer .logo { font-family: 'Inter', sans-serif; font-weight: 800; color: var(--t-2); }
+  .footer .logo span { color: var(--orange); }
+
+  /* ── Scrollbar ── */
+  ::-webkit-scrollbar { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 3px; }
+</style>
+</head>
+<body>
+
+<div class="shell">
+
+  <!-- ── Sidebar ── -->
+  <nav class="sidebar">
+    <div class="sidebar-logo">
+      <div><span class="mark">MARK<span>·</span></span><span class="field">FIELD</span></div>
+      <span class="ver">Hudl Egypt · Documentation</span>
+    </div>
+
+    <div class="nav-section">
+      <div class="nav-label">Overview</div>
+      <a class="nav-item active" href="#ecosystem"><div class="nav-dot"></div>Ecosystem</a>
+      <a class="nav-item" href="#roles"><div class="nav-dot"></div>Roles & Status</a>
+    </div>
+
+    <div class="nav-section">
+      <div class="nav-label">MARK</div>
+      <a class="nav-item" href="#mark-audit"><div class="nav-dot"></div>Audit System</a>
+      <a class="nav-item" href="#mark-scoring"><div class="nav-dot"></div>Scoring Rule</a>
+      <a class="nav-item" href="#mark-errors"><div class="nav-dot"></div>Error Types</a>
+      <a class="nav-item" href="#mark-bridge"><div class="nav-dot"></div>Bridge</a>
+      <a class="nav-item" href="#mark-export"><div class="nav-dot"></div>Export</a>
+      <a class="nav-item" href="#mark-changelog"><div class="nav-dot"></div>Changelog</a>
+    </div>
+
+    <div class="nav-section">
+      <div class="nav-label">FIELD</div>
+      <a class="nav-item" href="#field-overview"><div class="nav-dot"></div>Overview</a>
+      <a class="nav-item" href="#field-pipeline"><div class="nav-dot"></div>Data Pipeline</a>
+      <a class="nav-item" href="#field-rules"><div class="nav-dot"></div>Dev Rules</a>
+    </div>
+
+    <div class="nav-section">
+      <div class="nav-label">Decisions</div>
+      <a class="nav-item" href="#decisions"><div class="nav-dot"></div>Decision Log</a>
+      <a class="nav-item" href="#pending"><div class="nav-dot"></div>Pending Work</a>
+    </div>
+  </nav>
+
+  <!-- ── Main content ── -->
+  <main class="main">
+
+    <!-- ── Hero ── -->
+    <div class="hero">
+      <div class="hero-eyebrow">Hudl Egypt · Internal Documentation</div>
+      <h1>MARK <span class="accent">&</span> FIELD</h1>
+      <p class="hero-sub">The complete technical and operational reference for the Hudl Egypt collection-ops platform — audit scoring, error taxonomy, data pipeline, decisions, and everything built and broken along the way.</p>
+      <div class="badges">
+        <span class="badge badge-orange">MARK v7.5.28</span>
+        <span class="badge badge-blue">FIELD live</span>
+        <span class="badge badge-green">Audit scoring corrected</span>
+        <span class="badge badge-grey">Last updated 2026-07-11</span>
+      </div>
+    </div>
+
+    <!-- ── Ecosystem ── -->
+    <section class="section" id="ecosystem">
+      <div class="section-eyebrow">Architecture</div>
+      <h2>The ecosystem</h2>
+      <p>Three apps run the Hudl Egypt football-data collection operation. They share one set of people and one quality concept.</p>
+
+      <div class="card-grid">
+        <div class="card" style="border-color: rgba(232,89,12,0.25);">
+          <div class="card-icon" style="background: rgba(232,89,12,0.12);">🎯</div>
+          <div class="card-title">MARK</div>
+          <div class="card-desc">Tauri 2 + React 19 desktop app. Scout (live review) + Audit (QA scoring). Injects a bridge into Tag Once to read the Apollo cache. Windows only.</div>
+        </div>
+        <div class="card" style="border-color: rgba(10,132,255,0.25);">
+          <div class="card-icon" style="background: rgba(10,132,255,0.12);">📊</div>
+          <div class="card-title">FIELD</div>
+          <div class="card-desc">Single-file web app. Training ops platform — manages batches, interviews, matches, KPIs. Quality scores from MARK surface here per collector and batch.</div>
+        </div>
+        <div class="card" style="border-color: rgba(48,209,88,0.25);">
+          <div class="card-icon" style="background: rgba(48,209,88,0.12);">🎬</div>
+          <div class="card-title">Video Feedback Dashboard</div>
+          <div class="card-desc">Next.js + Supabase. Delivers per-collector video clips of mistakes, module scores, and feedback meetings via email + Telegram storage.</div>
+        </div>
+      </div>
+
+      <div class="tbl-wrap">
+        <table>
+          <thead><tr><th>Resource</th><th>Value</th></tr></thead>
+          <tbody>
+            <tr><td>MARK repo</td><td><code>github.com/ahmedashraf-cyber/mark-app</code></td></tr>
+            <tr><td>FIELD repo</td><td><code>github.com/ahmedashraf-cyber/flowops</code></td></tr>
+            <tr><td>FIELD live</td><td><code>ahmedashraf-cyber.github.io/flowops/index.html</code></td></tr>
+            <tr><td>Firebase project</td><td><code>hudl-training-ops</code></td></tr>
+            <tr><td>Shared Drive (audit sessions)</td><td><code>1TeuEJqnKiGrCmZZfpfOKFMzwa3KBxO0A</code></td></tr>
+            <tr><td>Service account</td><td><code>mark-reporter@mark-app-498618.iam.gserviceaccount.com</code></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ── Roles ── -->
+    <section class="section" id="roles">
+      <div class="section-eyebrow">FIELD</div>
+      <h2>Roles & status</h2>
+
+      <div class="role-list">
+        <div class="role-pill role-done"><div class="dot"></div>Batch Coordinator</div>
+        <div class="role-pill role-done"><div class="dot"></div>Batch Supervisor</div>
+        <div class="role-pill role-done"><div class="dot"></div>Batch Trainer</div>
+        <div class="role-pill role-done"><div class="dot"></div>Training Manager + role switcher</div>
+        <div class="role-pill role-orange"><div class="dot"></div>Quality Team Leader (QTL)</div>
+        <div class="role-pill role-pend"><div class="dot"></div>Training Supervisor — pending</div>
+        <div class="role-pill role-pend"><div class="dot"></div>Trainee — pending</div>
+      </div>
+
+      <h3>QTL gate (complete)</h3>
+      <p>Team Overview, Match Assignments, Feedback Tasks, Team Tasks. My Assignments in reviewer gate. Collector/reviewer search from CSV lists (1,445 collectors, 199 reviewers). Instant-fresh Firestore catch-up for all dashboards. Multi-collector session support via <code>colHrCodeMatches()</code>.</p>
+    </section>
+
+    <hr class="divider">
+
+    <!-- ── MARK Audit ── -->
+    <section class="section" id="mark-audit">
+      <div class="section-eyebrow">MARK · Audit</div>
+      <h2>Audit system</h2>
+      <p>MARK's Audit mode pulls a half's collected data from Tag Once's Apollo cache via the bridge and scores the collector's work based on the QA reviewer's amendments.</p>
+
+      <h3>How it works</h3>
+      <p>The bridge is a JS script injected into Tag Once's <code>app.asar</code> when the user clicks "Embed Bridge". It reads the Apollo cache — base events, amendments, refinements, lineup players — and sends everything via a localhost WebSocket to MARK. MARK computes the score, renders the errors table, and saves to Firestore + Drive.</p>
+
+      <h3>Three roles per half</h3>
+      <div class="tbl-wrap">
+        <table>
+          <thead><tr><th>Role</th><th>Detection (diagnostics.work)</th><th>Example</th></tr></thead>
+          <tbody>
+            <tr><td>Base Collector</td><td><code>base &gt; 3</code></td><td>A-088 Alaa Wagih</td></tr>
+            <tr><td>Specialist Collector</td><td><code>refinement &gt; 3 AND base === 0</code></td><td>A-2454 Mohamed Adel (players + location)</td></tr>
+            <tr><td>Reviewer</td><td><code>amendment &gt; 0 AND base === 0 AND refinement === 0</code></td><td>A-1437 Omar Salama</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>Multiple reviewers per half are supported. All people meeting the reviewer rule are included in <code>reviewerIds</code>.</p>
+    </section>
+
+    <!-- ── Scoring ── -->
+    <section class="section" id="mark-scoring">
+      <div class="section-eyebrow">MARK · Scoring</div>
+      <h2>The correct scoring rule</h2>
+
+      <div class="callout callout-orange">
+        <div class="callout-icon">⚠️</div>
+        <div class="callout-body">
+          <strong>All audit scores before v7.5.20 are wrong</strong>
+          The specialist collector was misidentified as a reviewer, inflating errors by ~200 per half. Pre-v7.5.20 sessions show deflated quality scores (~15pp lower than correct).
+        </div>
+      </div>
+
+      <p>Confirmed by console testing on match 1436691 (Moss vs Sandnes, 1st half, 1,384 base events):</p>
+
+      <div class="score-compare">
+        <div class="score-box wrong">
+          <div class="score-box-label">Old MARK (wrong)</div>
+          <div class="score-box-val">77%</div>
+          <div class="score-box-sub">313 error keys · includes specialist</div>
+        </div>
+        <div class="score-box right">
+          <div class="score-box-label">Correct (v7.5.20+)</div>
+          <div class="score-box-val">92%</div>
+          <div class="score-box-sub">110 error keys · reviewer only</div>
+        </div>
+      </div>
+
+      <h3>The rule</h3>
+      <pre>Error = amendment authored by the reviewer ONLY
+
+Score = (total_base_events - unique_error_event_keys) / total_base_events
+
+NOT errors:
+  - Cross-collector corrections (A ↔ B)
+  - Self-corrections (collector fixing own work)
+  - System amendments (pairKey + no author)
+  - System amendments (location desired:null + no author)</pre>
+
+      <h3>Amendment breakdown (test half)</h3>
+      <div class="tbl-wrap">
+        <table>
+          <thead><tr><th>Type</th><th>Reviewer errors</th><th>Cross-collector</th><th>Self-corrections</th></tr></thead>
+          <tbody>
+            <tr><td>base</td><td>21</td><td>0</td><td>238</td></tr>
+            <tr><td>deletion</td><td>37</td><td>9</td><td>72</td></tr>
+            <tr><td>extras</td><td>17</td><td>0</td><td>20</td></tr>
+            <tr><td>freeze-frame</td><td>0</td><td>12</td><td>6</td></tr>
+            <tr><td>goal-location</td><td>13</td><td>0</td><td>0</td></tr>
+            <tr><td>location</td><td>25</td><td>5</td><td>179</td></tr>
+            <tr><td>players</td><td>26</td><td>10</td><td>293</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>Self-corrections (812 total) were the biggest source of inflation — collectors constantly correct their own work, none of which are errors.</p>
+    </section>
+
+    <!-- ── Error Types ── -->
+    <section class="section" id="mark-errors">
+      <div class="section-eyebrow">MARK · Errors Table</div>
+      <h2>Error types & table design</h2>
+
+      <p>The errors table uses 8 columns: <code>Time · Event·Team · Error Type · Module · Before · After · Collector · Reviewer</code></p>
+      <p>Timestamp format: <code>MM:SS.mmm</code> — milliseconds always shown (wrong-timestamp errors are often sub-second).</p>
+
+      <div class="error-grid">
+        <div class="error-chip">
+          <div class="error-chip-name">🗑 Deleted</div>
+          <div class="error-chip-desc">Reviewer removed an event entirely</div>
+        </div>
+        <div class="error-chip">
+          <div class="error-chip-name">🔄 Wrong event</div>
+          <div class="error-chip-desc">Event name changed to a different type</div>
+        </div>
+        <div class="error-chip">
+          <div class="error-chip-name">🔁 Replaced</div>
+          <div class="error-chip-desc">Deleted + added a similar event nearby</div>
+        </div>
+        <div class="error-chip">
+          <div class="error-chip-name">🕐 Wrong timestamp</div>
+          <div class="error-chip-desc">Timestamp corrected, name unchanged</div>
+        </div>
+        <div class="error-chip">
+          <div class="error-chip-name">✨ Wrong extras</div>
+          <div class="error-chip-desc">Extras/impact fields corrected</div>
+        </div>
+        <div class="error-chip">
+          <div class="error-chip-name">📍 Wrong location</div>
+          <div class="error-chip-desc">x/y coordinates moved</div>
+        </div>
+        <div class="error-chip">
+          <div class="error-chip-name">👤 Wrong player</div>
+          <div class="error-chip-desc">Main/Secondary/Third player changed</div>
+        </div>
+        <div class="error-chip">
+          <div class="error-chip-name">📷 Freeze frame</div>
+          <div class="error-chip-desc">Keeper or shooter corrected</div>
+        </div>
+        <div class="error-chip">
+          <div class="error-chip-name">⚽ Goal location</div>
+          <div class="error-chip-desc">Goal placement coordinates moved</div>
+        </div>
+        <div class="error-chip">
+          <div class="error-chip-name">👥 Squad</div>
+          <div class="error-chip-desc">Formation corrected</div>
+        </div>
+        <div class="error-chip">
+          <div class="error-chip-name">➕ Missed event</div>
+          <div class="error-chip-desc">Reviewer added a missing event</div>
+        </div>
+      </div>
+
+      <h3>Player pills</h3>
+      <p>Each player shown as <code>#Jersey Name (Team)</code> with color coding: <span style="color:var(--red)">red = wrong</span>, <span style="color:var(--green)">green = corrected</span>, grey = unchanged. Roles: Main / Secondary / Third with micro-tags (changed / corrected / missing).</p>
+    </section>
+
+    <!-- ── Bridge ── -->
+    <section class="section" id="mark-bridge">
+      <div class="section-eyebrow">MARK · Bridge</div>
+      <h2>The bridge</h2>
+      <p>A JS script injected into Tag Once's <code>app.asar</code> (the app's HTML via patching). Runs inside Tag Once, reads its Apollo cache, and sends results over a localhost WebSocket (port 9001) to MARK.</p>
+
+      <div class="callout callout-red">
+        <div class="callout-icon">🚨</div>
+        <div class="callout-body">
+          <strong>Critical rule: BRIDGE_VERSION and ASAR_MARKER must match the app version on every bump</strong>
+          Both were stuck at <code>'7.5.4'</code> for 20 builds (v7.5.5–v7.5.24). Every "Embed Bridge" click silently did nothing. All bridge improvements were silently never delivered to users.
+        </div>
+      </div>
+
+      <h3>What the bridge sends</h3>
+      <div class="tbl-wrap">
+        <table>
+          <thead><tr><th>Field</th><th>Contents</th></tr></thead>
+          <tbody>
+            <tr><td><code>baseEvents</code></td><td>All base events for the half</td></tr>
+            <tr><td><code>amendments</code></td><td>All amendments for the half</td></tr>
+            <tr><td><code>refinements</code></td><td><strong>New v7.5.23:</strong> <code>{key_type: payload}</code> for all reviewed events</td></tr>
+            <tr><td><code>lineupPlayers</code></td><td>Home + away players with jersey, teamId, teamName</td></tr>
+            <tr><td><code>identities</code></td><td>legacyId → {hrcode, name, email} from EventHistory.authorInfo</td></tr>
+            <tr><td><code>diagnostics.work</code></td><td>Per-author: base, refinement, amendment, views counts</td></tr>
+            <tr><td><code>moduleScores</code></td><td>Pre-computed per-module quality scores</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>Why refinements must come from the bridge</h3>
+      <p>MARK previously tried to read Before values (extras, location, players) from the Apollo cache in the MARK webview. This only works if Tag Once has the same match open at the exact time of rendering — which fails for restored sessions. The bridge always has the right match open at audit time, so it's the authoritative source.</p>
+
+      <h3>Embed procedure</h3>
+      <pre>1. Close Tag Once completely
+2. Open MARK (new version)
+3. Click ⚡ Embed Bridge
+   → Collection app console must show:
+      [MARK] bridge starting (v7.5.28 — localhost WebSocket)
+4. Open Tag Once
+5. Click Get Audit Results</pre>
+    </section>
+
+    <!-- ── Export ── -->
+    <section class="section" id="mark-export">
+      <div class="section-eyebrow">MARK · Export</div>
+      <h2>Export & Drive</h2>
+
+      <h3>Session folder structure</h3>
+      <pre>Master Drive folder (1TeuEJqnKiGrCmZZfpfOKFMzwa3KBxO0A)/
+  {matchId}_{matchName}_{half}_{collectorHr}/
+    {matchId}_{matchName}_{half}_{collectorHr}      ← Google Sheet (converted from CSV)
+    {event}_{MM-SS.mmm}_{errorType}.mp4             ← video clips per error</pre>
+
+      <h3>Sheet columns (15)</h3>
+      <pre>Match ID | Match Name | Half | Timestamp | Event Name | Team |
+Error Type | Module | Before | After |
+Collector HR | Collector Name | Reviewer HR | Reviewer Name | Captured At</pre>
+
+      <h3>Fixed issues (v7.5.27)</h3>
+      <div class="tbl-wrap">
+        <table>
+          <thead><tr><th>Issue</th><th>Root cause</th><th>Fix</th></tr></thead>
+          <tbody>
+            <tr><td>Open in Drive button did nothing</td><td><code>&lt;a href target="_blank"&gt;</code> is a no-op in Tauri WebView</td><td><code>invoke('open_file', { path: url })</code> → <code>rundll32</code></td></tr>
+            <tr><td>Drive link opened CSV file</td><td><code>driveLink</code> was set from uploaded file's webViewLink</td><td>Now: <code>drive.google.com/drive/folders/{subFolderId}</code></td></tr>
+            <tr><td>Half showing "2H" in names</td><td><code>fmtHalf()</code> had no mapping for <code>'1H'</code>/<code>'2H'</code></td><td>Added: <code>'1h'→'1st Half'</code>, <code>'2h'→'2nd Half'</code></td></tr>
+            <tr><td>Clip timestamp <code>03m13s</code></td><td>Old: <code>.replace(':','m')+'s'</code></td><td>New: <code>.replace(':','-')</code> → <code>03-13.350</code></td></tr>
+            <tr><td>Sheet visual identity not applying</td><td>Sheets API batchUpdate silently failing</td><td>Under investigation — likely service account scope issue</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ── Changelog ── -->
+    <section class="section" id="mark-changelog">
+      <div class="section-eyebrow">MARK · History</div>
+      <h2>Changelog (v7.5.20 → v7.5.28)</h2>
+
+      <div class="timeline">
+
+        <div class="timeline-item">
+          <div class="timeline-ver">v7.5.28</div>
+          <div class="timeline-body">
+            <h4>Sheet tab_id + clip timestamp ms</h4>
+            <span class="tl-tag tl-fix">fix</span>
+            <p>Sheet formatting now fetches actual tab ID before batchUpdate. Clip timestamps include milliseconds: <code>12-37.450</code>.</p>
+          </div>
+        </div>
+
+        <div class="timeline-item">
+          <div class="timeline-ver">v7.5.27</div>
+          <div class="timeline-body">
+            <h4>Export: Open in Drive, folder URL, half labels, clip names, sheet identity</h4>
+            <span class="tl-tag tl-fix">fix</span><span class="tl-tag tl-feat">feat</span>
+            <p>Open in Drive works. Drive link → folder. Half format correct. Clip filename format. Sheet converted to native Google Sheet with batchUpdate styling attempt.</p>
+          </div>
+        </div>
+
+        <div class="timeline-item">
+          <div class="timeline-ver">v7.5.26</div>
+          <div class="timeline-body">
+            <h4>Black screen crash fixed</h4>
+            <span class="tl-tag tl-fix">fix</span>
+            <p><code>before</code> and <code>after</code> were not defined in <code>renderBefore</code>/<code>renderAfter</code>. Fatal crash on every audit result render.</p>
+          </div>
+        </div>
+
+        <div class="timeline-item">
+          <div class="timeline-ver">v7.5.25</div>
+          <div class="timeline-body">
+            <h4>CRITICAL: ASAR_MARKER + BRIDGE_VERSION stuck at v7.5.4</h4>
+            <span class="tl-tag tl-crit">critical</span><span class="tl-tag tl-fix">fix</span>
+            <p>Both were never updated across 20 builds. Every "Embed Bridge" click was silently a no-op. All bridge improvements from v7.5.5 onward never reached users. Also fixed: Firestore nested arrays crash, eventTypeScores scope error.</p>
+          </div>
+        </div>
+
+        <div class="timeline-item">
+          <div class="timeline-ver">v7.5.23</div>
+          <div class="timeline-body">
+            <h4>Root cause: bridge now sends refinements</h4>
+            <span class="tl-tag tl-fix">fix</span>
+            <p>Bridge sends <code>refinements: {key_type: payload}</code> directly. Before fields (extras, location, goal-location) now populated correctly. teamMap string/number key mismatch fixed.</p>
+          </div>
+        </div>
+
+        <div class="timeline-item">
+          <div class="timeline-ver">v7.5.20</div>
+          <div class="timeline-body">
+            <h4>Full errors table rewrite — reviewer-only scoring</h4>
+            <span class="tl-tag tl-change">major change</span>
+            <p>New 8-column table. 12 error types. Correct reviewer-only rule. Score 77% → 92% on test half. Role detection via diagnostics.work. Player pills with jersey + name + team.</p>
+          </div>
+        </div>
+
+      </div>
+    </section>
+
+    <hr class="divider">
+
+    <!-- ── FIELD ── -->
+    <section class="section" id="field-overview">
+      <div class="section-eyebrow">FIELD</div>
+      <h2>FIELD overview</h2>
+
+      <div class="stat-row">
+        <div class="stat"><div class="stat-val">1</div><div class="stat-label">HTML file</div></div>
+        <div class="stat"><div class="stat-val">5</div><div class="stat-label">Roles complete</div></div>
+        <div class="stat"><div class="stat-val">2</div><div class="stat-label">Roles pending</div></div>
+        <div class="stat"><div class="stat-val">Firebase</div><div class="stat-label">Auth + Firestore</div></div>
+      </div>
+
+      <p>Single-file web app served via GitHub Pages. Dark-first Apple-style design. Accent <code style="color:var(--orange)">#E8590C</code>. Fonts: Inter / DM Sans / JetBrains Mono.</p>
+
+      <h3>Dev rules (non-negotiable)</h3>
+      <pre>1. Clone fresh every session
+2. Working file: /home/claude/flowops_final.html
+3. Push dir:     /home/claude/flowops_push/
+4. After every edit: brace balance check ({ count == } count)
+5. All dropdowns: nx-select-wrap system — never hand-roll selects
+6. Every screen: class="screen" inside app-shell grid
+7. Do NOT modify CSS variables without checking all screens first
+8. After push: wait for GitHub Pages green → Ctrl+Shift+R</pre>
+    </section>
+
+    <!-- ── FIELD Pipeline ── -->
+    <section class="section" id="field-pipeline">
+      <div class="section-eyebrow">FIELD · Data</div>
+      <h2>MARK → FIELD data pipeline</h2>
+
+      <div class="callout callout-blue">
+        <div class="callout-icon">ℹ️</div>
+        <div class="callout-body">
+          <strong>Historical score caveat</strong>
+          All audit sessions before MARK v7.5.20 have inflated error counts and deflated quality scores (~15pp lower than correct). Consider displaying a caveat in FIELD dashboards for pre-v7.5.20 data.
+        </div>
+      </div>
+
+      <h3>What changed in the pipeline (v7.5.20+)</h3>
+      <div class="tbl-wrap">
+        <table>
+          <thead><tr><th>Field</th><th>Before</th><th>After v7.5.20</th></tr></thead>
+          <tbody>
+            <tr><td>Quality score</td><td>Included specialist's corrections as errors</td><td>Reviewer-only — correct</td></tr>
+            <tr><td>reviewerName/HR</td><td>MARK operator's login (machine that ran MARK)</td><td>Real QA reviewer from EventHistory.authorInfo</td></tr>
+            <tr><td>Half column</td><td><code>"1H"</code> / <code>"2H"</code></td><td><code>"1st Half"</code> / <code>"2nd Half"</code></td></tr>
+            <tr><td>Error Type column</td><td>Aspect + Edit Type (Base/Extra + Added/Deleted/Wrong)</td><td>12 specific types (Deleted, Wrong player, Freeze frame…)</td></tr>
+            <tr><td>Before/After columns</td><td>Often empty</td><td>Structured human-readable strings per error type</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>colParseEvent note</h3>
+      <p>The Events Sheet <code>Half</code> column now consistently produces <code>'1st Half'</code>/<code>'2nd Half'</code>. FIELD's <code>colParseEvent</code> and <code>colFilterEvents</code> already normalize between <code>'1st Half'</code>/<code>'1H'</code> — this alignment removes that edge case for future sessions.</p>
+    </section>
+
+    <!-- ── FIELD Dev Rules ── -->
+    <section class="section" id="field-rules">
+      <div class="section-eyebrow">FIELD · Dev</div>
+      <h2>FIELD development reference</h2>
+
+      <h3>Stack</h3>
+      <div class="tbl-wrap">
+        <table>
+          <thead><tr><th>Layer</th><th>Choice</th></tr></thead>
+          <tbody>
+            <tr><td>Hosting</td><td>GitHub Pages — <code>index.html</code> served directly</td></tr>
+            <tr><td>Auth + DB</td><td>Firebase Auth + Firestore (<code>hudl-training-ops</code>)</td></tr>
+            <tr><td>Match data</td><td>Google Sheets API (live fetch on load)</td></tr>
+            <tr><td>Charts</td><td>Chart.js</td></tr>
+            <tr><td>Email</td><td>EmailJS</td></tr>
+            <tr><td>Design</td><td>Dark Apple-style, #E8590C orange, Inter/DM Sans/JetBrains Mono</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>Sheets</h3>
+      <div class="tbl-wrap">
+        <table>
+          <thead><tr><th>Sheet</th><th>ID</th><th>Purpose</th></tr></thead>
+          <tbody>
+            <tr><td>Matches</td><td><code>1zoh7CmoQKPMLGBEklHXznG1Y8xBS-iuu0phRWn8-wXc</code></td><td>Match list (live fetch)</td></tr>
+            <tr><td>Interview</td><td><code>190Zih7R1HswY2yVxl4WanfH-QhGlt4X8bOBteFrNtiY</code></td><td>Batch=r[17], status=col L "accept"</td></tr>
+            <tr><td>Collector Results</td><td>(from MARK sync)</td><td>Sessions, scores, errors per collector</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <hr class="divider">
+
+    <!-- ── Decisions ── -->
+    <section class="section" id="decisions">
+      <div class="section-eyebrow">Architecture</div>
+      <h2>Key decisions</h2>
+
+      <h3>Error rule — reviewer only (2026-07-11)</h3>
+      <p>Confirmed from live console testing. The specialist collector (players+location, zero base events) was misidentified as a reviewer via telemetry. Cross-collector corrections and self-corrections are not errors. Only the QA reviewer's amendments count. Multiple reviewers per half supported. Error attribution: counts against the person who did that module's work (specialist gets the error, not the base collector).</p>
+
+      <h3>A/B/C review groups — deferred indefinitely</h3>
+      <p>Tag Once's A/B/C categories use internal StatsBomb filtering logic (e.g. "Pressures Before Shots" = only pressures within N seconds of a shot). This cannot be reproduced from event names alone, and is not exposed in the Apollo cache or the JS bundle. MARK keeps its own Base/Pressure/Extras/Players/Location/FreezeFrame grouping.</p>
+
+      <h3>Refinements from bridge, not Apollo cache</h3>
+      <p>MARK's AmendmentsTable previously read Before values from the Apollo cache in the MARK webview. This fails for restored sessions (cache may have a different match). The bridge always has the right match open at audit time — so refinements now travel in the bridge's WebSocket message directly.</p>
+
+      <h3>Open in Drive — rundll32, not anchor tags</h3>
+      <p><code>&lt;a href target="_blank"&gt;</code> is a no-op in a Tauri WebView (no browser context). All external URLs must use <code>invoke('open_file', { path: url })</code> which calls <code>rundll32 url.dll,FileProtocolHandler</code> on Windows.</p>
+
+      <h3>Sheet visual identity — under investigation</h3>
+      <p>Sheets API <code>batchUpdate</code> sends 200 OK but formatting is not applied. Likely cause: service account token may not include <code>https://www.googleapis.com/auth/spreadsheets</code> scope, or Shared Drive restricts programmatic formatting. Next step: log full response body, verify service account scopes, test on personal Drive file.</p>
+    </section>
+
+    <!-- ── Pending ── -->
+    <section class="section" id="pending">
+      <div class="section-eyebrow">Roadmap</div>
+      <h2>Pending work</h2>
+
+      <div class="card-grid">
+        <div class="card">
+          <div class="card-icon" style="background:rgba(255,159,10,0.12)">⏳</div>
+          <div class="card-title">Training Supervisor role (FIELD)</div>
+          <div class="card-desc">In the system prompt since the beginning. Still pending — not started.</div>
+        </div>
+        <div class="card">
+          <div class="card-icon" style="background:rgba(255,159,10,0.12)">⏳</div>
+          <div class="card-title">Trainee role (FIELD)</div>
+          <div class="card-desc">Also in the system prompt. Still pending — not started.</div>
+        </div>
+        <div class="card">
+          <div class="card-icon" style="background:rgba(255,69,58,0.12)">🔴</div>
+          <div class="card-title">Sheet visual identity (MARK)</div>
+          <div class="card-desc">Sheets API batchUpdate silently failing. Investigate service account scopes. Alternative: XLSX with xlsxjs styling before upload.</div>
+        </div>
+        <div class="card">
+          <div class="card-icon" style="background:rgba(10,132,255,0.12)">💾</div>
+          <div class="card-title">lineupPlayers persistence (MARK)</div>
+          <div class="card-desc">Not saved to Firestore. Restored sessions need Tag Once open with same match for player names to resolve.</div>
+        </div>
+        <div class="card">
+          <div class="card-icon" style="background:rgba(48,209,88,0.12)">📊</div>
+          <div class="card-title">Pre-v7.5.20 score caveat (FIELD)</div>
+          <div class="card-desc">Historical scores are ~15pp too low. Consider showing a warning in FIELD dashboards for old sessions.</div>
+        </div>
+      </div>
+    </section>
+
+  </main>
+</div>
+
+<div class="footer">
+  <div class="logo">MARK<span>·</span>FIELD</div>
+  <div>Hudl Egypt · Internal · Updated 2026-07-11 · v7.5.28</div>
+</div>
+
+<script>
+  // Active nav on scroll
+  const sections = document.querySelectorAll('section[id], div[id]')
+  const navItems = document.querySelectorAll('.nav-item')
+
+  const obs = new IntersectionObserver(entries => {
+    entries.forEach(e => {
+      if (e.isIntersecting) {
+        navItems.forEach(n => n.classList.remove('active'))
+        const match = document.querySelector(`.nav-item[href="#${e.target.id}"]`)
+        if (match) match.classList.add('active')
+      }
+    })
+  }, { rootMargin: '-30% 0px -60% 0px' })
+
+  sections.forEach(s => obs.observe(s))
+</script>
+</body>
+</html>
