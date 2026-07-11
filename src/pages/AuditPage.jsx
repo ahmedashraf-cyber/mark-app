@@ -1972,6 +1972,15 @@ export default function AuditPage({ session, onBack, onFullReport, initialResult
       // Save amendment details
       const baseTsByKey = {}
       ;(data.baseEvents || []).forEach(e => { baseTsByKey[e.key] = e.videoTimestamp })
+      const sanitizeForFirestore = (obj) => {
+        // Firestore doesn't support nested arrays. Serialize the whole payload as JSON string
+        // for amendment types that may contain nested arrays (freeze-frame, squad positions etc.)
+        if (!obj || typeof obj !== 'object') return obj
+        const str = JSON.stringify(obj)
+        // If it contains nested arrays (array within array), store as JSON string
+        if (/\[\s*\[/.test(str)) return { _json: str }
+        return obj
+      }
       for (const a of data.amendments) {
         await addDoc(collection(db, 'mark_audit_amendments'), {
           sessionId:      session.sessionId,
@@ -1983,7 +1992,7 @@ export default function AuditPage({ session, onBack, onFullReport, initialResult
           author:         a.author,
           capturedTime:   a.capturedTime,
           videoTimestamp: baseTsByKey[a.key] ?? a.payload?.videoTimestamp ?? null,
-          payload:        a.payload || {},
+          payload:        sanitizeForFirestore(a.payload || {}),
         })
       }
       // Mirror session summary to collector results Sheet (fire-and-forget — never blocks audit save)
