@@ -1447,7 +1447,7 @@ async fn drive_create_folder(
     );
     let search: serde_json::Value = client
         .get("https://www.googleapis.com/drive/v3/files")
-        .query(&[("q", q.as_str()), ("fields", "files(id)"), ("spaces", "drive")])
+        .query(&[("q", q.as_str()), ("fields", "files(id)"), ("spaces", "drive"), ("supportsAllDrives", "true"), ("includeItemsFromAllDrives", "true")])
         .header("Authorization", format!("Bearer {}", token))
         .send()
         .await
@@ -1464,7 +1464,7 @@ async fn drive_create_folder(
     }
     // Create new folder
     let resp: serde_json::Value = client
-        .post("https://www.googleapis.com/drive/v3/files?fields=id")
+        .post("https://www.googleapis.com/drive/v3/files?supportsAllDrives=true&fields=id")
         .header("Authorization", format!("Bearer {}", token))
         .json(&meta)
         .send()
@@ -1519,7 +1519,7 @@ async fn drive_upload_file(
     body.extend_from_slice(format!("\r\n--{}--\r\n", boundary).as_bytes());
 
     let resp: serde_json::Value = client
-        .post("https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,webViewLink")
+        .post("https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&supportsAllDrives=true&fields=id,webViewLink")
         .header("Authorization", format!("Bearer {}", token))
         .header("Content-Type", format!("multipart/related; boundary={}", boundary))
         .body(body)
