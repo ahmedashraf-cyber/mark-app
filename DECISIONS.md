@@ -231,3 +231,177 @@ Scout session blocked Audit on the same match/half. Decision: make locks and
 sessions **mode-aware** (`matchId_half_mode`, `mode` stored on the session doc).
 Scout and Audit can now both use any match/half independently. This also gives
 Session History the `mode` field needed to list Audit sessions.
+
+---
+
+## 13. The correct error rule — reviewer-only (v7.5.20, confirmed 2026-07-11)
+
+**Problem.** MARK was reporting 77% quality on a test half. The correct score is 92%.
+The 15-point gap was caused by misidentifying the specialist collector as a reviewer.
+
+**Console investigation (live data, Moss vs Sandnes 1st half, matchId 1436691):**
+
+Three people on this half:
+| Person | Role | Evidence |
+|---|---|---|
+| A-088 Alaa Wagih (id:194) | Base collector | 79+ base events |
+| A-2454 Mohamed Adel (id:9468) | Specialist (players + location) | 0 base, heavy players/location/impact refinements |
+| A-1437 Omar Salama (id:5425) | Reviewer | 0 base, 0 refinements, amendments only |
+
+**Old MARK logic:** Used telemetry to detect the reviewer. Mohamed (no base events) appeared
+in telemetry so MARK included both Omar AND Mohamed as reviewers. Mohamed's 203 cross-collector
+corrections all counted as errors → inflated error count → deflated score.
+
+**Correct rule (confirmed from data):**
+```
+Error = amendment authored by the reviewer ONLY
+Reviewer = diagnostics.work entry where:
+  amendment > 0 AND base === 0 AND refinement === 0
+```
+
+Cross-collector corrections (Mohamed correcting Alaa's events) = NOT errors.
+Self-corrections = NOT errors.
+System amendments (pairKey + no author, location desired:null + no author) = NOT errors.
+
+**Score impact:**
+- Old: 313 error keys / 1384 events = 77%
+- Correct: 110 error keys / 1384 events = 92%
+
+**Multiple reviewers:** A single half can have multiple reviewers (confirmed by Ahmed).
+All people meeting the reviewer rule qualify; `reviewerIds` is a Set, not a single value.
+
+**Error attribution:** Errors count against whoever did that module's work.
+If the specialist did the players refinement and the reviewer corrected it,
+the error is attributed to the specialist — the Collector column shows the specialist's HR code.
+
+---
+
+## 14. BRIDGE_VERSION and ASAR_MARKER must always match the app version (v7.5.25)
+
+**Problem discovered 2026-07-11:**
+Both `ASAR_MARKER` (`main.rs`) and `BRIDGE_VERSION` (`bridge_script.js`) were hardcoded to `'7.5.4'`
+and never updated from v7.5.5 through v7.5.24 — **20 builds** worth of bridge improvements
+never actually reached users.
+
+**How the failure worked:**
+1. User clicks "Embed Bridge" in MARK
+2. `inject_bridge_script` reads Tag Once's `app.html`
+3. Checks `if html_str.contains("<!-- MARK_BRIDGE_INJECTED v7.5.4 -->")` → TRUE (from previous embed)
+4. Returns `"already patched"` — silently skips injection entirely
+5. Tag Once still runs the old bridge from the last actual embed (v7.5.4 code)
+6. New bridge features (refinements, lineupPlayers, correct role detection) never arrive
+
+**How the guard failure worked:**
+Even if the asar patch somehow ran, the bridge script itself has:
+```js
+if(window.__MARK_BRIDGE_VERSION__ === '7.5.4') { return; }
+```
+The old bridge already set `window.__MARK_BRIDGE_VERSION__ = '7.5.4'`.
+The new bridge sees it's "already running" and exits without doing anything.
+
+**Rule established:** Every version bump must update both:
+- `BRIDGE_VERSION` in `src-tauri/src/bridge_script.js` → matches app version
+- `ASAR_MARKER` in `src-tauri/src/main.rs` → `"<!-- MARK_BRIDGE_INJECTED vX.Y.Z -->"`
+
+This is now part of the version bump checklist.
+
+---
+
+## 15. Refinements must come from the bridge, not from MARK's Apollo cache (v7.5.23)
+
+**Problem:** Before fields for extras, location, goal-location, replacement were empty.
+
+**Wrong assumption:** MARK's `AmendmentsTable` was reading Before values from the
+Apollo GraphQL cache in the MARK webview (`window.apollo.client.cache.extract()`).
+
+**Why it fails:** The Apollo cache in MARK's webview only contains whatever match
+is currently open in Tag Once at render time. If the user:
+- Audits a match, saves the session, closes Tag Once
+- Later opens the session history in MARK to review errors
+- Tag Once is either closed or has a different match open
+
+→ The Apollo cache is empty or has wrong data → Before values are all `—`.
+
+**Correct approach:** The bridge has direct Apollo cache access at the moment of the audit
+and always has the right match open. Bridge now sends:
+```js
+refinements: { "eventKey_type": { ...payload }, ... }
+```
+for all refinements of reviewed event keys. This data travels through the WebSocket message,
+is stored on `data.refinementData`, and is available regardless of what Tag Once has open later.
+
+**Implementation:** MARK reads `results.refinementData` first, then overlays live Apollo cache
+as a supplement (for any keys that might be missing from the bridge payload).
+
+---
+
+## 16. Tag Once A/B/C review groups cannot be reproduced in MARK (decision to defer)
+
+**Investigation 2026-07-11:**
+
+Tag Once shows per-category event counts (A-Review 80/80, B-Review 0/160, C-Review 11/184).
+Total reviewed: 424 of 1,384 base events. 960 events are NOT in any review category.
+
+**What we tried:**
+1. Count-matching cache event names to Tag Once subcategory counts → no matches
+2. Searching Apollo cache for review group config → not stored in cache
+3. Searching window objects for config → not exposed
+4. Searching Tag Once's JS bundle → not accessible from DevTools
+
+**Why the mapping can't be derived:**
+Tag Once's review categories are NOT based on event type names alone.
+"Pressures Before Shots" (10 events) = subset of all pressures that precede a shot.
+"Free Kick Pass" (11 events) = subset of all passes that are free kicks.
+"Freeze Frame" (17 events) = subset of shots that have a freeze-frame refinement.
+The internal filtering logic is in Tag Once's bundled JS — inaccessible.
+
+**Decision:** Defer A/B/C module scores. Keep MARK's existing Base/Pressure/Extras/Players/
+Location/FreezeFrame breakdown which we know how to compute correctly.
+Revisit if StatsBomb provides the event grouping specification.
+
+---
+
+## 17. "Open in Drive" requires rundll32, not an anchor tag (v7.5.27)
+
+**Problem:** The "Open in Drive" button used `<a href={url} target="_blank">`.
+In a Tauri desktop WebView, there is no browser context — `target="_blank"` opens nothing.
+
+**Fix:** `invoke('open_file', { path: url })` → Rust calls:
+```rust
+std::process::Command::new("rundll32")
+    .args(["url.dll,FileProtocolHandler", &path])
+    .spawn()
+```
+`open_file` already existed and already handled both file paths and `https://` URLs.
+No new command needed — just change the JS call.
+
+**General principle:** Any link that should open in the user's default browser must use
+`open_file` (or equivalent OS shell opener), never an HTML anchor tag.
+
+---
+
+## 18. Sheet visual identity via Sheets API — under investigation (v7.5.27–v7.5.28)
+
+**What was tried:**
+- `upload_csv_as_sheet` Rust command uploads CSV with `mimeType: application/vnd.google-apps.spreadsheet`
+  (converts to native Google Sheet on upload)
+- Then calls `https://sheets.googleapis.com/v4/spreadsheets/{id}/batchUpdate` with:
+  - Orange header row (#E8590C bg, white bold)
+  - Dark summary rows (#1A1A1A bg, grey text)
+  - Orange bold column headers
+  - Dark data rows (#141414 bg, light grey text)
+  - `autoResizeDimensions` for all columns
+
+**Result:** Sheet is created as a native Google Sheet (not CSV). But formatting is not applied.
+The batchUpdate call returns without error (200 OK) but produces no visible effect.
+
+**Suspected causes:**
+1. Service account token may not include `https://www.googleapis.com/auth/spreadsheets` scope
+2. Shared Drive may restrict programmatic formatting
+3. batchUpdate request structure may have a subtle error being silently accepted
+
+**What to check next session:**
+- Log the full batchUpdate response body (currently only logging on network error)
+- Verify the service account's OAuth scopes include Sheets API
+- Test batchUpdate on a personal Drive file (not Shared Drive) to isolate the issue
+- Consider alternative: use XLSX library to apply styling before upload, then upload as `.xlsx`

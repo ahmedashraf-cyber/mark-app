@@ -295,3 +295,179 @@ blocking, not nice-to-haves.
 - **Custom native ops use `rfd` in Rust** (`pick_video_file`, `save_xlsx_file`)
   rather than the scoped JS fs/dialog plugins — full access, visible dialogs, no
   capability surprises.
+
+---
+
+## [7.5.28] — 2026-07-11
+
+### Fixed
+- **Sheet formatting tab_id:** `upload_csv_as_sheet` now fetches the actual Google Sheet tab ID
+  via `spreadsheets.get` before calling `batchUpdate` — the tab ID after CSV→Sheet conversion
+  is not guaranteed to be `0`.
+- **Clip timestamp milliseconds:** Local `fmt(sec)` in `handleExportAndUpload` now produces
+  `MM:SS.mmm` (was `MM:SS`). Clip filenames now correctly show e.g. `ball-recovery_12-37.450_Wrong event.mp4`.
+
+### Changed
+- Bridge version bumped to `7.5.28`; ASAR marker updated to `v7.5.28`.
+
+---
+
+## [7.5.27] — 2026-07-11
+
+### Fixed
+- **"Open in Drive" button now works in Tauri.** `<a href target="_blank">` is a no-op inside
+  a Tauri WebView. Replaced with `invoke('open_file', { path: url })` which calls
+  `rundll32 url.dll,FileProtocolHandler` — the correct way to open URLs from a Windows desktop app.
+- **Drive link points to folder, not file.** Previously `driveLink` was set from the uploaded CSV
+  file's `webViewLink`. Now set to `https://drive.google.com/drive/folders/{subFolderId}` so
+  "Open in Drive" opens the entire session folder.
+- **Half label "2H" → "2nd Half" in folder/sheet/CSV names.** `fmtHalf()` had no mapping for
+  `'1H'`/`'2H'` (MARK's internal storage format). Added: `'1h': '1st Half'`, `'2h': '2nd Half'`,
+  `'et1': 'ET 1'`, `'et2': 'ET 2'` (lowercased lookup).
+- **Clip filenames now use MM-SS.mmm format** (e.g. `03-13.350`) instead of `03m13s`.
+  Milliseconds are preserved; colon replaced with dash for filesystem safety.
+
+### Added
+- **`upload_csv_as_sheet` Rust command.** Replaces plain `drive_upload_file` for the session CSV.
+  Uploads with `mimeType: application/vnd.google-apps.spreadsheet` to convert CSV to native Sheet,
+  then calls Sheets API `batchUpdate` to apply MARK dark identity:
+  orange header row (#E8590C), dark summary rows (#1A1A1A), orange bold column headers,
+  dark data rows (#141414), auto-resize. **Note: formatting still not applying — under investigation.**
+
+### Changed
+- Bridge version bumped to `7.5.27`; ASAR marker updated to `v7.5.27`.
+
+---
+
+## [7.5.26] — 2026-07-11
+
+### Fixed
+- **Black screen crash on audit results.** `renderBefore(r)` destructured only `{ errorType, before }`
+  but used `after?.players` inside the replacement branch → `ReferenceError: before is not defined`
+  (same in `renderAfter` which referenced `before?.players`). Both renderers now destructure
+  `{ errorType, before, after }` from `r`.
+- **ASAR_MARKER and BRIDGE_VERSION updated** to `7.5.25` (from `7.5.24`) to force re-embed.
+
+---
+
+## [7.5.25] — 2026-07-11
+
+### Fixed — Critical: ASAR_MARKER and BRIDGE_VERSION stuck at v7.5.4
+**Root cause of all bridge-related failures across v7.5.5–v7.5.24:**
+- `ASAR_MARKER` in `main.rs` was `"<!-- MARK_BRIDGE_INJECTED v7.5.4 -->"` — never updated.
+  `inject_bridge_script` returns "already patched" if the marker is found in `app.html`.
+  Since the marker never changed, every "Embed Bridge" click after v7.5.4 was silently skipped.
+- `BRIDGE_VERSION` in `bridge_script.js` was `'7.5.4'` — never updated.
+  The bridge guard `if(window.__MARK_BRIDGE_VERSION__ === BRIDGE_VERSION) return` caused the
+  new bridge to exit immediately, leaving the old code running.
+- **Result:** Users ran bridge v7.5.4 code regardless of which MARK version they installed.
+  All bridge improvements from v7.5.5 through v7.5.24 were silently never delivered.
+- **Fix:** Both now match the app version. **Rule going forward:** BRIDGE_VERSION and ASAR_MARKER
+  must be updated on every version bump.
+
+### Fixed
+- **Firestore nested arrays error** in `saveToFirebase`. Amendment payloads (especially freeze-frame)
+  contain nested arrays (camera matrices, player positions). Firestore rejects these with
+  "Nested arrays are not supported". Fix: `sanitizeForFirestore()` detects `[[` in JSON and wraps
+  the entire payload as `{ _json: stringifiedPayload }`.
+- **`eventTypeScores` not defined** in `saveToFirebase`. The variable was scoped to `handleGetResults`
+  but referenced inside the separate `saveToFirebase` function. Fix: stored on `data.eventTypeScores`
+  before calling `saveToFirebase`.
+
+---
+
+## [7.5.24] — 2026-07-11
+
+### Fixed
+- **`eventTypeScores is not defined` crash** in `saveToFirebase`. Emergency fix for the broken audit
+  save path that prevented results from being persisted to Firestore.
+
+---
+
+## [7.5.23] — 2026-07-11
+
+### Fixed — Root cause: bridge never sent refinements
+**All Before fields empty (extras, location, goal-location, replacement details):**
+The real root cause was that the bridge never included refinement data in the `qaResultsResponse`.
+MARK's `AmendmentsTable` was reading Before values from the Apollo cache in the MARK webview,
+but that cache only contains whatever match is currently open in Tag Once — it is never guaranteed
+to have the audited match's data.
+
+**Fix:** Bridge now collects all refinements for reviewed event keys from its own Apollo cache
+(which always has the right match open at audit time) and sends them as:
+```js
+refinements: { "eventKey_type": payload, ... }
+```
+`handleGetResults` stores this as `data.refinementData = data.refinements || {}`.
+`AmendmentsTable` seeds `refinementMap` from `results.refinementData` first, then overlays
+from the live Apollo cache as a supplement.
+
+### Fixed
+- **teamName string/number key mismatch.** `base.teamId` from the bridge is a number; `teamMap` keys
+  from `lineupPlayers` could be stored as either type. Fix: all teamMap writes now store both
+  `teamMap[id]` and `teamMap[String(id)]`.
+
+---
+
+## [7.5.22] — 2026-07-11
+
+### Fixed
+- **Before fields empty for wrong-extras, wrong-location, goal-location.** Partial fix attempt:
+  store `data.refinementData` from Apollo cache at audit time; seed refinementMap from it.
+  *(Later superseded by the root-cause fix in 7.5.23: bridge sends refinements directly.)*
+- **Timestamp format now MM:SS.mmm** (milliseconds always shown). `fmtTs(ms)` updated in
+  `AmendmentsTable`. Important for wrong-timestamp errors where the mistake is often sub-second.
+- **Player resolution:** Apollo cache always read (not only when lineupPlayers empty).
+- **Replacement error now shows full diff:** timestamp, extras, location, and players diff
+  in both Before and After columns (was showing only event name).
+
+---
+
+## [7.5.21] — 2026-07-11
+
+### Fixed
+- **Player IDs showing instead of names** (`id:1045638`). When results are restored from a
+  previous session, `results.lineupPlayers` is empty (never saved to Firebase). Fix: three-layer
+  fallback: `results.lineupPlayers` → `results.lineupPlayerMap` → live Apollo cache read.
+
+---
+
+## [7.5.20] — 2026-07-11
+
+### Changed — Full AmendmentsTable rewrite (reviewer-only error rule)
+
+**The correct error rule (confirmed by console testing on live data):**
+- Error = amendment authored by the **reviewer** only
+- Reviewer = person with `amendment > 0 AND base === 0 AND refinement === 0` (from `diagnostics.work`)
+- Specialist collector (e.g. players+location person) has `refinement > 0 AND base === 0` → NOT a reviewer
+- Cross-collector corrections, self-corrections, system amendments → NOT errors
+- Multiple reviewers per half supported (all qualify if they meet the rule)
+
+**Score impact:**
+- Old score (test match): 77% — included specialist's cross-collector corrections as errors
+- New score (test match): 92% — reviewer-only, 110 unique error event keys / 1384 base events
+- Difference: 15 percentage points. All previous audit scores were wrong.
+
+**New 8-column table design:**
+`TIME | EVENT · TEAM | ERROR TYPE | MODULE | BEFORE | AFTER | COLLECTOR | REVIEWER`
+
+**12 error types with type-specific structured before/after rendering:**
+`deletion`, `rename`, `replacement`, `wrong-event`, `wrong-timestamp`,
+`wrong-extras`, `wrong-location`, `wrong-player`, `freeze-frame`, `goal-location`, `squad`, `added`
+
+**Player pills:** `#Jersey Name (Team)` with color coding (red=wrong, green=corrected, grey=unchanged)
+Role labels: Main / Secondary / Third with `changed` / `corrected` / `missing` micro-tags
+
+**Role detection:** Uses `diagnostics.work` from bridge (per-author base/refinement/amendment counts).
+Two fallbacks if unavailable: base event authorship analysis, then bridge telemetry `reviewerIds`.
+
+**Error attribution:** Collector column shows base event author for Base errors;
+refinement author for Players/Location/Extras errors (correctly attributes specialist's work).
+
+**CSV export updated:** 15 columns with structured before/after strings per error type.
+`Match ID | Match Name | Half | Timestamp | Event Name | Team | Error Type | Module |
+Before | After | Collector HR | Collector Name | Reviewer HR | Reviewer Name | Captured At`
+
+### Added
+- Bridge now sends `refinements` map (`key_type → payload`) for all reviewed events.
+- Bridge BRIDGE_VERSION and ASAR_MARKER updated (see v7.5.25 for the full story of why this matters).
