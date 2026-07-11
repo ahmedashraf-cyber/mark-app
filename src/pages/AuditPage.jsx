@@ -1027,7 +1027,7 @@ function AmendmentsTable({ results, session, reviewerIds, identityMap, onSeek })
   }
 
   const renderBefore = (r) => {
-    const { errorType, before } = r
+    const { errorType, before, after } = r
     if (!before) return <span style={{ fontSize:11, color:'var(--t-3)' }}>—</span>
     if (errorType === 'deletion') return (
       <div>
@@ -1065,7 +1065,7 @@ function AmendmentsTable({ results, session, reviewerIds, identityMap, onSeek })
   }
 
   const renderAfter = (r) => {
-    const { errorType, after } = r
+    const { errorType, after, before } = r
     if (!after) return <span style={{ fontSize:11, color:'var(--t-3)' }}>—</span>
     if (errorType === 'deletion') return (
       <span style={{ fontSize:11, color:'#FF453A' }}>Removed from session</span>
