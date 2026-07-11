@@ -615,37 +615,38 @@ function AmendmentsTable({ results, session, reviewerIds, identityMap, onSeek })
     if (!playerMap[Number(id)]) playerMap[Number(id)] = { name: p.nickname || p.name || '', jersey: p.jersey, teamName: p.teamName || '', teamId: p.teamId }
     if (p.teamId) teamMap[p.teamId] = p.teamName || ''
   })
-  // Fallback: read directly from Apollo cache (covers restored sessions where lineupPlayers not persisted)
-  if (Object.keys(playerMap).length === 0) {
-    try {
-      const apolloCache = window.apollo?.client?.cache?.extract() || {}
-      const matchObj = Object.values(apolloCache).find(v => v.__typename === 'Match')
-      const resolveRef = (ref) => ref?.__ref ? apolloCache[ref.__ref] : ref
-      ;[resolveRef(matchObj?.home), resolveRef(matchObj?.away)].forEach(team => {
-        if (!team?.players) return
-        ;(team.players || []).forEach(ref => {
-          const p = resolveRef(ref)
-          if (!p?.id) return
-          playerMap[p.id] = { name: p.nickname || p.name || '', jersey: p.jersey_number, teamName: team.name || '', teamId: team.id }
-          teamMap[team.id] = team.name || ''
-        })
+  // Fallback: always also read from Apollo cache (most accurate when match is open)
+  try {
+    const apolloCache = window.apollo?.client?.cache?.extract() || {}
+    const matchObj = Object.values(apolloCache).find(v => v.__typename === 'Match')
+    const resolveRef = (ref) => ref?.__ref ? apolloCache[ref.__ref] : ref
+    ;[resolveRef(matchObj?.home), resolveRef(matchObj?.away)].forEach(team => {
+      if (!team?.players) return
+      ;(team.players || []).forEach(ref => {
+        const p = resolveRef(ref)
+        if (!p?.id) return
+        playerMap[p.id] = { name: p.nickname || p.name || '', jersey: p.jersey_number, teamName: team.name || '', teamId: team.id }
+        teamMap[team.id] = team.name || ''
       })
-    } catch(e) {}
-  }
+    })
+  } catch(e) {}
   const resolvePlayer = (id) => {
     if (id == null) return null
     const p = playerMap[id]
     return p || { name: `id:${id}`, jersey: '?', teamName: '', teamId: null }
   }
 
-  // ── Refinement map from Apollo cache ──────────────────────────────────────
+  // ── Refinement map — from Apollo cache + stored results data ──────────────
   const refinementMap = {}
+  // First load from stored results (survives Firebase restore)
+  Object.entries(results.refinementData || {}).forEach(([k, v]) => { refinementMap[k] = v })
+  // Then overlay from live Apollo cache (most accurate when match is open)
   try {
     const cache = window.apollo?.client?.cache?.extract() || {}
     Object.values(cache).forEach(v => {
       if (v.__typename === 'Event' && v.category === 'refinement') {
         const k = `${v.key}_${v.type}`
-        if (!refinementMap[k]) refinementMap[k] = v.payload || {}
+        refinementMap[k] = v.payload || {}
       }
     })
   } catch(e) {}
@@ -757,11 +758,14 @@ function AmendmentsTable({ results, session, reviewerIds, identityMap, onSeek })
     }
   }
 
-  // ── Format timestamp ───────────────────────────────────────────────────────
+  // ── Format timestamp with milliseconds ────────────────────────────────────
   const fmtTs = (ms) => {
     if (ms == null) return '—'
-    const s = Math.floor(ms / 1000)
-    return `${String(Math.floor(s / 60)).padStart(2,'0')}:${String(s % 60).padStart(2,'0')}`
+    const totalSec = ms / 1000
+    const min = Math.floor(totalSec / 60)
+    const sec = Math.floor(totalSec % 60)
+    const millis = Math.round(ms % 1000)
+    return `${String(min).padStart(2,'0')}:${String(sec).padStart(2,'0')}.${String(millis).padStart(3,'0')}`
   }
 
   // ── Build rows ─────────────────────────────────────────────────────────────
@@ -1029,10 +1033,12 @@ function AmendmentsTable({ results, session, reviewerIds, identityMap, onSeek })
       <div style={{ fontSize:11, color:'#FF453A', textDecoration:'line-through', fontWeight:600 }}>{before.eventName}</div>
     )
     if (errorType === 'replacement') return (
-      <div style={{ display:'flex', flexDirection:'column', gap:3 }}>
+      <div style={{ display:'flex', flexDirection:'column', gap:4 }}>
         <div style={{ fontSize:11, color:'var(--t-2)', fontWeight:600 }}>{before.eventName}</div>
+        {before.ts && <div style={{ fontSize:10, color:'var(--t-3)', fontFamily:'JetBrains Mono, monospace' }}>{before.ts}</div>}
         {before.extras && renderFieldDiff(before.extras, false)}
         {before.location && renderLocation(before.location, false)}
+        {before.players && renderPlayerDiff(diffPlayers(before.players, after?.players || {}), false)}
       </div>
     )
     if (errorType === 'wrong-extras') return renderFieldDiff(before.fields, false)
@@ -1062,10 +1068,12 @@ function AmendmentsTable({ results, session, reviewerIds, identityMap, onSeek })
       <div style={{ fontSize:11, color:'#30D158', fontWeight:600 }}>{after.eventName}</div>
     )
     if (errorType === 'replacement') return (
-      <div style={{ display:'flex', flexDirection:'column', gap:3 }}>
+      <div style={{ display:'flex', flexDirection:'column', gap:4 }}>
         <div style={{ fontSize:11, color:'var(--t-2)', fontWeight:600 }}>{after.eventName}</div>
+        {after.ts && <div style={{ fontSize:10, color:'var(--t-3)', fontFamily:'JetBrains Mono, monospace' }}>{after.ts}</div>}
         {after.extras && renderFieldDiff(after.extras, true)}
         {after.location && renderLocation(after.location, true)}
+        {after.players && renderPlayerDiff(diffPlayers(before?.players || {}, after.players), true)}
       </div>
     )
     if (errorType === 'wrong-extras') return renderFieldDiff(after.fields, true)
@@ -1410,6 +1418,21 @@ export default function AuditPage({ session, onBack, onFullReport, initialResult
       ;(data.lineupPlayers || []).forEach(p => { teamMap[p.teamId] = p.teamName })
       data.lineupPlayerMap = lineupPlayerMap
       data.teamMap = teamMap
+
+      // ── Build refinementData from Apollo cache — survives Firebase restore ──
+      // Store key_type → payload for all refinements of reviewed events.
+      // This is needed when results are restored and Apollo cache is empty.
+      const refinementData = {}
+      try {
+        const apolloCache = window.apollo?.client?.cache?.extract() || {}
+        Object.values(apolloCache).forEach(v => {
+          if (v.__typename === 'Event' && v.category === 'refinement') {
+            const k = `${v.key}_${v.type}`
+            refinementData[k] = v.payload || {}
+          }
+        })
+      } catch(e) {}
+      data.refinementData = refinementData
 
       // ── Step A: Filter system amendments ────────────────────────────────
       // Remove pressure-pair links (base + pairKey + no author) and
