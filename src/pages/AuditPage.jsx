@@ -588,17 +588,34 @@ function ModuleScores({ moduleScores }) {
 }
 
 function AmendmentsTable({ results, session, reviewerIds, identityMap, onSeek }) {
-  const [activeFilter, setActiveFilter] = useState(null)   // null = show all; else a CHANGE type
+  const [activeFilter, setActiveFilter] = useState(null)
+  const [expandedKey, setExpandedKey] = useState(null)
   const { baseEvents } = results
-  // Show edits by ANY real reviewer (all types) — collectors' edits are ignored.
   const reviewerSet = new Set((reviewerIds || []).map(Number))
-  const amendments = results.amendments.filter(a => reviewerSet.has(Number(a.author)))
 
-  // Identity lookup (legacyId -> { hrcode, name, email }) resolved by the bridge
-  // from EventHistory and merged with the persistent Firestore roster.
+  // ── Identity map ───────────────────────────────────────────────────────────
   const idMap = identityMap || results.identityMap || {}
+  const resolveIdentity = (authorId) => {
+    const id = String(authorId)
+    const entry = idMap[id]
+    if (!entry) return { hrcode: `id:${authorId}`, name: '' }
+    return { hrcode: entry.hrcode || entry.hrCode || id, name: entry.name || '' }
+  }
 
-  // Build refinement lookup (collector's original values) by key+type
+  // ── Player map from lineupPlayers ──────────────────────────────────────────
+  const playerMap = {}
+  const teamMap = {}
+  ;(results.lineupPlayers || []).forEach(p => {
+    playerMap[p.id] = { name: p.nickname || p.name || '', jersey: p.jersey, teamName: p.teamName || '', teamId: p.teamId }
+    teamMap[p.teamId] = p.teamName || ''
+  })
+  const resolvePlayer = (id) => {
+    if (id == null) return null
+    const p = playerMap[id]
+    return p || { name: `id:${id}`, jersey: '?', teamName: '', teamId: null }
+  }
+
+  // ── Refinement map from Apollo cache ──────────────────────────────────────
   const refinementMap = {}
   try {
     const cache = window.apollo?.client?.cache?.extract() || {}
@@ -610,285 +627,592 @@ function AmendmentsTable({ results, session, reviewerIds, identityMap, onSeek })
     })
   } catch(e) {}
 
-  // Build base event lookup
+  // ── Base event lookup ──────────────────────────────────────────────────────
   const baseByKey = {}
   baseEvents.forEach(e => { baseByKey[e.key] = e })
 
-  // Deduplicate amendments by key
+  // ── Replacement map from handleGetResults ──────────────────────────────────
+  const replacementMap = results.replacementMap || {}
+
+  // ── Filter reviewer amendments only ───────────────────────────────────────
+  const reviewerAmendments = (results.amendments || []).filter(a => reviewerSet.has(Number(a.author)))
+
+  // ── Group amendments by key ───────────────────────────────────────────────
   const byKey = {}
-  amendments.forEach(a => {
+  reviewerAmendments.forEach(a => {
     if (!byKey[a.key]) byKey[a.key] = []
     byKey[a.key].push(a)
   })
 
-  // Include reviewer-ADDED events (collector missed them) that have no amendment,
-  // so the table shows every error event the score counts.
+  // Include reviewer-added events (missed by collector)
   baseEvents.forEach(e => {
     if (reviewerSet.has(Number(e.author)) && !byKey[e.key]) {
       byKey[e.key] = [{ key: e.key, type: 'added', author: e.author, capturedTime: e.capturedTime, payload: {} }]
     }
   })
 
-  // Helper: extract clean value from fields object (values only, no keys)
-  function cleanFields(fields) {
-    if (!fields) return '—'
-    return Object.entries(fields)
-      .filter(([k, v]) => k !== 'extras' && v !== null && v !== undefined && String(v) !== '')
-      .map(([, v]) => Array.isArray(v) ? v.join(', ') : String(v))
-      .join(' · ') || '—'
+  // ── Error type classification ──────────────────────────────────────────────
+  const classifyError = (key, amends) => {
+    const types = [...new Set(amends.map(a => a.type))]
+    const hasDeletion = types.includes('deletion')
+    const replacement = replacementMap[key]
+
+    if (hasDeletion && replacement) {
+      return replacement.renamed ? 'rename' : 'replacement'
+    }
+    if (hasDeletion) return 'deletion'
+    if (types.includes('freeze-frame')) return 'freeze-frame'
+    if (types.includes('goal-location')) return 'goal-location'
+    if (types.includes('squad')) return 'squad'
+    if (types.includes('players')) return 'wrong-player'
+    if (types.includes('location')) return 'wrong-location'
+    if (types.includes('extras')) return 'wrong-extras'
+    if (types.includes('base')) {
+      const base = baseByKey[key]
+      const baseAmend = amends.find(a => a.type === 'base')
+      const tsChanged = baseAmend?.payload?.videoTimestamp != null && baseAmend.payload.videoTimestamp !== base?.videoTimestamp
+      const nameChanged = baseAmend?.payload?.name && baseAmend.payload.name !== base?.name
+      if (tsChanged && !nameChanged) return 'wrong-timestamp'
+      return 'wrong-event'
+    }
+    if (types.includes('impact')) return 'wrong-extras'
+    if (types.includes('added')) return 'added'
+    return 'wrong-event'
   }
 
-  // Build rows
+  // ── Module label ───────────────────────────────────────────────────────────
+  const moduleOf = (errorType, types) => {
+    const m = {
+      'deletion': 'Base', 'rename': 'Base', 'replacement': 'Base',
+      'wrong-event': 'Base', 'wrong-timestamp': 'Base', 'added': 'Base',
+      'wrong-extras': 'Extras', 'wrong-location': 'Location',
+      'wrong-player': 'Players', 'freeze-frame': 'Freeze Frame',
+      'goal-location': 'Goal Location', 'squad': 'Squad',
+    }
+    return m[errorType] || 'Base'
+  }
+
+  // ── Player diff helper ─────────────────────────────────────────────────────
+  const diffPlayers = (beforePlayers, afterPlayers) => {
+    const roles = ['playerId', 'secondaryPlayerId', 'thirdPlayerId']
+    const roleLabels = { playerId: 'Main', secondaryPlayerId: 'Secondary', thirdPlayerId: 'Third' }
+    const allKeys = [...new Set([...Object.keys(beforePlayers || {}), ...Object.keys(afterPlayers || {})])]
+    return allKeys.filter(k => roles.includes(k)).map(role => {
+      const bId = beforePlayers?.[role]
+      const aId = afterPlayers?.[role]
+      const changed = bId !== aId
+      const missing = bId == null && aId != null
+      return {
+        role: roleLabels[role] || role,
+        before: bId != null ? resolvePlayer(bId) : null,
+        after: aId != null ? resolvePlayer(aId) : null,
+        changed,
+        missing,
+        removed: bId != null && aId == null,
+      }
+    })
+  }
+
+  // ── Freeze-frame diff ──────────────────────────────────────────────────────
+  const diffFF = (refFF, amendFF) => {
+    const beforePlayers = refFF?.players || []
+    const afterPlayers = amendFF?.players || []
+    const beforeRoles = refFF?.roles || {}
+    const afterRoles = amendFF?.roles || {}
+    const getP = (players, idx) => {
+      if (idx == null) return null
+      const p = players[idx]
+      return p?.playerId ? resolvePlayer(p.playerId) : null
+    }
+    return {
+      beforeKeeper: getP(beforePlayers, (beforeRoles.keeper||[])[0]),
+      afterKeeper:  getP(afterPlayers,  (afterRoles.keeper||[])[0]),
+      beforeShooter: getP(beforePlayers, (beforeRoles.shooter||[])[0]),
+      afterShooter:  getP(afterPlayers,  (afterRoles.shooter||[])[0]),
+      beforeReviewed: refFF?.locationsReviewed,
+      afterReviewed:  amendFF?.locationsReviewed,
+    }
+  }
+
+  // ── Format timestamp ───────────────────────────────────────────────────────
+  const fmtTs = (ms) => {
+    if (ms == null) return '—'
+    const s = Math.floor(ms / 1000)
+    return `${String(Math.floor(s / 60)).padStart(2,'0')}:${String(s % 60).padStart(2,'0')}`
+  }
+
+  // ── Build rows ─────────────────────────────────────────────────────────────
   const rows = Object.entries(byKey).map(([key, amends]) => {
     const base = baseByKey[key]
-    const types = [...new Set(amends.map(a => a.type))]
-    const latestAmend = [...amends].sort((a, b) =>
-      (b.capturedTime || '').localeCompare(a.capturedTime || '')
-    )[0]
-
-    // Before: from refinement (collector's original), After: from amendment
-    let before = '—'
-    let after = '—'
-
+    const errorType = classifyError(key, amends)
+    const latestAmend = [...amends].sort((a,b) => (b.capturedTime||'').localeCompare(a.capturedTime||''))[0]
     const mainAmend = amends[0]
-    if (mainAmend.type === 'deletion') {
-      before = base?.name || '—'
-      after = 'Deleted'
-    } else if (mainAmend.type === 'base') {
-      before = base?.name || '—'
-      after = mainAmend.payload?.name || cleanFields(mainAmend.payload?.fields)
-    } else if (mainAmend.type === 'extras' || mainAmend.type === 'location') {
-      const refKey = `${key}_${mainAmend.type}`
-      const ref = refinementMap[refKey]
-      before = ref ? cleanFields(ref.fields) : '—'
-      after = cleanFields(mainAmend.payload?.fields)
-    } else if (mainAmend.type === 'camera') {
-      before = '—'
-      after = mainAmend.payload?.name || cleanFields(mainAmend.payload?.fields)
-    } else if (mainAmend.type === 'added') {
-      before = '—'
-      after = 'Added (missed)'
-    }
+    const types = [...new Set(amends.map(a => a.type))]
 
-    const collectorAuthorId = base?.author
+    // Collector = base event author; Reviewer = amendment author
+    const collectorId = base?.author
     const reviewerAuthorId = latestAmend?.author
-    const reviewerName = formatPerson(idMap[String(reviewerAuthorId)], reviewerAuthorId)
-    const collectorDisplay = formatPerson(idMap[String(collectorAuthorId)], collectorAuthorId)
+    const collector = resolveIdentity(collectorId)
+    const reviewer = resolveIdentity(reviewerAuthorId)
+    const teamName = teamMap[base?.teamId] || (base?.teamId ? `Team ${base.teamId}` : '—')
 
-    // Split the change into EVENT ASPECT (what part) and EDIT TYPE (the mistake).
-    //   base/camera -> Base · extras -> Extra · location -> Location · players -> Players
-    //   deletion -> Deleted (aspect Base) · added -> Added (aspect Base) · else -> Wrong
-    const ASPECT_OF = { base:'Base', camera:'Base', extras:'Extra', location:'Location', players:'Players', deletion:'Base', added:'Base' }
-    const aspects = [...new Set(types.map(t => ASPECT_OF[t] || 'Base'))]
-    // EDIT TYPE: Added/Deleted take priority over Wrong; only one value per event.
-    const editType = types.includes('added') ? 'Added' : types.includes('deletion') ? 'Deleted' : 'Wrong'
+    // Build before/after structured data
+    let before = null
+    let after = null
+
+    if (errorType === 'deletion') {
+      before = { eventName: base?.name, ts: fmtTs(base?.videoTimestamp) }
+      after = { deleted: true }
+    } else if (errorType === 'rename') {
+      const rep = replacementMap[key]
+      const addedEvent = rep?.addedEvent
+      before = { eventName: base?.name, ts: fmtTs(base?.videoTimestamp) }
+      after = { eventName: addedEvent?.name, ts: fmtTs(addedEvent?.videoTimestamp) }
+    } else if (errorType === 'replacement') {
+      const rep = replacementMap[key]
+      const addedEvent = rep?.addedEvent
+      const addedKey = addedEvent?.key
+      // Diff the refinements between old and new
+      const oldExtras = refinementMap[`${key}_extras`]?.fields
+      const newExtras = addedKey ? refinementMap[`${addedKey}_extras`]?.fields : null
+      const oldLoc = refinementMap[`${key}_location`]?.location
+      const newLoc = addedKey ? refinementMap[`${addedKey}_location`]?.location : null
+      const oldPlayers = refinementMap[`${key}_players`]?.players
+      const newPlayers = addedKey ? refinementMap[`${addedKey}_players`]?.players : null
+      before = { eventName: base?.name, ts: fmtTs(base?.videoTimestamp), extras: oldExtras, location: oldLoc, players: oldPlayers }
+      after = { eventName: addedEvent?.name, ts: fmtTs(addedEvent?.videoTimestamp), extras: newExtras, location: newLoc, players: newPlayers }
+    } else if (errorType === 'wrong-extras') {
+      const refKey = `${key}_extras`
+      const impactKey = `${key}_impact`
+      const refExtras = refinementMap[refKey]?.fields || refinementMap[impactKey]?.fields
+      const amendExtras = amends.find(a => a.type === 'extras' || a.type === 'impact')?.payload?.fields
+      // Only show changed fields
+      const changedBefore = {}, changedAfter = {}
+      const allKeys = [...new Set([...Object.keys(refExtras||{}), ...Object.keys(amendExtras||{})])]
+      allKeys.forEach(k => {
+        const bv = JSON.stringify(refExtras?.[k])
+        const av = JSON.stringify(amendExtras?.[k])
+        if (bv !== av) { changedBefore[k] = refExtras?.[k]; changedAfter[k] = amendExtras?.[k] }
+      })
+      before = { fields: Object.keys(changedBefore).length ? changedBefore : refExtras }
+      after  = { fields: Object.keys(changedAfter).length  ? changedAfter  : amendExtras }
+    } else if (errorType === 'wrong-location') {
+      const refLoc = refinementMap[`${key}_location`]?.location
+      const amendLoc = amends.find(a => a.type === 'location')?.payload?.location
+      before = { location: refLoc }
+      after  = { location: amendLoc }
+    } else if (errorType === 'wrong-player') {
+      const refPlayers = refinementMap[`${key}_players`]?.players || {}
+      const amendPlayers = amends.find(a => a.type === 'players')?.payload?.players || {}
+      before = { playerDiff: diffPlayers(refPlayers, amendPlayers).map(d => ({ ...d, side: 'before' })) }
+      after  = { playerDiff: diffPlayers(refPlayers, amendPlayers).map(d => ({ ...d, side: 'after' })) }
+    } else if (errorType === 'wrong-timestamp') {
+      const baseAmend = amends.find(a => a.type === 'base')
+      before = { ts: fmtTs(base?.videoTimestamp) }
+      after  = { ts: fmtTs(baseAmend?.payload?.videoTimestamp) }
+    } else if (errorType === 'freeze-frame') {
+      const refFF = refinementMap[`${key}_freeze-frame`]?.freezeFrame
+      const amendFF = amends.find(a => a.type === 'freeze-frame')?.payload?.freezeFrame
+      const ffDiff = diffFF(refFF, amendFF)
+      before = { ff: ffDiff, side: 'before' }
+      after  = { ff: ffDiff, side: 'after' }
+    } else if (errorType === 'goal-location') {
+      const refGL = refinementMap[`${key}_goal-location`]?.['goal-location']
+      const amendGL = amends.find(a => a.type === 'goal-location')?.payload?.['goal-location']
+      before = { goalLoc: refGL }
+      after  = { goalLoc: amendGL }
+    } else if (errorType === 'squad') {
+      const squadAmend = amends.find(a => a.type === 'squad')
+      before = { formation: base?.payload?.formation || base?.formation || '—' }
+      after  = { formation: squadAmend?.payload?.formation || '—' }
+    } else if (errorType === 'added') {
+      before = { missing: true }
+      after  = { eventName: base?.name }
+    } else if (errorType === 'wrong-event') {
+      const baseAmend = amends.find(a => a.type === 'base')
+      before = { eventName: base?.name }
+      after  = { eventName: baseAmend?.payload?.name || '—' }
+    }
 
     return {
-      key,
-      eventName:    base?.name || '—',
-      timestamp:    base?.videoTimestamp ? fmt(base.videoTimestamp / 1000) : '—',
-      tsSec:        base?.videoTimestamp != null ? base.videoTimestamp / 1000 : null,
-      teamId:       base?.teamId || '—',
-      types,
-      aspects,
-      editType,
-      before,
-      after,
-      collectorId:  collectorDisplay,
-      reviewerName,
+      key, errorType,
+      eventName: base?.name || '—',
+      timestamp: fmtTs(base?.videoTimestamp),
+      tsSec: base?.videoTimestamp != null ? base.videoTimestamp / 1000 : null,
+      teamName,
+      module: moduleOf(errorType, types),
+      before, after,
+      collectorHr: collector.hrcode,
+      collectorName: collector.name,
+      reviewerHr: reviewer.hrcode,
+      reviewerName: reviewer.name,
       capturedTime: latestAmend?.capturedTime || '',
     }
-  }).sort((a, b) => {
-    const ta = baseByKey[a.key]?.videoTimestamp || 0
-    const tb = baseByKey[b.key]?.videoTimestamp || 0
-    return ta - tb
-  })
-
-  // Filter pills now span both new columns: aspects (Base/Extra/Location/Players)
-  // and edit types (Added/Deleted/Wrong). A row matches if the active filter is
-  // one of its aspects OR its edit type.
-  const presentAspects = [...new Set(rows.flatMap(r => r.aspects))].sort()
-  const presentEdits = [...new Set(rows.map(r => r.editType))].sort()
-  const presentTypes = [...presentAspects, ...presentEdits]
-  const visibleRows = activeFilter
-    ? rows.filter(r => r.aspects.includes(activeFilter) || r.editType === activeFilter)
-    : rows
-
-  function downloadCSV() {
-    const headers = ['Match ID','Match Name','Half','Timestamp','Event Name','Team','Event Aspect','Edit Type','Before Change','After Change','Collector ID','Reviewer ID','Captured Time']
-    const csvRows = rows.map(r => [
-      session.matchId,
-      session.matchName,
-      formatHalf(session.half),
-      r.timestamp,
-      r.eventName,
-      r.teamId,
-      r.aspects.join(' + '),
-      r.editType,
-      r.before || '—',
-      r.after  || '—',
-      r.collectorId,
-      r.reviewerName,
-      r.capturedTime,
-    ])
-    const csv = [headers, ...csvRows]
-      .map(r => r.map(v => `"${String(v).replace(/"/g, '""')}"`).join(','))
-      .join('\n')
-    const blob = new Blob([csv], { type: 'text/csv' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    const safe = (s) => String(s ?? '').replace(/[\\/:*?"<>|]/g, '').trim()
-    a.download = `${safe(session.matchId)} - ${safe(session.matchName)} - ${formatHalf(session.half)}.csv`
-    a.click()
-    URL.revokeObjectURL(url)
-  }
+  }).filter(r => r.errorType !== 'wrong-event' || r.before?.eventName !== r.after?.eventName)
+    .sort((a, b) => {
+      const ta = baseByKey[a.key]?.videoTimestamp || 0
+      const tb = baseByKey[b.key]?.videoTimestamp || 0
+      return ta - tb
+    })
 
   if (rows.length === 0) return null
 
-  const AMEND_COLORS = {
-    // legacy raw types (kept for any leftover refs)
-    deletion: '#FF453A', extras: '#FFD60A', base: '#E8590C',
-    camera: '#BF5AF2', location: '#0A84FF', players: '#30D158',
-    // EVENT ASPECT labels
-    Base: '#E8590C', Extra: '#FFD60A', Location: '#0A84FF', Players: '#30D158',
-    // EDIT TYPE labels
-    Added: '#30D158', Deleted: '#FF453A', Wrong: '#FF9F0A',
+  // ── Error type config ──────────────────────────────────────────────────────
+  const ERROR_CONFIG = {
+    'deletion':        { label: 'Deleted',        color: '#FF453A', icon: <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4h6v2"/></svg> },
+    'rename':          { label: 'Wrong event',    color: '#FF6B1F', icon: <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M17 1l4 4-4 4"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><path d="M7 23l-4-4 4-4"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg> },
+    'replacement':     { label: 'Replaced',       color: '#FF9F0A', icon: <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M17 1l4 4-4 4"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><path d="M7 23l-4-4 4-4"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg> },
+    'wrong-event':     { label: 'Wrong event',    color: '#FF6B1F', icon: <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M17 1l4 4-4 4"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><path d="M7 23l-4-4 4-4"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg> },
+    'wrong-timestamp': { label: 'Wrong timestamp',color: '#FF9F0A', icon: <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg> },
+    'wrong-extras':    { label: 'Wrong extras',   color: '#FF9F0A', icon: <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round"><circle cx="12" cy="12" r="3"/><path d="M12 1v4M12 19v4M4.22 4.22l2.83 2.83M16.95 16.95l2.83 2.83M1 12h4M19 12h4M4.22 19.78l2.83-2.83M16.95 7.05l2.83-2.83"/></svg> },
+    'wrong-location':  { label: 'Wrong location', color: '#0A84FF', icon: <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round"><path d="M21 10c0 7-9 13-9 13S3 17 3 10a9 9 0 1 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg> },
+    'wrong-player':    { label: 'Wrong player',   color: '#BF5AF2', icon: <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg> },
+    'freeze-frame':    { label: 'Freeze frame',   color: '#5AC8FA', icon: <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg> },
+    'goal-location':   { label: 'Goal location',  color: '#0A84FF', icon: <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3"/></svg> },
+    'squad':           { label: 'Squad',           color: '#6E6E73', icon: <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg> },
+    'added':           { label: 'Missed event',   color: '#30D158', icon: <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round"><circle cx="12" cy="12" r="10"/><path d="M12 8v8M8 12h8"/></svg> },
   }
 
+  // ── Renderers ──────────────────────────────────────────────────────────────
+  const renderBadge = (errorType) => {
+    const cfg = ERROR_CONFIG[errorType] || ERROR_CONFIG['wrong-event']
+    return (
+      <span style={{
+        display:'inline-flex', alignItems:'center', gap:4, fontSize:10, fontWeight:600,
+        padding:'2px 8px', borderRadius:5, whiteSpace:'nowrap',
+        background:`${cfg.color}18`, color:cfg.color, border:`0.5px solid ${cfg.color}40`,
+      }}>
+        {cfg.icon} {cfg.label}
+      </span>
+    )
+  }
+
+  const renderFieldDiff = (fields, isAfter) => {
+    if (!fields) return <span style={{ fontSize:11, color:'var(--t-3)' }}>—</span>
+    return (
+      <div style={{ display:'flex', flexDirection:'column', gap:2 }}>
+        {Object.entries(fields).filter(([k,v]) => v != null && String(v) !== '').map(([k, v]) => {
+          const val = Array.isArray(v) ? (v.length ? v.join(', ') : '—') : String(v)
+          return (
+            <div key={k} style={{ display:'flex', gap:5, alignItems:'baseline' }}>
+              <span style={{ fontSize:9, color:'var(--t-3)', fontFamily:'JetBrains Mono, monospace', minWidth:55 }}>{k}</span>
+              <span style={{ fontSize:11, color: isAfter ? '#30D158' : '#FF453A', textDecoration: isAfter ? 'none' : 'line-through', fontFamily:'JetBrains Mono, monospace' }}>{val}</span>
+            </div>
+          )
+        })}
+      </div>
+    )
+  }
+
+  const renderLocation = (loc, isAfter) => {
+    if (!loc) return <span style={{ fontSize:11, color:'var(--t-3)' }}>—</span>
+    const actual = loc.actual || loc
+    const x = actual.x ?? actual.X
+    const y = actual.y ?? actual.Y
+    if (x == null && y == null) return <span style={{ fontSize:11, color:'var(--t-3)' }}>—</span>
+    return (
+      <div style={{ display:'flex', flexDirection:'column', gap:2 }}>
+        <div style={{ display:'flex', gap:5, alignItems:'baseline' }}>
+          <span style={{ fontSize:9, color:'var(--t-3)', fontFamily:'JetBrains Mono, monospace', minWidth:12 }}>x</span>
+          <span style={{ fontSize:11, fontFamily:'JetBrains Mono, monospace', color: isAfter ? '#30D158' : '#FF453A', textDecoration: isAfter ? 'none' : 'line-through' }}>{x?.toFixed(2)}</span>
+        </div>
+        <div style={{ display:'flex', gap:5, alignItems:'baseline' }}>
+          <span style={{ fontSize:9, color:'var(--t-3)', fontFamily:'JetBrains Mono, monospace', minWidth:12 }}>y</span>
+          <span style={{ fontSize:11, fontFamily:'JetBrains Mono, monospace', color: isAfter ? '#30D158' : '#FF453A', textDecoration: isAfter ? 'none' : 'line-through' }}>{y?.toFixed(2)}</span>
+        </div>
+      </div>
+    )
+  }
+
+  const renderPlayerPill = (player, status) => {
+    if (!player) return (
+      <span style={{ fontSize:11, color:'#FF9F0A', fontStyle:'italic' }}>Missing this field</span>
+    )
+    const colors = {
+      wrong: { bg:'rgba(255,69,58,0.08)', border:'rgba(255,69,58,0.2)', jersey:'#FF453A', name:'var(--t-1)' },
+      right: { bg:'rgba(48,209,88,0.08)', border:'rgba(48,209,88,0.2)', jersey:'#30D158', name:'var(--t-1)' },
+      same:  { bg:'rgba(255,255,255,0.04)', border:'rgba(255,255,255,0.08)', jersey:'var(--t-3)', name:'var(--t-3)' },
+    }
+    const c = colors[status] || colors.same
+    return (
+      <span style={{ display:'inline-flex', alignItems:'center', gap:5, padding:'2px 8px 2px 4px', borderRadius:999, background:c.bg, border:`0.5px solid ${c.border}` }}>
+        <span style={{ fontSize:10, fontFamily:'JetBrains Mono, monospace', fontWeight:500, background:'rgba(255,255,255,0.06)', padding:'0 4px', borderRadius:3, color:c.jersey }}>#{player.jersey}</span>
+        <span style={{ fontSize:11, color:c.name }}>{player.name}</span>
+        {player.teamName && <span style={{ fontSize:10, color:'var(--t-3)' }}>· {player.teamName}</span>}
+      </span>
+    )
+  }
+
+  const renderPlayerDiff = (playerDiff, isAfter) => {
+    if (!playerDiff) return <span style={{ fontSize:11, color:'var(--t-3)' }}>—</span>
+    const relevantRoles = playerDiff.filter(d => d.changed || d.missing || d.removed || d.before || d.after)
+    if (!relevantRoles.length) return <span style={{ fontSize:11, color:'var(--t-3)' }}>—</span>
+    return (
+      <div style={{ display:'flex', flexDirection:'column', gap:6 }}>
+        {relevantRoles.map((d, i) => {
+          const microtag = d.missing ? 'missing' : d.removed ? 'removed' : d.changed ? (isAfter ? 'corrected' : 'changed') : null
+          const player = isAfter ? d.after : d.before
+          const status = !d.changed ? 'same' : isAfter ? 'right' : 'wrong'
+          return (
+            <div key={i} style={{ display:'flex', flexDirection:'column', gap:2 }}>
+              <div style={{ display:'flex', alignItems:'center', gap:5 }}>
+                <span style={{ fontSize:9, fontWeight:600, letterSpacing:'.06em', textTransform:'uppercase', color: d.changed ? '#FF9F0A' : 'var(--t-3)' }}>{d.role}</span>
+                {microtag && d.changed && (
+                  <span style={{ fontSize:9, fontWeight:600, color:'#FF9F0A', background:'rgba(255,159,10,0.08)', border:'0.5px solid rgba(255,159,10,0.2)', padding:'1px 5px', borderRadius:3, letterSpacing:'.04em' }}>{microtag}</span>
+                )}
+              </div>
+              {renderPlayerPill(player, status)}
+            </div>
+          )
+        })}
+      </div>
+    )
+  }
+
+  const renderFFDiff = (ff, isAfter) => {
+    if (!ff) return <span style={{ fontSize:11, color:'var(--t-3)' }}>—</span>
+    const keeper = isAfter ? ff.afterKeeper : ff.beforeKeeper
+    const shooter = isAfter ? ff.afterShooter : ff.beforeShooter
+    const reviewed = isAfter ? ff.afterReviewed : ff.beforeReviewed
+    const keeperChanged = ff.beforeKeeper?.name !== ff.afterKeeper?.name
+    const shooterChanged = ff.beforeShooter?.name !== ff.afterShooter?.name
+    return (
+      <div style={{ display:'flex', flexDirection:'column', gap:5 }}>
+        <div>
+          <div style={{ fontSize:9, fontWeight:600, letterSpacing:'.06em', textTransform:'uppercase', color: keeperChanged ? '#FF9F0A' : 'var(--t-3)', marginBottom:2 }}>Keeper</div>
+          {keeper ? renderPlayerPill(keeper, keeperChanged ? (isAfter ? 'right' : 'wrong') : 'same') : <span style={{ fontSize:11, color:'var(--t-3)' }}>Not identified</span>}
+        </div>
+        <div>
+          <div style={{ fontSize:9, fontWeight:600, letterSpacing:'.06em', textTransform:'uppercase', color: shooterChanged ? '#FF9F0A' : 'var(--t-3)', marginBottom:2 }}>Shooter</div>
+          {shooter ? renderPlayerPill(shooter, shooterChanged ? (isAfter ? 'right' : 'wrong') : 'same') : <span style={{ fontSize:11, color:'var(--t-3)' }}>Not set</span>}
+        </div>
+        <div style={{ fontSize:10, color: reviewed ? '#30D158' : 'var(--t-3)' }}>
+          {reviewed ? '✓ Reviewed' : '✗ Not reviewed'}
+        </div>
+      </div>
+    )
+  }
+
+  const renderBefore = (r) => {
+    const { errorType, before } = r
+    if (!before) return <span style={{ fontSize:11, color:'var(--t-3)' }}>—</span>
+    if (errorType === 'deletion') return (
+      <div>
+        <div style={{ fontSize:11, color:'#FF453A', textDecoration:'line-through', fontWeight:600 }}>{before.eventName}</div>
+        <div style={{ fontSize:10, color:'var(--t-3)', fontFamily:'JetBrains Mono, monospace', marginTop:1 }}>{before.ts}</div>
+      </div>
+    )
+    if (errorType === 'rename') return (
+      <div style={{ fontSize:11, color:'#FF453A', textDecoration:'line-through', fontWeight:600 }}>{before.eventName}</div>
+    )
+    if (errorType === 'replacement') return (
+      <div style={{ display:'flex', flexDirection:'column', gap:3 }}>
+        <div style={{ fontSize:11, color:'var(--t-2)', fontWeight:600 }}>{before.eventName}</div>
+        {before.extras && renderFieldDiff(before.extras, false)}
+        {before.location && renderLocation(before.location, false)}
+      </div>
+    )
+    if (errorType === 'wrong-extras') return renderFieldDiff(before.fields, false)
+    if (errorType === 'wrong-location') return renderLocation(before.location, false)
+    if (errorType === 'wrong-player') return renderPlayerDiff(before.playerDiff, false)
+    if (errorType === 'wrong-timestamp') return (
+      <span style={{ fontSize:12, fontFamily:'JetBrains Mono, monospace', color:'#FF453A', textDecoration:'line-through' }}>{before.ts}</span>
+    )
+    if (errorType === 'freeze-frame') return renderFFDiff(before.ff, false)
+    if (errorType === 'goal-location') return renderLocation(before.goalLoc, false)
+    if (errorType === 'squad') return (
+      <span style={{ fontSize:11, color:'#FF453A', textDecoration:'line-through', fontFamily:'JetBrains Mono, monospace' }}>{before.formation}</span>
+    )
+    if (errorType === 'added') return (
+      <span style={{ fontSize:11, color:'#FF9F0A', fontStyle:'italic' }}>Missing this field</span>
+    )
+    return <span style={{ fontSize:11, color:'#FF453A', textDecoration:'line-through' }}>{before.eventName}</span>
+  }
+
+  const renderAfter = (r) => {
+    const { errorType, after } = r
+    if (!after) return <span style={{ fontSize:11, color:'var(--t-3)' }}>—</span>
+    if (errorType === 'deletion') return (
+      <span style={{ fontSize:11, color:'#FF453A' }}>Removed from session</span>
+    )
+    if (errorType === 'rename') return (
+      <div style={{ fontSize:11, color:'#30D158', fontWeight:600 }}>{after.eventName}</div>
+    )
+    if (errorType === 'replacement') return (
+      <div style={{ display:'flex', flexDirection:'column', gap:3 }}>
+        <div style={{ fontSize:11, color:'var(--t-2)', fontWeight:600 }}>{after.eventName}</div>
+        {after.extras && renderFieldDiff(after.extras, true)}
+        {after.location && renderLocation(after.location, true)}
+      </div>
+    )
+    if (errorType === 'wrong-extras') return renderFieldDiff(after.fields, true)
+    if (errorType === 'wrong-location') return renderLocation(after.location, true)
+    if (errorType === 'wrong-player') return renderPlayerDiff(after.playerDiff, true)
+    if (errorType === 'wrong-timestamp') return (
+      <span style={{ fontSize:12, fontFamily:'JetBrains Mono, monospace', color:'#30D158' }}>{after.ts}</span>
+    )
+    if (errorType === 'freeze-frame') return renderFFDiff(after.ff, true)
+    if (errorType === 'goal-location') return renderLocation(after.goalLoc, true)
+    if (errorType === 'squad') return (
+      <span style={{ fontSize:11, color:'#30D158', fontFamily:'JetBrains Mono, monospace' }}>{after.formation}</span>
+    )
+    if (errorType === 'added') return (
+      <span style={{ fontSize:11, color:'#30D158', fontWeight:600 }}>{after.eventName}</span>
+    )
+    return <span style={{ fontSize:11, color:'#30D158' }}>{after.eventName}</span>
+  }
+
+  // ── Filter pills ───────────────────────────────────────────────────────────
+  const errorTypes = [...new Set(rows.map(r => r.errorType))]
+  const visibleRows = activeFilter ? rows.filter(r => r.errorType === activeFilter) : rows
+
+  // ── CSV export ─────────────────────────────────────────────────────────────
+  const downloadCSV = () => {
+    const safe = (s) => String(s ?? '').replace(/"/g, '""')
+    const locationStr = (loc) => {
+      if (!loc) return '—'
+      const a = loc.actual || loc
+      return `x:${a.x?.toFixed(2)} y:${a.y?.toFixed(2)}`
+    }
+    const playerStr = (playerDiff, isAfter) => {
+      if (!playerDiff) return '—'
+      return playerDiff.filter(d => d.changed).map(d => {
+        const p = isAfter ? d.after : d.before
+        return p ? `${d.role}: #${p.jersey} ${p.name} (${p.teamName})` : `${d.role}: Missing`
+      }).join(' | ')
+    }
+    const headers = ['Match ID','Match Name','Half','Timestamp','Event Name','Team','Error Type','Module','Before','After','Collector HR','Collector Name','Reviewer HR','Reviewer Name','Captured At']
+    const csvRows = rows.map(r => {
+      let bStr = '—', aStr = '—'
+      const b = r.before, a = r.after
+      if (r.errorType === 'deletion') { bStr = b?.eventName || '—'; aStr = 'Deleted' }
+      else if (r.errorType === 'rename') { bStr = b?.eventName || '—'; aStr = a?.eventName || '—' }
+      else if (r.errorType === 'replacement') { bStr = `${b?.eventName}`; aStr = `${a?.eventName}` }
+      else if (r.errorType === 'wrong-extras') { bStr = Object.entries(b?.fields||{}).map(([k,v])=>`${k}: ${Array.isArray(v)?v.join(','):v}`).join(' | '); aStr = Object.entries(a?.fields||{}).map(([k,v])=>`${k}: ${Array.isArray(v)?v.join(','):v}`).join(' | ') }
+      else if (r.errorType === 'wrong-location') { bStr = locationStr(b?.location); aStr = locationStr(a?.location) }
+      else if (r.errorType === 'wrong-player') { bStr = playerStr(b?.playerDiff, false); aStr = playerStr(a?.playerDiff, true) }
+      else if (r.errorType === 'wrong-timestamp') { bStr = b?.ts || '—'; aStr = a?.ts || '—' }
+      else if (r.errorType === 'freeze-frame') { bStr = `Keeper: ${b?.ff?.beforeKeeper?.name||'Not set'} · Shooter: ${b?.ff?.beforeShooter?.name||'Not set'}`; aStr = `Keeper: ${a?.ff?.afterKeeper?.name||'Not set'} · Shooter: ${a?.ff?.afterShooter?.name||'Not set'}` }
+      else if (r.errorType === 'goal-location') { bStr = locationStr(b?.goalLoc); aStr = locationStr(a?.goalLoc) }
+      else if (r.errorType === 'squad') { bStr = b?.formation||'—'; aStr = a?.formation||'—' }
+      else if (r.errorType === 'added') { bStr = 'Missing'; aStr = a?.eventName||'—' }
+      return [session.matchId, session.matchName, formatHalf(session.half), r.timestamp, r.eventName, r.teamName, ERROR_CONFIG[r.errorType]?.label || r.errorType, r.module, bStr, aStr, r.collectorHr, r.collectorName, r.reviewerHr, r.reviewerName, r.capturedTime].map(v => `"${safe(v)}"`)
+    })
+    const csv = [headers.map(h=>`"${h}"`), ...csvRows].map(row => row.join(',')).join('\r\n')
+    const blob = new Blob([csv], { type: 'text/csv' })
+    const url = URL.createObjectURL(blob)
+    const el = document.createElement('a')
+    el.href = url
+    const s = (v) => String(v||'').replace(/[\\/:*?"<>|]/g,'').trim()
+    el.download = `${s(session.matchId)}_${s(session.matchName)}_${s(formatHalf(session.half))}_${s(results.collectorHrCode||'')}.csv`
+    el.click()
+    URL.revokeObjectURL(url)
+  }
+
+  // ── Render ─────────────────────────────────────────────────────────────────
   return (
-    <div className="fade-in" style={{ marginTop: 14 }}>
+    <div className="fade-in" style={{ marginTop:14 }}>
       {/* Header */}
       <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:10 }}>
         <div style={{ fontSize:10, fontWeight:800, color:'var(--t-3)', letterSpacing:1.2 }}>
-          AMENDMENTS — {rows.length} EVENTS EDITED
+          ERRORS — {rows.length} EVENTS
         </div>
-        <button
-          className="btn-ghost"
-          style={{ padding:'4px 12px', fontSize:11, display:'flex', alignItems:'center', gap:6 }}
-          onClick={downloadCSV}
-        >
-          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
-            <path d="M12 3v13M6 11l6 6 6-6"/><path d="M4 20h16"/>
-          </svg>
+        <button className="btn-ghost" style={{ padding:'4px 12px', fontSize:11, display:'flex', alignItems:'center', gap:6 }} onClick={downloadCSV}>
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><path d="M12 3v13M6 11l6 6 6-6"/><path d="M4 20h16"/></svg>
           Download CSV
         </button>
       </div>
 
-      {/* Collectors & reviewers for this half — Update #1 yields possibly MULTIPLE collectors */}
+      {/* People summary */}
       <div style={{ display:'flex', flexWrap:'wrap', gap:'4px 18px', marginBottom:10, fontSize:11, color:'var(--t-3)' }}>
         <span>
-          <span style={{ fontWeight:700, color:'var(--t-2)' }}>
-            {(results.collectorIds && results.collectorIds.length > 1) ? 'Collectors: ' : 'Collector: '}
-          </span>
-          {formatPeople(results.collectorIds && results.collectorIds.length ? results.collectorIds : [results.collectorId], idMap, results.collectorId)}
+          <span style={{ fontWeight:700, color:'var(--t-2)' }}>Collector: </span>
+          {formatPeople(results.collectorIds?.length ? results.collectorIds : [results.collectorId], idMap, results.collectorId)}
         </span>
         <span>
-          <span style={{ fontWeight:700, color:'var(--t-2)' }}>
-            {(reviewerIds && reviewerIds.length > 1) ? 'Reviewers: ' : 'Reviewer: '}
-          </span>
+          <span style={{ fontWeight:700, color:'var(--t-2)' }}>Reviewer: </span>
           {formatPeople(reviewerIds, idMap, results.reviewerId)}
         </span>
       </div>
 
-      {/* Issue 3: filter by CHANGE type */}
-      {presentTypes.length > 1 && (
+      {/* Filter pills */}
+      {errorTypes.length > 1 && (
         <div style={{ display:'flex', flexWrap:'wrap', gap:6, marginBottom:10, alignItems:'center' }}>
-          <span style={{ fontSize:9, fontWeight:800, color:'var(--t-3)', letterSpacing:1, marginRight:2 }}>FILTER</span>
-          <button
-            onClick={() => setActiveFilter(null)}
-            style={{
-              fontSize:10, fontWeight:700, padding:'3px 10px', borderRadius:6, cursor:'pointer',
-              background: activeFilter === null ? 'var(--p2)' : 'transparent',
-              color: activeFilter === null ? '#fff' : 'var(--t-3)',
-              border:`1px solid ${activeFilter === null ? 'var(--p2)' : 'var(--b-2)'}`,
-            }}
-          >All ({rows.length})</button>
-          {presentTypes.map(t => {
-            const count = rows.filter(r => r.aspects.includes(t) || r.editType === t).length
-            const col = AMEND_COLORS[t] || 'var(--t-3)'
+          <span style={{ fontSize:9, fontWeight:800, color:'var(--t-3)', letterSpacing:1 }}>FILTER</span>
+          <button onClick={() => setActiveFilter(null)} style={{ fontSize:10, fontWeight:700, padding:'3px 10px', borderRadius:6, cursor:'pointer', background: activeFilter===null?'var(--p2)':'transparent', color: activeFilter===null?'#fff':'var(--t-3)', border:`1px solid ${activeFilter===null?'var(--p2)':'var(--b-2)'}` }}>
+            All ({rows.length})
+          </button>
+          {errorTypes.map(t => {
+            const cfg = ERROR_CONFIG[t]
+            const count = rows.filter(r => r.errorType === t).length
             const on = activeFilter === t
             return (
-              <button key={t}
-                onClick={() => setActiveFilter(on ? null : t)}
-                style={{
-                  fontSize:10, fontWeight:700, padding:'3px 10px', borderRadius:6, cursor:'pointer',
-                  background: on ? col : `${col}14`,
-                  color: on ? '#fff' : col,
-                  border:`1px solid ${on ? col : col+'40'}`,
-                }}
-              >{t} ({count})</button>
+              <button key={t} onClick={() => setActiveFilter(on ? null : t)} style={{ fontSize:10, fontWeight:700, padding:'3px 10px', borderRadius:6, cursor:'pointer', background: on ? cfg?.color : `${cfg?.color}18`, color: on ? '#fff' : cfg?.color, border:`1px solid ${on ? cfg?.color : cfg?.color+'40'}` }}>
+                {cfg?.label||t} ({count})
+              </button>
             )
           })}
         </div>
       )}
 
       {/* Table */}
-      <div style={{ borderRadius:10, border:'1px solid var(--b-1)', overflow:'hidden' }}>
-        {/* Header row */}
-        <div style={{
-          display:'grid',
-          gridTemplateColumns:'60px 1fr 60px 130px 90px 120px 120px 70px 70px 70px',
-          padding:'7px 14px',
-          background:'var(--bg-3)',
-          borderBottom:'1px solid var(--b-1)',
-        }}>
-          {['TIME','EVENT','TEAM','EVENT ASPECT','EDIT TYPE','BEFORE','AFTER','COLLECTOR','REVIEWER','CAPTURED'].map(h => (
+      <div style={{ borderRadius:10, border:'0.5px solid var(--b-1)', overflow:'hidden' }}>
+        {/* Column headers */}
+        <div style={{ display:'grid', gridTemplateColumns:'52px minmax(90px,1fr) 130px 80px minmax(100px,1fr) minmax(100px,1fr) 100px 100px', padding:'7px 12px', background:'var(--bg-3)', borderBottom:'0.5px solid var(--b-1)', gap:'0 8px' }}>
+          {['TIME','EVENT · TEAM','ERROR TYPE','MODULE','BEFORE','AFTER','COLLECTOR','REVIEWER'].map(h => (
             <span key={h} style={{ fontSize:9, fontWeight:800, color:'var(--t-3)', letterSpacing:1 }}>{h}</span>
           ))}
         </div>
 
         {/* Data rows */}
-        <div style={{ maxHeight:280, overflowY:'auto' }}>
+        <div style={{ maxHeight:380, overflowY:'auto' }}>
           {visibleRows.map((r, i) => {
+            const cfg = ERROR_CONFIG[r.errorType]
             const seekable = r.tsSec != null && typeof onSeek === 'function'
+            const isExpanded = expandedKey === r.key
             return (
-            <div key={r.key} style={{
-              display:'grid',
-              gridTemplateColumns:'60px 1fr 60px 130px 90px 120px 120px 70px 70px 70px',
-              padding:'7px 14px',
-              borderBottom:'1px solid var(--b-1)',
-              background: i % 2 === 0 ? 'transparent' : 'rgba(255,255,255,0.01)',
-              borderLeft:`2px solid ${AMEND_COLORS[r.aspects[0]] || 'var(--b-2)'}`,
-              transition:'background .1s',
-              cursor: seekable ? 'pointer' : 'default',
-            }}
-              title={seekable ? `Jump to ${r.timestamp}` : undefined}
-              onClick={() => { if (seekable) onSeek(r.tsSec) }}
-              onMouseEnter={e => e.currentTarget.style.background='rgba(255,255,255,0.03)'}
-              onMouseLeave={e => e.currentTarget.style.background= i%2===0?'transparent':'rgba(255,255,255,0.01)'}
-            >
-              <span style={{ fontSize:11, fontFamily:'JetBrains Mono, monospace', color:'var(--p2)' }}>{r.timestamp}</span>
-              <span style={{ fontSize:11, color:'var(--t-1)', fontWeight:600, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{r.eventName}</span>
-              <span style={{ fontSize:10, color:'var(--t-3)' }}>{r.teamId}</span>
-              {/* EVENT ASPECT — may be multiple */}
-              <div style={{ display:'flex', gap:3, flexWrap:'wrap' }}>
-                {r.aspects.map((t, j) => (
-                  <span key={j} style={{
-                    fontSize:9, fontWeight:700, padding:'1px 6px', borderRadius:4,
-                    background:`${AMEND_COLORS[t] || 'var(--t-3)'}14`,
-                    color: AMEND_COLORS[t] || 'var(--t-3)',
-                    border:`1px solid ${AMEND_COLORS[t] || 'var(--t-3)'}30`,
-                  }}>{t}</span>
-                ))}
+              <div key={r.key}>
+                <div style={{
+                  display:'grid', gridTemplateColumns:'52px minmax(90px,1fr) 130px 80px minmax(100px,1fr) minmax(100px,1fr) 100px 100px',
+                  padding:'9px 12px', gap:'0 8px', alignItems:'start',
+                  borderBottom:`0.5px solid var(--b-1)`,
+                  borderLeft:`2px solid ${cfg?.color || 'var(--b-2)'}`,
+                  background: i % 2 === 0 ? 'transparent' : 'rgba(255,255,255,0.01)',
+                  cursor: seekable ? 'pointer' : 'default',
+                  transition:'background .1s',
+                }}
+                  onClick={() => { if (seekable) onSeek(r.tsSec) }}
+                  onMouseEnter={e => e.currentTarget.style.background='rgba(255,255,255,0.03)'}
+                  onMouseLeave={e => e.currentTarget.style.background= i%2===0?'transparent':'rgba(255,255,255,0.01)'}
+                  title={seekable ? `Jump to ${r.timestamp}` : undefined}
+                >
+                  {/* Time */}
+                  <span style={{ fontSize:11, fontFamily:'JetBrains Mono, monospace', color:'var(--p2)', paddingTop:2 }}>{r.timestamp}</span>
+                  {/* Event · Team */}
+                  <div>
+                    <div style={{ fontSize:12, fontWeight:600, color:'var(--t-1)', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{r.eventName}</div>
+                    <div style={{ fontSize:10, color:'var(--t-3)', marginTop:1 }}>{r.teamName}</div>
+                  </div>
+                  {/* Error type badge */}
+                  <div style={{ paddingTop:2 }}>{renderBadge(r.errorType)}</div>
+                  {/* Module */}
+                  <span style={{ fontSize:11, color:'var(--t-3)', paddingTop:2 }}>{r.module}</span>
+                  {/* Before */}
+                  <div>{renderBefore(r)}</div>
+                  {/* After */}
+                  <div>{renderAfter(r)}</div>
+                  {/* Collector */}
+                  <div style={{ display:'flex', flexDirection:'column', gap:1 }}>
+                    <span style={{ fontSize:11, fontFamily:'JetBrains Mono, monospace', fontWeight:500, color:'#E8590C' }}>{r.collectorHr}</span>
+                    <span style={{ fontSize:10, color:'var(--t-3)' }}>{r.collectorName}</span>
+                  </div>
+                  {/* Reviewer */}
+                  <div style={{ display:'flex', flexDirection:'column', gap:1 }}>
+                    <span style={{ fontSize:11, fontFamily:'JetBrains Mono, monospace', fontWeight:500, color:'#0A84FF' }}>{r.reviewerHr}</span>
+                    <span style={{ fontSize:10, color:'var(--t-3)' }}>{r.reviewerName}</span>
+                  </div>
+                </div>
               </div>
-              {/* EDIT TYPE — single value */}
-              <div>
-                <span style={{
-                  fontSize:9, fontWeight:700, padding:'1px 6px', borderRadius:4,
-                  background:`${AMEND_COLORS[r.editType] || 'var(--t-3)'}14`,
-                  color: AMEND_COLORS[r.editType] || 'var(--t-3)',
-                  border:`1px solid ${AMEND_COLORS[r.editType] || 'var(--t-3)'}30`,
-                }}>{r.editType}</span>
-              </div>
-              <span style={{ fontSize:10, color:'#FF453A', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }} title={r.before}>{r.before || '—'}</span>
-              <span style={{ fontSize:10, color:'#30D158', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }} title={r.after}>{r.after || '—'}</span>
-              <span style={{ fontSize:10, color:'var(--t-3)', fontFamily:'JetBrains Mono, monospace' }}>{r.collectorId}</span>
-              <span style={{ fontSize:10, color:'var(--t-2)', fontWeight:500 }}>{r.reviewerName}</span>
-              <span style={{ fontSize:9, color:'var(--t-3)' }}>
-                {r.capturedTime ? new Date(r.capturedTime).toLocaleTimeString('en-GB', {hour:'2-digit',minute:'2-digit'}) : '—'}
-              </span>
-            </div>
             )
           })}
         </div>
@@ -1054,58 +1378,133 @@ export default function AuditPage({ session, onBack, onFullReport, initialResult
       const data = await requestQAResults(session.matchId, session.half)
       if (!data) { setError('No data returned — make sure collection app is open on this match'); setLoading(false); return }
 
-      // All reviewers (set) — falls back to the single primary if needed.
-      const reviewerIds = (data.reviewerIds && data.reviewerIds.length)
-        ? data.reviewerIds
-        : (data.reviewerId != null ? [data.reviewerId] : [])
-      // Normalize so QuickSummary, the table, and the score all read the SAME list
+      // ── Build lineup player map from bridge payload ──────────────────────
+      const lineupPlayerMap = {}
+      ;(data.lineupPlayers || []).forEach(p => {
+        lineupPlayerMap[p.id] = { name: p.name, nickname: p.nickname, jersey: p.jersey, teamId: p.teamId, teamName: p.teamName, side: p.side }
+      })
+      const teamMap = {}
+      ;(data.lineupPlayers || []).forEach(p => { teamMap[p.teamId] = p.teamName })
+      data.lineupPlayerMap = lineupPlayerMap
+      data.teamMap = teamMap
+
+      // ── Step A: Filter system amendments ────────────────────────────────
+      // Remove pressure-pair links (base + pairKey + no author) and
+      // system location flags (location desired:null + no author)
+      data.amendments = (data.amendments || []).filter(a => {
+        const noAuthor = a.author == null || a.author === undefined
+        if (a.type === 'base' && a.payload && a.payload.pairKey && noAuthor) return false
+        if (a.type === 'location' && a.payload && a.payload.location && a.payload.location.desired && a.payload.location.desired.x === null && noAuthor) return false
+        return true
+      })
+
+      // ── Step B: Role detection ───────────────────────────────────────────
+      // Use diagnostics.work (per-author: base, refinement, amendment, views)
+      // sent by the bridge to correctly identify:
+      //   BASE COLLECTOR  : base > 5
+      //   SPECIALIST      : (players+location) refinements > 5 AND base = 0
+      //   REVIEWER        : amendments > 0 AND base = 0 AND refinements = 0
+      // This correctly excludes the specialist collector who has zero base
+      // events but is NOT a reviewer — old logic misidentified them via telemetry.
+      const COLLECTOR_WORK_MIN = 3
+      const workProfiles = (data.diagnostics && data.diagnostics.work) || []
+      let trueReviewerIds = []
+
+      if (workProfiles.length > 0) {
+        workProfiles.forEach(w => {
+          const isCollector = (w.base || 0) > COLLECTOR_WORK_MIN
+          const isSpecialist = (w.refinement || 0) > COLLECTOR_WORK_MIN && (w.base || 0) === 0
+          const isReviewer = (w.amendment || 0) > 0 && (w.base || 0) === 0 && (w.refinement || 0) === 0
+          if (isReviewer && !isCollector && !isSpecialist) {
+            trueReviewerIds.push(Number(w.author))
+          }
+        })
+      }
+
+      // Fallback: derive from base event authorship if diagnostics.work unavailable
+      if (trueReviewerIds.length === 0) {
+        const baseAuthorCounts = {}
+        ;(data.baseEvents || []).forEach(e => {
+          if (e.author != null) baseAuthorCounts[String(e.author)] = (baseAuthorCounts[String(e.author)] || 0) + 1
+        })
+        const amendAuthorSet = new Set()
+        ;(data.amendments || []).forEach(a => {
+          if (a.author != null) amendAuthorSet.add(String(a.author))
+        })
+        trueReviewerIds = [...amendAuthorSet]
+          .filter(id => !baseAuthorCounts[id] || baseAuthorCounts[id] < COLLECTOR_WORK_MIN)
+          .map(Number)
+          .filter(id => !isNaN(id))
+      }
+
+      // Final fallback to bridge telemetry reviewerIds
+      if (trueReviewerIds.length === 0) {
+        const bridgeReviewerIds = (data.reviewerIds && data.reviewerIds.length)
+          ? data.reviewerIds
+          : (data.reviewerId != null ? [data.reviewerId] : [])
+        trueReviewerIds = bridgeReviewerIds
+      }
+
+      const reviewerIds = trueReviewerIds.filter(id => !isNaN(id))
       data.reviewerIds = reviewerIds
 
-      // Calculate score — errors = reviewer edits/deletions + reviewer-added misses
+      // ── Step C: Detect delete+add pairs (rename/replacement) ─────────────
+      const PAIR_TOLERANCE_MS = 2000
+      const reviewerSet = new Set(reviewerIds.map(Number))
+      const reviewerBaseEvents = (data.baseEvents || []).filter(e => reviewerSet.has(Number(e.author)))
+      const baseByKey = {}
+      ;(data.baseEvents || []).forEach(e => { baseByKey[e.key] = e })
+      const replacementMap = {}
+      ;(data.amendments || []).filter(a => a.type === 'deletion' && reviewerSet.has(Number(a.author))).forEach(del => {
+        const delBase = baseByKey[del.key]
+        if (!delBase || delBase.videoTimestamp == null) return
+        let best = null, bestDiff = Infinity
+        reviewerBaseEvents.forEach(rev => {
+          if (rev.key === del.key) return
+          const diff = Math.abs((rev.videoTimestamp || 0) - delBase.videoTimestamp)
+          if (diff <= PAIR_TOLERANCE_MS && diff < bestDiff) { best = rev; bestDiff = diff }
+        })
+        if (best) replacementMap[del.key] = { addedEvent: best, renamed: best.name !== delBase.name }
+      })
+      data.replacementMap = replacementMap
+
+      // ── Score calculation (reviewer-only, correct) ───────────────────────
       const errorKeys = computeErrorKeys(data.baseEvents, data.amendments, reviewerIds)
       const uniqueEdited = errorKeys.size
       const total = data.baseEvents.length
       const q = total > 0 ? Math.round(((total - uniqueEdited) / total) * 100) : 0
 
-      // Calculate A/B/C scores using refinement extras from cache
+      // ── Module scores with corrected reviewerIds ─────────────────────────
       let refinements = {}
       try {
-        const cache = window.apollo?.client?.cache?.extract() || {}
+        const cache = window.apollo && window.apollo.client && window.apollo.client.cache.extract() || {}
         Object.values(cache).forEach(v => {
           if (v.__typename === 'Event' && v.category === 'refinement' && v.type === 'extras') {
-            const extras = Object.keys(v.payload?.fields || {}).filter(k => k !== 'extras')
+            const extras = Object.keys(v.payload && v.payload.fields || {}).filter(k => k !== 'extras')
             refinements[v.key] = extras
           }
         })
       } catch(e) {}
 
       const abc = {}
-      for (const [key, group] of Object.entries(REVIEW_GROUPS)) {
-        abc[key] = calcGroupScore(group, data.baseEvents, data.amendments, refinements, reviewerIds)
+      for (const key of Object.keys(REVIEW_GROUPS)) {
+        abc[key] = calcGroupScore(REVIEW_GROUPS[key], data.baseEvents, data.amendments, refinements, reviewerIds)
       }
-
-      // Per-event-type quality scores (e.g. "pass": 20 total, 10 errors → 50%)
       const eventTypeScores = calcEventTypeScores(data.baseEvents, data.amendments, reviewerIds)
-      // Seed the identity map from whatever the bridge already harvested
-      // (passive tap / prior sweep) plus the persistent roster.
+
       const seedIdentities = data.identities || []
       data.identityMap = buildIdentityMap(seedIdentities, rosterRef.current)
 
       setAbcScores(abc)
-      data.abcScores = abc      // keep on results so it survives report round-trips / remounts
+      data.abcScores = abc
       setResults(data)
       setScore(q)
 
-      // Save to Firebase
       if (!saved) {
         await saveToFirebase(data, q, abc)
         setSaved(true)
       }
 
-      // Auto-resolve EVERY collector/reviewer identity in the background — the
-      // bridge sweeps EventHistory so we no longer open each card by hand. Names
-      // fill in a moment after results render; resolved people are persisted to
-      // the roster so future audits show them instantly.
       const distinctAuthors = [...new Set([
         ...data.baseEvents.map(e => e.author),
         ...data.amendments.map(a => a.author),
@@ -1127,7 +1526,7 @@ export default function AuditPage({ session, onBack, onFullReport, initialResult
     }
   }
 
-  // ── Export CSV + cut error clips + upload all to Drive ───────────────────
+    // ── Export CSV + cut error clips + upload all to Drive ───────────────────
   async function handleExportAndUpload() {
     if (!results) return
 
@@ -1168,7 +1567,6 @@ export default function AuditPage({ session, onBack, onFullReport, initialResult
       const halfSafe  = safe(halfLabel)
 
       // ── Build the errors rows (same logic as AmendmentsTable) ────────────
-      const ASPECT_OF = { base:'Base', camera:'Base', extras:'Extra', location:'Location', players:'Players', deletion:'Base', added:'Base' }
       const baseByKey = {}
       ;(results.baseEvents || []).forEach(e => { baseByKey[e.key] = e })
       const reviewerSet = new Set(reviewerIds.map(Number))
@@ -1179,6 +1577,26 @@ export default function AuditPage({ session, onBack, onFullReport, initialResult
         amendsByKey[a.key].push(a)
       })
 
+      // Build refinements cache from Apollo
+      const refinementsCache = {}
+      try {
+        const apolloCache = window.apollo?.client?.cache?.extract() || {}
+        Object.values(apolloCache).forEach(v => {
+          if (v.__typename === 'Event' && v.category === 'refinement') {
+            const k = `${v.key}_${v.type}`
+            if (!refinementsCache[k]) refinementsCache[k] = v.payload || {}
+          }
+        })
+      } catch(e) {}
+
+      // Build lineup player map and team map
+      const lineupPlayerMap = {}
+      const teamMap = {}
+      ;(results.lineupPlayers || []).forEach(p => {
+        lineupPlayerMap[p.id] = { name: p.name, nickname: p.nickname, jersey: p.jersey, teamName: p.teamName || '', teamId: p.teamId }
+        teamMap[p.teamId] = p.teamName || ''
+      })
+
       const fmt = (sec) => {
         const t = Math.floor(sec)
         return `${String(Math.floor(t / 60)).padStart(2,'0')}:${String(t % 60).padStart(2,'0')}`
@@ -1187,26 +1605,113 @@ export default function AuditPage({ session, onBack, onFullReport, initialResult
       const errorRows = Object.entries(amendsByKey).map(([key, amends]) => {
         const base = baseByKey[key]
         const types = [...new Set(amends.map(a => a.type))]
-        const aspects = [...new Set(types.map(t => ASPECT_OF[t] || 'Base'))]
-        const editType = types.includes('added') ? 'Added' : types.includes('deletion') ? 'Deleted' : 'Wrong'
         const latestAmend = amends.sort((a,b) => (b.capturedTime||0)-(a.capturedTime||0))[0]
-        const before = amends.find(a => a.before)?.before || ''
-        const after  = amends.find(a => a.after)?.after  || ''
         const tsSec  = base?.videoTimestamp != null ? base.videoTimestamp / 1000 : null
-        const collDisplay = idMap[String(base?.author)]?.name || `Collector ${base?.author}`
+
+        // Error type classification
+        const hasDeletion = types.includes('deletion')
+        const rep = results.replacementMap?.[key]
+        let errorType = 'wrong-event'
+        if (hasDeletion && rep) errorType = rep.renamed ? 'rename' : 'replacement'
+        else if (hasDeletion) errorType = 'deletion'
+        else if (types.includes('freeze-frame')) errorType = 'freeze-frame'
+        else if (types.includes('goal-location')) errorType = 'goal-location'
+        else if (types.includes('squad')) errorType = 'squad'
+        else if (types.includes('players')) errorType = 'wrong-player'
+        else if (types.includes('location')) errorType = 'wrong-location'
+        else if (types.includes('extras') || types.includes('impact')) errorType = 'wrong-extras'
+        else if (types.includes('base')) {
+          const ba = amends.find(a => a.type === 'base')
+          const tsChanged = ba?.payload?.videoTimestamp != null && ba.payload.videoTimestamp !== base?.videoTimestamp
+          const nameChanged = ba?.payload?.name && ba.payload.name !== base?.name
+          if (tsChanged && !nameChanged) errorType = 'wrong-timestamp'
+        }
+
+        const errorLabels = {
+          'deletion':'Deleted','rename':'Wrong event','replacement':'Replaced',
+          'wrong-event':'Wrong event','wrong-timestamp':'Wrong timestamp',
+          'wrong-extras':'Wrong extras','wrong-location':'Wrong location',
+          'wrong-player':'Wrong player','freeze-frame':'Freeze frame',
+          'goal-location':'Goal location','squad':'Squad','added':'Missed event',
+        }
+        const moduleLabels = {
+          'deletion':'Base','rename':'Base','replacement':'Base','wrong-event':'Base',
+          'wrong-timestamp':'Base','added':'Base','wrong-extras':'Extras',
+          'wrong-location':'Location','wrong-player':'Players',
+          'freeze-frame':'Freeze Frame','goal-location':'Goal Location','squad':'Squad',
+        }
+
+        // Before/After strings
+        let beforeStr = '—', afterStr = '—'
+        if (errorType === 'deletion') {
+          beforeStr = base?.name || '—'; afterStr = 'Deleted'
+        } else if (errorType === 'rename') {
+          beforeStr = base?.name || '—'; afterStr = rep?.addedEvent?.name || '—'
+        } else if (errorType === 'replacement') {
+          beforeStr = base?.name || '—'; afterStr = rep?.addedEvent?.name || base?.name || '—'
+        } else if (errorType === 'wrong-extras') {
+          const refFields = refinementsCache?.[`${key}_extras`]?.fields || refinementsCache?.[`${key}_impact`]?.fields
+          const amendFields = amends.find(a => a.type === 'extras' || a.type === 'impact')?.payload?.fields
+          const changedKeys = Object.keys({...(refFields||{}), ...(amendFields||{})}).filter(k => JSON.stringify(refFields?.[k]) !== JSON.stringify(amendFields?.[k]))
+          beforeStr = changedKeys.map(k => { const v = refFields?.[k]; return `${k}: ${Array.isArray(v)?v.join(','):v}` }).join(' | ') || '—'
+          afterStr  = changedKeys.map(k => { const v = amendFields?.[k]; return `${k}: ${Array.isArray(v)?v.join(','):v}` }).join(' | ') || '—'
+        } else if (errorType === 'wrong-location') {
+          const refLoc = refinementsCache?.[`${key}_location`]?.location?.actual
+          const amendLoc = amends.find(a => a.type === 'location')?.payload?.location?.actual
+          beforeStr = refLoc ? `x:${refLoc.x?.toFixed(2)} y:${refLoc.y?.toFixed(2)}` : '—'
+          afterStr  = amendLoc ? `x:${amendLoc.x?.toFixed(2)} y:${amendLoc.y?.toFixed(2)}` : '—'
+        } else if (errorType === 'wrong-player') {
+          const refPlayers = refinementsCache?.[`${key}_players`]?.players || {}
+          const amendPlayers = amends.find(a => a.type === 'players')?.payload?.players || {}
+          const roleMap = { playerId:'Main', secondaryPlayerId:'Secondary', thirdPlayerId:'Third' }
+          const changedRoles = Object.keys({...refPlayers,...amendPlayers}).filter(r => refPlayers[r] !== amendPlayers[r])
+          const pName = (id) => id == null ? 'Missing' : (lineupPlayerMap[id] ? `#${lineupPlayerMap[id].jersey} ${lineupPlayerMap[id].nickname||lineupPlayerMap[id].name} (${lineupPlayerMap[id].teamName})` : `id:${id}`)
+          beforeStr = changedRoles.map(r => `${roleMap[r]||r}: ${pName(refPlayers[r])}`).join(' | ') || '—'
+          afterStr  = changedRoles.map(r => `${roleMap[r]||r}: ${pName(amendPlayers[r])}`).join(' | ') || '—'
+        } else if (errorType === 'wrong-timestamp') {
+          const ba = amends.find(a => a.type === 'base')
+          beforeStr = tsSec !== null ? fmt(tsSec) : '—'
+          afterStr  = ba?.payload?.videoTimestamp != null ? fmt(ba.payload.videoTimestamp / 1000) : '—'
+        } else if (errorType === 'freeze-frame') {
+          const refFF = refinementsCache?.[`${key}_freeze-frame`]?.freezeFrame
+          const amendFF = amends.find(a => a.type === 'freeze-frame')?.payload?.freezeFrame
+          const getFFP = (players, roles, role) => {
+            const idx = (roles?.[role]||[])[0]
+            if (idx == null) return 'Not set'
+            const p = players?.[idx]
+            const info = p?.playerId ? lineupPlayerMap[p.playerId] : null
+            return info ? `#${info.jersey} ${info.nickname||info.name}` : 'Not identified'
+          }
+          beforeStr = `Keeper: ${getFFP(refFF?.players, refFF?.roles, 'keeper')} · Shooter: ${getFFP(refFF?.players, refFF?.roles, 'shooter')}`
+          afterStr  = `Keeper: ${getFFP(amendFF?.players, amendFF?.roles, 'keeper')} · Shooter: ${getFFP(amendFF?.players, amendFF?.roles, 'shooter')}`
+        } else if (errorType === 'goal-location') {
+          const refGL = refinementsCache?.[`${key}_goal-location`]?.['goal-location']
+          const amendGL = amends.find(a => a.type === 'goal-location')?.payload?.['goal-location']
+          beforeStr = refGL ? `x:${refGL.x} y:${refGL.y}` : '—'
+          afterStr  = amendGL ? `x:${amendGL.x} y:${amendGL.y}` : '—'
+        } else if (errorType === 'squad') {
+          const sq = amends.find(a => a.type === 'squad')
+          beforeStr = base?.payload?.formation || '—'
+          afterStr  = sq?.payload?.formation || '—'
+        }
+
+        const teamName = base?.teamId ? (teamMap[base.teamId] || String(base.teamId)) : '—'
+        const collId = idMap[String(base?.author)] || {}
+        const revId  = idMap[String(latestAmend?.author)] || {}
+
         return {
           key,
           eventName: base?.name || '—',
           timestamp: tsSec !== null ? fmt(tsSec) : '—',
           tsSec,
-          teamId: base?.teamId || '—',
-          types,
-          aspects,
-          editType,
-          before,
-          after,
-          collectorDisplay: collDisplay,
-          reviewerName,
+          teamName,
+          errorTypeLabel: errorLabels[errorType] || errorType,
+          module: moduleLabels[errorType] || 'Base',
+          beforeStr, afterStr,
+          collectorHr: collId.hrcode || collId.hrCode || String(base?.author || '—'),
+          collectorName: collId.name || '',
+          reviewerHr: revId.hrcode || revId.hrCode || String(latestAmend?.author || '—'),
+          reviewerName: revId.name || reviewerName,
           capturedTime: latestAmend?.capturedTime ? new Date(latestAmend.capturedTime).toISOString() : '',
         }
       }).sort((a, b) => (a.tsSec ?? 0) - (b.tsSec ?? 0))
@@ -1235,13 +1740,13 @@ export default function AuditPage({ session, onBack, onFullReport, initialResult
       }
       csvLines.push([]) // blank line separator
 
-      // Errors table header
-      csvLines.push(['Match ID','Match Name','Half','Timestamp','Event Name','Team','Aspect','Edit Type','Before','After','Collector','Reviewer','Captured At'].map(csvQ).join(','))
+      // Errors table header — matches approved table design
+      csvLines.push(['Match ID','Match Name','Half','Timestamp','Event Name','Team','Error Type','Module','Before','After','Collector HR','Collector Name','Reviewer HR','Reviewer Name','Captured At'].map(csvQ).join(','))
       errorRows.forEach(r => {
         csvLines.push([
           session.matchId, session.matchName, halfLabel, r.timestamp,
-          r.eventName, r.teamId, r.aspects.join(' + '), r.editType,
-          r.before, r.after, r.collectorDisplay, r.reviewerName, r.capturedTime,
+          r.eventName, r.teamName, r.errorTypeLabel, r.module,
+          r.beforeStr, r.afterStr, r.collectorHr, r.collectorName, r.reviewerHr, r.reviewerName, r.capturedTime,
         ].map(csvQ).join(','))
       })
       const csvContent = csvLines.map(l => Array.isArray(l) ? '' : l).join('\r\n')
@@ -1255,7 +1760,7 @@ export default function AuditPage({ session, onBack, onFullReport, initialResult
       const clipDefs = clipsWithTs.map(r => {
         const evtSafe = safe(r.eventName).slice(0, 40)
         const tsFmt   = r.timestamp.replace(':', 'm') + 's'
-        const errSafe = safe(r.editType + '_' + r.aspects.join('_')).slice(0, 30)
+        const errSafe = safe(r.errorTypeLabel || r.module || 'error').slice(0, 30)
         return { ts: r.tsSec, name: `${evtSafe}_${tsFmt}_${errSafe}.mp4` }
       })
 
