@@ -442,7 +442,7 @@ fn patch_one_shortcut(lnk_path: &std::path::Path) -> Result<bool, String> {
 // marker) does not match, so it gets stripped and replaced — that's what was
 // previously frozen by a fixed marker. Bump this whenever the embedded bridge
 // changes so existing installs re-embed the new version.
-const ASAR_MARKER: &str = "<!-- MARK_BRIDGE_INJECTED v7.5.27 -->";
+const ASAR_MARKER: &str = "<!-- MARK_BRIDGE_INJECTED v7.5.28 -->";
 
 #[command]
 fn patch_tag_once_asar() -> Result<String, String> {
@@ -1584,48 +1584,48 @@ async fn upload_csv_as_sheet(
     let web_link = upload_resp["webViewLink"].as_str().unwrap_or("").to_string();
     if sheet_id.is_empty() { return Ok(web_link); }
 
+    // ── Get actual sheet tab ID (not always 0 after CSV import) ──────────────
+    let sheet_meta_url = format!(
+        "https://sheets.googleapis.com/v4/spreadsheets/{}?fields=sheets.properties.sheetId",
+        sheet_id
+    );
+    let meta_resp: serde_json::Value = client
+        .get(&sheet_meta_url)
+        .header("Authorization", format!("Bearer {}", token))
+        .send()
+        .await
+        .map_err(|e| format!("Sheet meta failed: {}", e))?
+        .json()
+        .await
+        .unwrap_or(serde_json::json!({}));
+    let tab_id = meta_resp["sheets"]
+        .as_array()
+        .and_then(|s| s.first())
+        .and_then(|s| s["properties"]["sheetId"].as_i64())
+        .unwrap_or(0);
+
     // ── Apply MARK visual formatting via Sheets batchUpdate ──────────────────
-    // Row 1 = summary title (orange bg, white bold text)
-    // Row 15 = errors table header (dark bg, orange bold text)
-    // Rows 16+ = data rows (alternating dark/darker)
     let format_url = format!("https://sheets.googleapis.com/v4/spreadsheets/{}/batchUpdate", sheet_id);
     let requests = serde_json::json!({
         "requests": [
-            // Freeze first row
-            { "updateSheetProperties": { "properties": { "sheetId": 0, "gridProperties": { "frozenRowCount": 1 } }, "fields": "gridProperties.frozenRowCount" } },
-            // Row 1: summary header — orange background (#E8590C), white bold
+            // Freeze row 1
+            { "updateSheetProperties": {
+                "properties": { "sheetId": tab_id, "gridProperties": { "frozenRowCount": 1 } },
+                "fields": "gridProperties.frozenRowCount"
+            }},
+            // Row 1 (index 0): AUDIT SESSION SUMMARY — orange bg, white bold
             { "repeatCell": {
-                "range": { "sheetId": 0, "startRowIndex": 0, "endRowIndex": 1 },
+                "range": { "sheetId": tab_id, "startRowIndex": 0, "endRowIndex": 1 },
                 "cell": { "userEnteredFormat": {
                     "backgroundColor": { "red": 0.910, "green": 0.349, "blue": 0.047 },
-                    "textFormat": { "foregroundColor": { "red": 1.0, "green": 1.0, "blue": 1.0 }, "bold": true, "fontSize": 11 },
+                    "textFormat": { "foregroundColor": { "red": 1.0, "green": 1.0, "blue": 1.0 }, "bold": true, "fontSize": 12 },
                     "horizontalAlignment": "LEFT"
                 }},
                 "fields": "userEnteredFormat(backgroundColor,textFormat,horizontalAlignment)"
             }},
-            // Row 15 (index 14): errors table header — very dark (#0F0F0F), orange text bold
+            // Rows 2-14 (index 1-13): summary data — dark bg, muted text
             { "repeatCell": {
-                "range": { "sheetId": 0, "startRowIndex": 14, "endRowIndex": 15 },
-                "cell": { "userEnteredFormat": {
-                    "backgroundColor": { "red": 0.059, "green": 0.059, "blue": 0.059 },
-                    "textFormat": { "foregroundColor": { "red": 0.910, "green": 0.349, "blue": 0.047 }, "bold": true, "fontSize": 10 },
-                    "horizontalAlignment": "LEFT"
-                }},
-                "fields": "userEnteredFormat(backgroundColor,textFormat,horizontalAlignment)"
-            }},
-            // Data rows (16 onwards, index 15+): dark bg (#141414), light text
-            { "repeatCell": {
-                "range": { "sheetId": 0, "startRowIndex": 15, "endRowIndex": 500 },
-                "cell": { "userEnteredFormat": {
-                    "backgroundColor": { "red": 0.078, "green": 0.078, "blue": 0.078 },
-                    "textFormat": { "foregroundColor": { "red": 0.88, "green": 0.88, "blue": 0.88 }, "fontSize": 10 },
-                    "horizontalAlignment": "LEFT"
-                }},
-                "fields": "userEnteredFormat(backgroundColor,textFormat,horizontalAlignment)"
-            }},
-            // Summary rows (2-13): slightly lighter dark (#1A1A1A)
-            { "repeatCell": {
-                "range": { "sheetId": 0, "startRowIndex": 1, "endRowIndex": 14 },
+                "range": { "sheetId": tab_id, "startRowIndex": 1, "endRowIndex": 14 },
                 "cell": { "userEnteredFormat": {
                     "backgroundColor": { "red": 0.102, "green": 0.102, "blue": 0.102 },
                     "textFormat": { "foregroundColor": { "red": 0.78, "green": 0.78, "blue": 0.78 }, "fontSize": 10 },
@@ -1633,16 +1633,50 @@ async fn upload_csv_as_sheet(
                 }},
                 "fields": "userEnteredFormat(backgroundColor,textFormat,horizontalAlignment)"
             }},
+            // Rows 14-15 (index 13-14): blank separator
+            { "repeatCell": {
+                "range": { "sheetId": tab_id, "startRowIndex": 13, "endRowIndex": 15 },
+                "cell": { "userEnteredFormat": {
+                    "backgroundColor": { "red": 0.063, "green": 0.063, "blue": 0.063 },
+                    "textFormat": { "foregroundColor": { "red": 0.4, "green": 0.4, "blue": 0.4 }, "fontSize": 10 }
+                }},
+                "fields": "userEnteredFormat(backgroundColor,textFormat)"
+            }},
+            // Row 16 (index 15): errors table column headers — near-black, orange bold
+            { "repeatCell": {
+                "range": { "sheetId": tab_id, "startRowIndex": 15, "endRowIndex": 16 },
+                "cell": { "userEnteredFormat": {
+                    "backgroundColor": { "red": 0.059, "green": 0.059, "blue": 0.059 },
+                    "textFormat": { "foregroundColor": { "red": 0.910, "green": 0.349, "blue": 0.047 }, "bold": true, "fontSize": 10 },
+                    "horizontalAlignment": "LEFT"
+                }},
+                "fields": "userEnteredFormat(backgroundColor,textFormat,horizontalAlignment)"
+            }},
+            // Rows 17+ (index 16+): data rows — dark bg, light grey text
+            { "repeatCell": {
+                "range": { "sheetId": tab_id, "startRowIndex": 16, "endRowIndex": 1000 },
+                "cell": { "userEnteredFormat": {
+                    "backgroundColor": { "red": 0.078, "green": 0.078, "blue": 0.078 },
+                    "textFormat": { "foregroundColor": { "red": 0.86, "green": 0.86, "blue": 0.86 }, "fontSize": 10 },
+                    "horizontalAlignment": "LEFT"
+                }},
+                "fields": "userEnteredFormat(backgroundColor,textFormat,horizontalAlignment)"
+            }},
             // Auto-resize all columns
-            { "autoResizeDimensions": { "dimensions": { "sheetId": 0, "dimension": "COLUMNS", "startIndex": 0, "endIndex": 15 } } }
+            { "autoResizeDimensions": {
+                "dimensions": { "sheetId": tab_id, "dimension": "COLUMNS", "startIndex": 0, "endIndex": 15 }
+            }}
         ]
     });
-    let _ = client
+    let fmt_result = client
         .post(&format_url)
         .header("Authorization", format!("Bearer {}", token))
         .json(&requests)
         .send()
         .await;
+    if let Err(e) = fmt_result {
+        eprintln!("[MARK] Sheet format warning: {}", e);
+    }
     Ok(web_link)
 }
 

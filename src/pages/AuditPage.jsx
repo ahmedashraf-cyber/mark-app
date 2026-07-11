@@ -1645,8 +1645,11 @@ export default function AuditPage({ session, onBack, onFullReport, initialResult
       })
 
       const fmt = (sec) => {
-        const t = Math.floor(sec)
-        return `${String(Math.floor(t / 60)).padStart(2,'0')}:${String(t % 60).padStart(2,'0')}`
+        const ms = Math.round(sec * 1000)
+        const min = Math.floor(ms / 60000)
+        const s = Math.floor((ms % 60000) / 1000)
+        const millis = ms % 1000
+        return `${String(min).padStart(2,'0')}:${String(s).padStart(2,'0')}.${String(millis).padStart(3,'0')}`
       }
 
       const errorRows = Object.entries(amendsByKey).map(([key, amends]) => {
