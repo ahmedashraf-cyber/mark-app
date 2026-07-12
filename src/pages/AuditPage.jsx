@@ -1879,6 +1879,53 @@ export default function AuditPage({ session, onBack, onFullReport, initialResult
       const folderUrl = `https://drive.google.com/drive/folders/${subFolderId}`
       setExportState({ phase: 'done', step: total, total, done: true, driveLink: folderUrl })
 
+      // ── Send report email via Google Drive share notification ─────────────
+      // Fires automatically after upload — Google emails each recipient a
+      // "shared with you" link to a Google Doc containing the quality report.
+      // TO: collector + collector team leader
+      // CC: reviewer + reviewer's QTL
+      // ⚠️  Recipients are placeholders until people data is ready.
+      //     Replace TO_EMAILS and CC_EMAILS with real lookups when data arrives.
+      try {
+        // Build errors-by-type map
+        const errorTypes = {}
+        filteredAmends.forEach(a => {
+          errorTypes[a.type] = (errorTypes[a.type] || 0) + 1
+        })
+
+        // ── PLACEHOLDER recipients — replace with real lookups later ──────
+        const TO_EMAILS = '' // e.g. collector@gmail.com,teamleader@gmail.com
+        const CC_EMAILS = '' // e.g. reviewer@gmail.com,qtl@gmail.com
+
+        if (TO_EMAILS || CC_EMAILS) {
+          const emailResult = await invoke('send_report_email', {
+            token,
+            matchName:     session.matchName || '',
+            matchId:       String(session.matchId || ''),
+            half:          halfLabel,
+            overallScore:  score ?? 0,
+            scoreA:        abcScores?.A?.score ?? 0,
+            scoreB:        abcScores?.B?.score ?? 0,
+            scoreC:        abcScores?.C?.score ?? 0,
+            totalErrors:   filteredAmends.length,
+            errorsByType:  JSON.stringify(errorTypes),
+            collectorName: collectorName,
+            collectorHr:   collectorHr,
+            reviewerName:  reviewerName,
+            reviewerHr:    results.reviewerHrCode || reviewerHr || '',
+            folderUrl,
+            toEmails:      TO_EMAILS,
+            ccEmails:      CC_EMAILS,
+          })
+          console.log('[MARK] Report email:', emailResult)
+        } else {
+          console.log('[MARK] Report email skipped — no recipients configured yet')
+        }
+      } catch(emailErr) {
+        // Never block the UI for email failures
+        console.warn('[MARK] Report email failed (non-blocking):', emailErr)
+      }
+
     } catch(e) {
       setExportState(null)
       setError('Export failed: ' + e.message)

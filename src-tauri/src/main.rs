@@ -442,7 +442,7 @@ fn patch_one_shortcut(lnk_path: &std::path::Path) -> Result<bool, String> {
 // marker) does not match, so it gets stripped and replaced — that's what was
 // previously frozen by a fixed marker. Bump this whenever the embedded bridge
 // changes so existing installs re-embed the new version.
-const ASAR_MARKER: &str = "<!-- MARK_BRIDGE_INJECTED v7.5.28 -->";
+const ASAR_MARKER: &str = "<!-- MARK_BRIDGE_INJECTED v7.5.29 -->";
 
 #[command]
 fn patch_tag_once_asar() -> Result<String, String> {
@@ -792,7 +792,7 @@ const OAUTH_CLIENT_ID: &str =
 fn oauth_client_secret() -> &'static str {
     option_env!("MARK_GOOGLE_CLIENT_SECRET").unwrap_or("")
 }
-const OAUTH_SCOPE: &str = "https://www.googleapis.com/auth/drive.file openid email";
+const OAUTH_SCOPE: &str = "https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/documents openid email";
 
 // Open the browser, run the loopback OAuth flow, return the token JSON
 // (access_token, refresh_token, expires_in, ...).
@@ -1427,6 +1427,222 @@ fn get_userprofile() -> Result<String, String> {
     std::env::var("USERPROFILE").map_err(|_| "USERPROFILE not set".to_string())
 }
 
+// ─── Send report email via Google Drive share notification ───────────────────
+// Creates a Google Doc with the match quality report (EN + AR), then shares it
+// with each recipient — Google's own servers send the "shared with you" email.
+// No SMTP, no EmailJS, no third-party service — completely free and unlimited.
+#[command]
+async fn send_report_email(
+    token: String,
+    // Match info
+    match_name: String,
+    match_id: String,
+    half: String,
+    // Scores
+    overall_score: f64,
+    score_a: f64,
+    score_b: f64,
+    score_c: f64,
+    total_errors: u32,
+    // Errors by type as JSON string: {"deletion":2,"rename":1,...}
+    errors_by_type: String,
+    // People
+    collector_name: String,
+    collector_hr: String,
+    reviewer_name: String,
+    reviewer_hr: String,
+    // Drive folder link
+    folder_url: String,
+    // Recipients — comma-separated emails
+    to_emails: String,
+    cc_emails: String,
+) -> Result<String, String> {
+    let client = reqwest::Client::new();
+
+    // ── 1. Build the report text (English + Arabic) ───────────────────────
+    let errors_map: serde_json::Value = serde_json::from_str(&errors_by_type)
+        .unwrap_or(serde_json::json!({}));
+
+    let error_type_labels = vec![
+        ("deletion",       "Deletion / حذف"),
+        ("added",          "Added / إضافة"),
+        ("rename",         "Rename / إعادة تسمية"),
+        ("wrong-event",    "Wrong Event / حدث خاطئ"),
+        ("wrong-timestamp","Wrong Timestamp / توقيت خاطئ"),
+        ("wrong-extras",   "Wrong Extras / بيانات إضافية خاطئة"),
+        ("wrong-location", "Wrong Location / موقع خاطئ"),
+        ("wrong-player",   "Wrong Player / لاعب خاطئ"),
+        ("replacement",    "Replacement / استبدال"),
+        ("freeze-frame",   "Freeze Frame / إطار ثابت"),
+        ("goal-location",  "Goal Location / موقع الهدف"),
+        ("squad",          "Squad / التشكيلة"),
+    ];
+
+    let mut error_lines = String::new();
+    for (key, label) in &error_type_labels {
+        if let Some(count) = errors_map.get(key).and_then(|v| v.as_u64()) {
+            if count > 0 {
+                error_lines.push_str(&format!("  • {} — {}\n", label, count));
+            }
+        }
+    }
+    if error_lines.is_empty() {
+        error_lines = "  No errors recorded / لا توجد أخطاء\n".to_string();
+    }
+
+    let doc_text = format!(
+"MATCH QUALITY REPORT — تقرير جودة المباراة
+============================================
+
+Match / المباراة: {match_name} ({half})
+Match ID: {match_id}
+
+Collector / المجمع: {collector_name} ({collector_hr})
+Reviewer / المراجع: {reviewer_name} ({reviewer_hr})
+
+────────────────────────────────────────────
+QUALITY SCORES — درجات الجودة
+────────────────────────────────────────────
+
+Overall Score / الدرجة الكلية:  {overall_score:.1}%
+  A-Review Score:               {score_a:.1}%
+  B-Review Score:               {score_b:.1}%
+  C-Review Score:               {score_c:.1}%
+
+Total Errors / إجمالي الأخطاء: {total_errors}
+
+────────────────────────────────────────────
+ERRORS BY TYPE — الأخطاء حسب النوع
+────────────────────────────────────────────
+
+{error_lines}
+────────────────────────────────────────────
+DRIVE FOLDER — مجلد الملفات
+────────────────────────────────────────────
+
+{folder_url}
+
+(Contains the full error CSV + video clips)
+(يحتوي على ملف الأخطاء الكامل ومقاطع الفيديو)
+",
+        match_name = match_name,
+        half = half,
+        match_id = match_id,
+        collector_name = collector_name,
+        collector_hr = collector_hr,
+        reviewer_name = reviewer_name,
+        reviewer_hr = reviewer_hr,
+        overall_score = overall_score,
+        score_a = score_a,
+        score_b = score_b,
+        score_c = score_c,
+        total_errors = total_errors,
+        error_lines = error_lines,
+        folder_url = folder_url,
+    );
+
+    let doc_title = format!("Quality Report — {} {} [{}]", match_name, half, match_id);
+
+    // ── 2. Create the Google Doc ──────────────────────────────────────────
+    let create_res: serde_json::Value = client
+        .post("https://docs.googleapis.com/v1/documents")
+        .header("Authorization", format!("Bearer {}", token))
+        .json(&serde_json::json!({ "title": doc_title }))
+        .send()
+        .await
+        .map_err(|e| format!("Doc create request failed: {}", e))?
+        .json()
+        .await
+        .map_err(|e| format!("Doc create parse failed: {}", e))?;
+
+    if create_res.get("error").is_some() {
+        return Err(format!("Doc create error: {}", create_res));
+    }
+
+    let doc_id = create_res["documentId"]
+        .as_str()
+        .ok_or("No documentId in response")?
+        .to_string();
+
+    // ── 3. Insert the report text into the doc ────────────────────────────
+    let insert_req = serde_json::json!({
+        "requests": [{
+            "insertText": {
+                "location": { "index": 1 },
+                "text": doc_text
+            }
+        }]
+    });
+
+    let _insert_res: serde_json::Value = client
+        .post(format!("https://docs.googleapis.com/v1/documents/{}/batchUpdate", doc_id))
+        .header("Authorization", format!("Bearer {}", token))
+        .json(&insert_req)
+        .send()
+        .await
+        .map_err(|e| format!("Doc insert failed: {}", e))?
+        .json()
+        .await
+        .map_err(|e| format!("Doc insert parse failed: {}", e))?;
+
+    // ── 4. Share with each recipient — this triggers Google's email ───────
+    let parse_emails = |raw: &str| -> Vec<String> {
+        raw.split(',')
+            .map(|s| s.trim().to_lowercase())
+            .filter(|s| s.contains('@') && s.contains('.'))
+            .collect()
+    };
+
+    let to_list = parse_emails(&to_emails);
+    let cc_list = parse_emails(&cc_emails);
+    let all_recipients: Vec<String> = to_list.into_iter().chain(cc_list.into_iter()).collect();
+
+    let share_url = format!(
+        "https://www.googleapis.com/drive/v3/files/{}/permissions?sendNotificationEmail=true",
+        doc_id
+    );
+
+    let mut shared = 0u32;
+    let mut failed: Vec<String> = Vec::new();
+
+    for email in &all_recipients {
+        let perm = serde_json::json!({
+            "type": "user",
+            "role": "reader",
+            "emailAddress": email
+        });
+        let res: serde_json::Value = client
+            .post(&share_url)
+            .header("Authorization", format!("Bearer {}", token))
+            .json(&perm)
+            .send()
+            .await
+            .map_err(|e| format!("Share request failed for {}: {}", email, e))?
+            .json()
+            .await
+            .map_err(|e| format!("Share parse failed for {}: {}", email, e))?;
+
+        if res.get("error").is_some() {
+            failed.push(format!("{}: {}", email, res["error"]["message"].as_str().unwrap_or("unknown")));
+        } else {
+            shared += 1;
+        }
+    }
+
+    let doc_url = format!("https://docs.google.com/document/d/{}/edit", doc_id);
+
+    if failed.is_empty() {
+        Ok(format!("✅ Report sent to {} recipients. Doc: {}", shared, doc_url))
+    } else {
+        Ok(format!(
+            "⚠️ Sent to {}/{} recipients. Failures: {}. Doc: {}",
+            shared, all_recipients.len(),
+            failed.join("; "),
+            doc_url
+        ))
+    }
+}
+
 // ─── Drive: create a folder inside a parent folder ───────────────────────────
 #[command]
 async fn drive_create_folder(
@@ -1714,6 +1930,7 @@ fn save_text_file(path: String, content: String) -> Result<(), String> {
             save_text_file,
             get_google_access_token_cmd,
             get_userprofile,
+            send_report_email,
         ])
         .run(tauri::generate_context!())
         .expect("error while running MARK");
