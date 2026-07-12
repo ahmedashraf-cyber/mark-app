@@ -442,7 +442,7 @@ fn patch_one_shortcut(lnk_path: &std::path::Path) -> Result<bool, String> {
 // marker) does not match, so it gets stripped and replaced — that's what was
 // previously frozen by a fixed marker. Bump this whenever the embedded bridge
 // changes so existing installs re-embed the new version.
-const ASAR_MARKER: &str = "<!-- MARK_BRIDGE_INJECTED v7.5.29 -->";
+const ASAR_MARKER: &str = "<!-- MARK_BRIDGE_INJECTED v7.5.30 -->";
 
 #[command]
 fn patch_tag_once_asar() -> Result<String, String> {
@@ -792,7 +792,14 @@ const OAUTH_CLIENT_ID: &str =
 fn oauth_client_secret() -> &'static str {
     option_env!("MARK_GOOGLE_CLIENT_SECRET").unwrap_or("")
 }
+// Sender account refresh token — injected at BUILD time from MARK_GMAIL_SENDER_REFRESH
+// This is the hudl.quality.egypt@gmail.com refresh token obtained via one-time OAuth.
+fn sender_refresh_token() -> &'static str {
+    option_env!("MARK_GMAIL_SENDER_REFRESH").unwrap_or("")
+}
+const SENDER_EMAIL: &str = "hudl.quality.egypt@gmail.com";
 const OAUTH_SCOPE: &str = "https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/documents openid email";
+const GMAIL_SCOPE: &str = "https://www.googleapis.com/auth/gmail.send openid email";
 
 // Open the browser, run the loopback OAuth flow, return the token JSON
 // (access_token, refresh_token, expires_in, ...).
@@ -1427,6 +1434,268 @@ fn get_userprofile() -> Result<String, String> {
     std::env::var("USERPROFILE").map_err(|_| "USERPROFILE not set".to_string())
 }
 
+// ─── One-time OAuth flow for the sender account (hudl.quality.egypt@gmail.com) ─
+// Opens the browser, asks the user to sign in as the sender account, and returns
+// the refresh token. Store this token as MARK_GMAIL_SENDER_REFRESH in GitHub secrets.
+#[command]
+async fn connect_sender_account() -> Result<String, String> {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .map_err(|e| format!("Local server failed: {}", e))?;
+    let port = listener.local_addr().map_err(|e| e.to_string())?.port();
+    let redirect_uri = format!("http://127.0.0.1:{}", port);
+
+    let auth_url = format!(
+        "https://accounts.google.com/o/oauth2/v2/auth?client_id={}&redirect_uri={}&response_type=code&scope={}&access_type=offline&prompt=consent",
+        urlencoding::encode(OAUTH_CLIENT_ID),
+        urlencoding::encode(&redirect_uri),
+        urlencoding::encode(GMAIL_SCOPE),
+    );
+
+    #[cfg(target_os = "windows")]
+    {
+        let _ = std::process::Command::new("rundll32")
+            .args(["url.dll,FileProtocolHandler", &auth_url])
+            .spawn();
+    }
+
+    let (mut stream, _) = listener.accept().await.map_err(|e| e.to_string())?;
+    let mut buf = vec![0u8; 4096];
+    let n = stream.read(&mut buf).await.map_err(|e| e.to_string())?;
+    let req = String::from_utf8_lossy(&buf[..n]);
+    let code = req
+        .lines()
+        .next()
+        .and_then(|l| l.split_whitespace().nth(1))
+        .and_then(|path| {
+            path.split('?').nth(1).and_then(|q| {
+                q.split('&').find_map(|p| {
+                    let mut kv = p.splitn(2, '=');
+                    if kv.next() == Some("code") { kv.next().map(|v| urlencoding::decode(v).unwrap_or_default().into_owned()) } else { None }
+                })
+            })
+        })
+        .ok_or("No auth code in callback")?;
+
+    let html = b"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n\r\n<html><body style='font-family:sans-serif;text-align:center;padding:60px'><h2>✅ Sender account connected!</h2><p>You can close this tab and return to MARK.</p></body></html>";
+    let _ = stream.write_all(html).await;
+
+    let client = reqwest::Client::new();
+    let resp: serde_json::Value = client
+        .post("https://oauth2.googleapis.com/token")
+        .form(&[
+            ("code", code.as_str()),
+            ("client_id", OAUTH_CLIENT_ID),
+            ("client_secret", oauth_client_secret()),
+            ("redirect_uri", redirect_uri.as_str()),
+            ("grant_type", "authorization_code"),
+        ])
+        .send()
+        .await
+        .map_err(|e| format!("Token exchange failed: {}", e))?
+        .json()
+        .await
+        .map_err(|e| format!("Token parse failed: {}", e))?;
+
+    let refresh = resp["refresh_token"].as_str()
+        .ok_or_else(|| format!("No refresh_token in response: {}", resp))?
+        .to_string();
+
+    Ok(format!("✅ Connected! Refresh token (save as MARK_GMAIL_SENDER_REFRESH secret):\n\n{}", refresh))
+}
+
+// ─── Get a fresh access token for the sender account ─────────────────────────
+async fn get_sender_access_token() -> Result<String, String> {
+    let stored_refresh = sender_refresh_token();
+    if stored_refresh.is_empty() {
+        return Err("Sender account not connected — run connect_sender_account first".to_string());
+    }
+    let client = reqwest::Client::new();
+    let resp: serde_json::Value = client
+        .post("https://oauth2.googleapis.com/token")
+        .form(&[
+            ("client_id", OAUTH_CLIENT_ID),
+            ("client_secret", oauth_client_secret()),
+            ("refresh_token", stored_refresh),
+            ("grant_type", "refresh_token"),
+        ])
+        .send()
+        .await
+        .map_err(|e| format!("Sender token refresh failed: {}", e))?
+        .json()
+        .await
+        .map_err(|e| format!("Sender token parse failed: {}", e))?;
+
+    resp["access_token"]
+        .as_str()
+        .map(|s| s.to_string())
+        .ok_or_else(|| format!("No access_token: {}", resp))
+}
+
+// ─── Send quality report email via Gmail API ──────────────────────────────────
+// Sends from hudl.quality.egypt@gmail.com using the pre-authorized refresh token.
+// Plain text body in English + Arabic. No doc created, no third-party service.
+#[command]
+async fn send_gmail_report(
+    match_name: String,
+    match_id: String,
+    half: String,
+    overall_score: f64,
+    score_a: f64,
+    score_b: f64,
+    score_c: f64,
+    total_errors: u32,
+    errors_by_type: String,
+    collector_name: String,
+    collector_hr: String,
+    reviewer_name: String,
+    reviewer_hr: String,
+    folder_url: String,
+    to_emails: String,
+    cc_emails: String,
+) -> Result<String, String> {
+    let token = get_sender_access_token().await?;
+    let client = reqwest::Client::new();
+
+    // ── Build error breakdown lines ───────────────────────────────────────
+    let errors_map: serde_json::Value = serde_json::from_str(&errors_by_type)
+        .unwrap_or(serde_json::json!({}));
+
+    let error_type_labels = vec![
+        ("deletion",        "Deletion / حذف"),
+        ("added",           "Added / إضافة"),
+        ("rename",          "Rename / إعادة تسمية"),
+        ("wrong-event",     "Wrong Event / حدث خاطئ"),
+        ("wrong-timestamp", "Wrong Timestamp / توقيت خاطئ"),
+        ("wrong-extras",    "Wrong Extras / بيانات إضافية خاطئة"),
+        ("wrong-location",  "Wrong Location / موقع خاطئ"),
+        ("wrong-player",    "Wrong Player / لاعب خاطئ"),
+        ("replacement",     "Replacement / استبدال"),
+        ("freeze-frame",    "Freeze Frame / إطار ثابت"),
+        ("goal-location",   "Goal Location / موقع الهدف"),
+        ("squad",           "Squad / التشكيلة"),
+    ];
+
+    let mut error_lines = String::new();
+    for (key, label) in &error_type_labels {
+        if let Some(count) = errors_map.get(key).and_then(|v| v.as_u64()) {
+            if count > 0 {
+                error_lines.push_str(&format!("  • {} — {}\n", label, count));
+            }
+        }
+    }
+    if error_lines.is_empty() {
+        error_lines = "  No errors / لا توجد أخطاء\n".to_string();
+    }
+
+    // ── Build email body (plain text, EN + AR) ────────────────────────────
+    let body = format!(
+"Match Quality Report — تقرير جودة المباراة
+===========================================
+
+Match / المباراة : {match_name} — {half}
+Match ID         : {match_id}
+Collector / المجمع : {collector_name} ({collector_hr})
+Reviewer / المراجع : {reviewer_name} ({reviewer_hr})
+
+-------------------------------------------
+Quality Scores — درجات الجودة
+-------------------------------------------
+
+Overall / الكلية : {overall_score:.1}%
+A-Review          : {score_a:.1}%
+B-Review          : {score_b:.1}%
+C-Review          : {score_c:.1}%
+
+Total Errors / إجمالي الأخطاء : {total_errors}
+
+-------------------------------------------
+Errors by Type — الأخطاء حسب النوع
+-------------------------------------------
+
+{error_lines}
+-------------------------------------------
+Drive Folder — مجلد الملفات
+-------------------------------------------
+
+{folder_url}
+
+-------------------------------------------
+This email was sent automatically by MARK after the audit session was exported.
+تم إرسال هذا البريد تلقائياً بواسطة MARK بعد اكتمال تصدير جلسة المراجعة.
+",
+        match_name = match_name,
+        half = half,
+        match_id = match_id,
+        collector_name = collector_name,
+        collector_hr = collector_hr,
+        reviewer_name = reviewer_name,
+        reviewer_hr = reviewer_hr,
+        overall_score = overall_score,
+        score_a = score_a,
+        score_b = score_b,
+        score_c = score_c,
+        total_errors = total_errors,
+        error_lines = error_lines,
+        folder_url = folder_url,
+    );
+
+    let subject = format!(
+        "Quality Report — {} {} [{}]",
+        match_name, half, match_id
+    );
+
+    // ── Parse recipients ──────────────────────────────────────────────────
+    let parse_emails = |raw: &str| -> Vec<String> {
+        raw.split(',')
+            .map(|s| s.trim().to_lowercase())
+            .filter(|s| s.contains('@') && s.contains('.'))
+            .collect()
+    };
+    let to_list = parse_emails(&to_emails);
+    let cc_list = parse_emails(&cc_emails);
+
+    if to_list.is_empty() {
+        return Err("No valid TO recipients".to_string());
+    }
+
+    // ── Build RFC 2822 raw email ──────────────────────────────────────────
+    let raw_email = format!(
+        "From: Hudl Quality <{}>\r\nTo: {}\r\nCc: {}\r\nSubject: {}\r\nContent-Type: text/plain; charset=UTF-8\r\n\r\n{}",
+        SENDER_EMAIL,
+        to_list.join(", "),
+        cc_list.join(", "),
+        subject,
+        body
+    );
+
+    // Gmail API expects base64url-encoded raw email
+    use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+    let encoded = URL_SAFE_NO_PAD.encode(raw_email.as_bytes());
+
+    let payload = serde_json::json!({ "raw": encoded });
+
+    let resp: serde_json::Value = client
+        .post("https://gmail.googleapis.com/gmail/v1/users/me/messages/send")
+        .header("Authorization", format!("Bearer {}", token))
+        .json(&payload)
+        .send()
+        .await
+        .map_err(|e| format!("Gmail send failed: {}", e))?
+        .json()
+        .await
+        .map_err(|e| format!("Gmail response parse failed: {}", e))?;
+
+    if resp.get("error").is_some() {
+        return Err(format!("Gmail API error: {}", resp["error"]["message"].as_str().unwrap_or("unknown")));
+    }
+
+    let msg_id = resp["id"].as_str().unwrap_or("unknown");
+    Ok(format!("✅ Report email sent (id: {})", msg_id))
+}
+
 // ─── Send report email via Google Drive share notification ───────────────────
 // Creates a Google Doc with the match quality report (EN + AR), then shares it
 // with each recipient — Google's own servers send the "shared with you" email.
@@ -1931,6 +2200,8 @@ fn save_text_file(path: String, content: String) -> Result<(), String> {
             get_google_access_token_cmd,
             get_userprofile,
             send_report_email,
+            send_gmail_report,
+            connect_sender_account,
         ])
         .run(tauri::generate_context!())
         .expect("error while running MARK");

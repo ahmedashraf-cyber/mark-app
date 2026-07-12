@@ -1036,8 +1036,7 @@ export default function SessionHistoryPage({ onBack, initialSession }) {
         </div>
 
         {/* Admin toggle */}
-        {isAdmin && (
-          <div style={{ display:'flex', alignItems:'center', gap:6,
+        {isAdmin && (\n          <div style={{ display:'flex', alignItems:'center', gap:6,
             padding:'3px 4px', borderRadius:20,
             background:'rgba(255,215,0,0.06)', border:'1px solid rgba(255,215,0,0.2)',
           }}>
@@ -1054,6 +1053,26 @@ export default function SessionHistoryPage({ onBack, initialSession }) {
                 }}>{mode}</button>
             ))}
           </div>
+        )}
+
+        {/* Connect sender account — admin only */}
+        {isAdmin && (
+          <button
+            onClick={async () => {
+              try {
+                const result = await invoke('connect_sender_account')
+                alert(result)
+              } catch(e) {
+                alert('Connection failed: ' + e)
+              }
+            }}
+            style={{
+              padding:'3px 10px', borderRadius:16, fontSize:11, fontWeight:700,
+              cursor:'pointer', border:'1px solid rgba(68,153,255,0.3)',
+              background:'rgba(68,153,255,0.08)', color:'#4499FF',
+            }}
+            title="Connect hudl.quality.egypt@gmail.com as the report email sender"
+          >📧 Connect Sender</button>
         )}
 
         {/* Stats pills */}
