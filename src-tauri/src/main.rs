@@ -1479,7 +1479,7 @@ async fn connect_sender_account() -> Result<String, String> {
         })
         .ok_or("No auth code in callback")?;
 
-    let html = b"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n\r\n<html><body style='font-family:sans-serif;text-align:center;padding:60px'><h2>✅ Sender account connected!</h2><p>You can close this tab and return to MARK.</p></body></html>";
+    let html = b"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n\r\n<html><body style='font-family:sans-serif;text-align:center;padding:60px'><h2>\xE2\x9C\x85 Sender account connected!</h2><p>You can close this tab and return to MARK.</p></body></html>";
     let _ = stream.write_all(html).await;
 
     let client = reqwest::Client::new();
