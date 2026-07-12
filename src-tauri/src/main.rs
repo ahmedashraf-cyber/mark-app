@@ -442,7 +442,7 @@ fn patch_one_shortcut(lnk_path: &std::path::Path) -> Result<bool, String> {
 // marker) does not match, so it gets stripped and replaced — that's what was
 // previously frozen by a fixed marker. Bump this whenever the embedded bridge
 // changes so existing installs re-embed the new version.
-const ASAR_MARKER: &str = "<!-- MARK_BRIDGE_INJECTED v7.5.32 -->";
+const ASAR_MARKER: &str = "<!-- MARK_BRIDGE_INJECTED v7.5.33 -->";
 
 #[command]
 fn patch_tag_once_asar() -> Result<String, String> {
@@ -1590,55 +1590,176 @@ async fn send_gmail_report(
         error_lines = "  No errors / لا توجد أخطاء\n".to_string();
     }
 
-    // ── Build email body (plain text, EN + AR) ────────────────────────────
+    // ── Build HTML email body — dark MARK visual identity ───────────────────
+    // Colors: #111111 bg, #1C1C1E card, #E8590C orange accent, #F5F5F7 text
+    // Fonts: Inter (headings), DM Sans (body)
+    let score_color = |s: f64| -> &str {
+        if s >= 90.0 { "#30D158" } else if s >= 75.0 { "#FFD60A" } else { "#FF453A" }
+    };
+    let overall_color = score_color(overall_score);
+    let a_color = score_color(score_a);
+    let b_color = score_color(score_b);
+    let c_color = score_color(score_c);
+
+    let error_rows_html = {
+        let mut rows = String::new();
+        for (key, label_en, label_ar) in &[
+            ("deletion",        "Deletion",        "حذف"),
+            ("added",           "Added",           "إضافة"),
+            ("rename",          "Rename",          "إعادة تسمية"),
+            ("wrong-event",     "Wrong Event",     "حدث خاطئ"),
+            ("wrong-timestamp", "Wrong Timestamp", "توقيت خاطئ"),
+            ("wrong-extras",    "Wrong Extras",    "بيانات إضافية خاطئة"),
+            ("wrong-location",  "Wrong Location",  "موقع خاطئ"),
+            ("wrong-player",    "Wrong Player",    "لاعب خاطئ"),
+            ("replacement",     "Replacement",     "استبدال"),
+            ("freeze-frame",    "Freeze Frame",    "إطار ثابت"),
+            ("goal-location",   "Goal Location",   "موقع الهدف"),
+            ("squad",           "Squad",           "التشكيلة"),
+        ] {
+            if let Some(count) = errors_map.get(key).and_then(|v| v.as_u64()) {
+                if count > 0 {
+                    rows.push_str(&format!(
+                        r#"<tr><td style="padding:8px 12px;color:#F5F5F7;font-family:'DM Sans',Arial,sans-serif;font-size:13px;border-bottom:1px solid #2C2C2E">{} / {}</td><td style="padding:8px 12px;text-align:right;font-weight:700;color:#E8590C;font-family:'DM Sans',Arial,sans-serif;font-size:13px;border-bottom:1px solid #2C2C2E">{}</td></tr>"#,
+                        label_en, label_ar, count
+                    ));
+                }
+            }
+        }
+        if rows.is_empty() {
+            rows = r#"<tr><td colspan="2" style="padding:8px 12px;color:#636366;font-family:'DM Sans',Arial,sans-serif;font-size:13px">No errors / لا توجد أخطاء</td></tr>"#.to_string();
+        }
+        rows
+    };
+
+    let reviewer_row = if !reviewer_name.is_empty() && !reviewer_hr.is_empty() {
+        format!(
+            r#"<tr><td style="padding:6px 0;color:#8E8E93;font-family:'DM Sans',Arial,sans-serif;font-size:12px;width:140px">Reviewer / المراجع</td><td style="padding:6px 0;color:#F5F5F7;font-family:'DM Sans',Arial,sans-serif;font-size:13px;font-weight:600">{} <span style="color:#636366;font-weight:400">({})</span></td></tr>"#,
+            reviewer_name, reviewer_hr
+        )
+    } else { String::new() };
+
     let body = format!(
-"Match Quality Report — تقرير جودة المباراة
-===========================================
+r#"<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Quality Report</title>
+</head>
+<body style="margin:0;padding:0;background-color:#111111;font-family:'DM Sans',Arial,sans-serif">
+<table width="100%" cellpadding="0" cellspacing="0" style="background-color:#111111;min-height:100vh">
+<tr><td align="center" style="padding:32px 16px">
+<table width="600" cellpadding="0" cellspacing="0" style="max-width:600px;width:100%">
 
-Match / المباراة : {match_name} — {half}
-Match ID         : {match_id}
-Collector / المجمع : {collector_name} ({collector_hr})
-Reviewer / المراجع : {reviewer_name} ({reviewer_hr})
+  <!-- Header -->
+  <tr><td style="background:#1C1C1E;border-radius:16px 16px 0 0;padding:28px 32px;border-bottom:2px solid #E8590C">
+    <table width="100%" cellpadding="0" cellspacing="0">
+      <tr>
+        <td>
+          <div style="font-family:Inter,Arial,sans-serif;font-size:11px;font-weight:700;letter-spacing:3px;color:#E8590C;text-transform:uppercase;margin-bottom:6px">HUDL EGYPT &nbsp;·&nbsp; QUALITY REVIEW</div>
+          <div style="font-family:Inter,Arial,sans-serif;font-size:22px;font-weight:800;color:#F5F5F7;line-height:1.2">Quality Report</div>
+          <div style="font-family:Inter,Arial,sans-serif;font-size:22px;font-weight:800;color:#F5F5F7;line-height:1.2">تقرير جودة المباراة</div>
+        </td>
+        <td align="right" style="vertical-align:top">
+          <div style="background:#E8590C;border-radius:10px;padding:8px 14px;display:inline-block">
+            <div style="font-family:'JetBrains Mono',monospace,Arial;font-size:11px;font-weight:700;color:#ffffff;letter-spacing:1px">{match_id}</div>
+          </div>
+        </td>
+      </tr>
+    </table>
+  </td></tr>
 
--------------------------------------------
-Quality Scores — درجات الجودة
--------------------------------------------
+  <!-- Match Info -->
+  <tr><td style="background:#1C1C1E;padding:24px 32px;border-bottom:1px solid #2C2C2E">
+    <div style="font-family:Inter,Arial,sans-serif;font-size:18px;font-weight:700;color:#F5F5F7;margin-bottom:4px">{match_name}</div>
+    <div style="font-family:'DM Sans',Arial,sans-serif;font-size:13px;color:#8E8E93;margin-bottom:16px">{half}</div>
+    <table cellpadding="0" cellspacing="0">
+      <tr><td style="padding:6px 0;color:#8E8E93;font-family:'DM Sans',Arial,sans-serif;font-size:12px;width:140px">Collector / المجمع</td><td style="padding:6px 0;color:#F5F5F7;font-family:'DM Sans',Arial,sans-serif;font-size:13px;font-weight:600">{collector_name} <span style="color:#636366;font-weight:400">({collector_hr})</span></td></tr>
+      {reviewer_row}
+    </table>
+  </td></tr>
 
-Overall / الكلية : {overall_score:.1}%
-A-Review          : {score_a:.1}%
-B-Review          : {score_b:.1}%
-C-Review          : {score_c:.1}%
+  <!-- Scores -->
+  <tr><td style="background:#1C1C1E;padding:24px 32px;border-bottom:1px solid #2C2C2E">
+    <div style="font-family:Inter,Arial,sans-serif;font-size:11px;font-weight:700;letter-spacing:2px;color:#8E8E93;text-transform:uppercase;margin-bottom:16px">Quality Scores — درجات الجودة</div>
+    <!-- Overall -->
+    <table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:16px">
+      <tr>
+        <td style="font-family:'DM Sans',Arial,sans-serif;font-size:13px;color:#8E8E93">Overall / الكلية</td>
+        <td align="right" style="font-family:Inter,Arial,sans-serif;font-size:28px;font-weight:800;color:{overall_color}">{overall_score:.1}%</td>
+      </tr>
+    </table>
+    <!-- A B C -->
+    <table width="100%" cellpadding="0" cellspacing="0">
+      <tr>
+        <td width="33%" align="center" style="background:#111111;border-radius:10px;padding:14px 8px;margin:2px">
+          <div style="font-family:Inter,Arial,sans-serif;font-size:11px;font-weight:700;color:#8E8E93;letter-spacing:1px;margin-bottom:4px">A-REVIEW</div>
+          <div style="font-family:Inter,Arial,sans-serif;font-size:22px;font-weight:800;color:{a_color}">{score_a:.1}%</div>
+        </td>
+        <td width="2%"></td>
+        <td width="33%" align="center" style="background:#111111;border-radius:10px;padding:14px 8px">
+          <div style="font-family:Inter,Arial,sans-serif;font-size:11px;font-weight:700;color:#8E8E93;letter-spacing:1px;margin-bottom:4px">B-REVIEW</div>
+          <div style="font-family:Inter,Arial,sans-serif;font-size:22px;font-weight:800;color:{b_color}">{score_b:.1}%</div>
+        </td>
+        <td width="2%"></td>
+        <td width="33%" align="center" style="background:#111111;border-radius:10px;padding:14px 8px">
+          <div style="font-family:Inter,Arial,sans-serif;font-size:11px;font-weight:700;color:#8E8E93;letter-spacing:1px;margin-bottom:4px">C-REVIEW</div>
+          <div style="font-family:Inter,Arial,sans-serif;font-size:22px;font-weight:800;color:{c_color}">{score_c:.1}%</div>
+        </td>
+      </tr>
+    </table>
+  </td></tr>
 
-Total Errors / إجمالي الأخطاء : {total_errors}
+  <!-- Errors -->
+  <tr><td style="background:#1C1C1E;padding:24px 32px;border-bottom:1px solid #2C2C2E">
+    <table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:16px">
+      <tr>
+        <td style="font-family:Inter,Arial,sans-serif;font-size:11px;font-weight:700;letter-spacing:2px;color:#8E8E93;text-transform:uppercase">Errors by Type — الأخطاء حسب النوع</td>
+        <td align="right" style="font-family:Inter,Arial,sans-serif;font-size:11px;font-weight:700;color:#8E8E93">Total: <span style="color:#FF453A">{total_errors}</span></td>
+      </tr>
+    </table>
+    <table width="100%" cellpadding="0" cellspacing="0" style="background:#111111;border-radius:10px;overflow:hidden">
+      {error_rows_html}
+    </table>
+  </td></tr>
 
--------------------------------------------
-Errors by Type — الأخطاء حسب النوع
--------------------------------------------
+  <!-- Drive Link -->
+  <tr><td style="background:#1C1C1E;padding:24px 32px;border-bottom:1px solid #2C2C2E">
+    <div style="font-family:Inter,Arial,sans-serif;font-size:11px;font-weight:700;letter-spacing:2px;color:#8E8E93;text-transform:uppercase;margin-bottom:12px">Drive Folder — مجلد الملفات</div>
+    <a href="{folder_url}" style="display:inline-block;background:#E8590C;color:#ffffff;font-family:Inter,Arial,sans-serif;font-size:13px;font-weight:700;padding:12px 24px;border-radius:10px;text-decoration:none">Open Drive Folder &rarr;</a>
+    <div style="margin-top:10px;font-family:'JetBrains Mono',monospace,Arial;font-size:11px;color:#636366;word-break:break-all">{folder_url}</div>
+  </td></tr>
 
-{error_lines}
--------------------------------------------
-Drive Folder — مجلد الملفات
--------------------------------------------
+  <!-- Footer -->
+  <tr><td style="background:#141414;border-radius:0 0 16px 16px;padding:20px 32px;text-align:center">
+    <div style="font-family:'DM Sans',Arial,sans-serif;font-size:11px;color:#636366;line-height:1.6">
+      This email was sent automatically by MARK after the audit session was exported.<br>
+      تم إرسال هذا البريد تلقائياً بواسطة MARK بعد اكتمال تصدير جلسة المراجعة.
+    </div>
+  </td></tr>
 
-{folder_url}
-
--------------------------------------------
-This email was sent automatically by MARK after the audit session was exported.
-تم إرسال هذا البريد تلقائياً بواسطة MARK بعد اكتمال تصدير جلسة المراجعة.
-",
+</table>
+</td></tr>
+</table>
+</body>
+</html>"#,
+        match_id = match_id,
         match_name = match_name,
         half = half,
-        match_id = match_id,
         collector_name = collector_name,
         collector_hr = collector_hr,
-        reviewer_name = reviewer_name,
-        reviewer_hr = reviewer_hr,
+        reviewer_row = reviewer_row,
         overall_score = overall_score,
+        overall_color = overall_color,
         score_a = score_a,
+        a_color = a_color,
         score_b = score_b,
+        b_color = b_color,
         score_c = score_c,
+        c_color = c_color,
         total_errors = total_errors,
-        error_lines = error_lines,
+        error_rows_html = error_rows_html,
         folder_url = folder_url,
     );
 
@@ -1663,7 +1784,7 @@ This email was sent automatically by MARK after the audit session was exported.
 
     // ── Build RFC 2822 raw email ──────────────────────────────────────────
     let raw_email = format!(
-        "From: Hudl Quality <{}>\r\nTo: {}\r\nCc: {}\r\nSubject: {}\r\nContent-Type: text/plain; charset=UTF-8\r\n\r\n{}",
+        "From: Hudl Quality <{}>\r\nTo: {}\r\nCc: {}\r\nSubject: {}\r\nContent-Type: text/html; charset=UTF-8\r\n\r\n{}",
         SENDER_EMAIL,
         to_list.join(", "),
         cc_list.join(", "),
