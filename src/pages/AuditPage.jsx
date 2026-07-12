@@ -1899,11 +1899,6 @@ export default function AuditPage({ session, onBack, onFullReport, initialResult
           let TO_EMAILS = ''
           let CC_EMAILS = ''
 
-          // ── TEST MODE — remove after confirming email works ───────────────
-          TO_EMAILS = 'ahmed.ashraf@hudl.com'
-          CC_EMAILS = ''
-          // ─────────────────────────────────────────────────────────────────
-
           if (env === 'staging') {
             // ── Staging: send only to collector(s), no reviewer, no leaders ──
             const stagingCollectors = recipientsData?.staging?.collectors || []
