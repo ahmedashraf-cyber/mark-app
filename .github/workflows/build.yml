@@ -78,6 +78,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           MARK_GOOGLE_CLIENT_SECRET: ${{ secrets.MARK_GOOGLE_CLIENT_SECRET }}
+          MARK_GMAIL_SENDER_REFRESH: ${{ secrets.MARK_GMAIL_SENDER_REFRESH }}
           VITE_GH_SYNC_TOKEN: ${{ secrets.VITE_GH_SYNC_TOKEN }}
         with:
           tagName: v__VERSION__
