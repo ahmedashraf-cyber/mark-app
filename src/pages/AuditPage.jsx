@@ -1880,19 +1880,75 @@ export default function AuditPage({ session, onBack, onFullReport, initialResult
       setExportState({ phase: 'done', step: total, total, done: true, driveLink: folderUrl })
 
         // ── Send report email via Gmail API (hudl.quality.egypt@gmail.com) ──────
-        // Fires automatically after upload — completely free, unlimited.
-        // ⚠️  TO_EMAILS and CC_EMAILS are placeholders until people data arrives.
+        // Fires automatically after upload — free, unlimited, fully automatic.
         try {
           const errorTypes = {}
           filteredAmends.forEach(a => {
             errorTypes[a.type] = (errorTypes[a.type] || 0) + 1
           })
 
-          // ── PLACEHOLDER recipients — replace with real lookups when data arrives ──
-          const TO_EMAILS = '' // collector@gmail.com,teamleader@gmail.com
-          const CC_EMAILS = '' // reviewer@gmail.com,qtl@gmail.com
+          // ── Fetch recipients.json from GitHub ─────────────────────────────
+          const recipientsUrl = 'https://raw.githubusercontent.com/ahmedashraf-cyber/mark-app/main/recipients.json'
+          const recipientsRes = await fetch(recipientsUrl)
+          const recipientsData = await recipientsRes.json()
 
-          if (TO_EMAILS || CC_EMAILS) {
+          // ── Detect environment from bridge payload ─────────────────────────
+          const env = results?.environment || 'production'
+          console.log('[MARK] Email env:', env)
+
+          let TO_EMAILS = ''
+          let CC_EMAILS = ''
+
+          if (env === 'staging') {
+            // ── Staging: send only to collector(s), no reviewer, no leaders ──
+            const stagingCollectors = recipientsData?.staging?.collectors || []
+
+            // collectorHr may be comma-separated (multi-collector sessions)
+            const collectorCodes = String(collectorHr || '').split(',').map(c => c.trim()).filter(Boolean)
+            const collectorEmails = collectorCodes
+              .map(code => stagingCollectors.find(c => c.code === code))
+              .filter(Boolean)
+              .map(c => c.email)
+              .filter(e => e && e.includes('@'))
+
+            TO_EMAILS = collectorEmails.join(',')
+            CC_EMAILS = ''
+            console.log('[MARK] Staging email — TO:', TO_EMAILS)
+
+          } else {
+            // ── Production: collector + sup (TO), reviewer + sup (CC) ────────
+            const people = recipientsData?.production?.people || []
+            const byCode = {}
+            people.forEach(p => { byCode[p.code] = p })
+
+            // Collector(s)
+            const collectorCodes = String(collectorHr || '').split(',').map(c => c.trim()).filter(Boolean)
+            const toEmails = []
+            collectorCodes.forEach(code => {
+              const p = byCode[code]
+              if (!p) return
+              if (p.email)    toEmails.push(p.email)
+              if (p.supEmail) toEmails.push(p.supEmail)
+            })
+
+            // Reviewer(s)
+            const reviewerHrCode = results?.reviewerHrCode || reviewerHr || ''
+            const reviewerCodes = String(reviewerHrCode).split(',').map(c => c.trim()).filter(Boolean)
+            const ccEmails = []
+            reviewerCodes.forEach(code => {
+              const p = byCode[code]
+              if (!p) return
+              if (p.email)    ccEmails.push(p.email)
+              if (p.supEmail) ccEmails.push(p.supEmail)
+            })
+
+            // Dedupe
+            TO_EMAILS = [...new Set(toEmails.filter(e => e && e.includes('@')))].join(',')
+            CC_EMAILS = [...new Set(ccEmails.filter(e => e && e.includes('@')))].join(',')
+            console.log('[MARK] Production email — TO:', TO_EMAILS, '| CC:', CC_EMAILS)
+          }
+
+          if (TO_EMAILS) {
             const emailResult = await invoke('send_gmail_report', {
               matchName:     session.matchName || '',
               matchId:       String(session.matchId || ''),
@@ -1906,16 +1962,17 @@ export default function AuditPage({ session, onBack, onFullReport, initialResult
               collectorName: collectorName,
               collectorHr:   collectorHr,
               reviewerName:  reviewerName,
-              reviewerHr:    results.reviewerHrCode || reviewerHr || '',
+              reviewerHr:    results?.reviewerHrCode || reviewerHr || '',
               folderUrl,
               toEmails:      TO_EMAILS,
               ccEmails:      CC_EMAILS,
             })
             console.log('[MARK] Gmail report:', emailResult)
           } else {
-            console.log('[MARK] Gmail report skipped — no recipients configured yet')
+            console.warn('[MARK] Gmail report skipped — no recipients resolved for HR code:', collectorHr)
           }
         } catch(emailErr) {
+          // Never block the UI for email failures
           console.warn('[MARK] Gmail report failed (non-blocking):', emailErr)
         }
 

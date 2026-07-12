@@ -1,5 +1,5 @@
 (async function(){
-  const BRIDGE_VERSION = '7.5.31';
+  const BRIDGE_VERSION = '7.5.32';
   if(window.__MARK_BRIDGE_VERSION__ === BRIDGE_VERSION){console.log('[MARK] bridge already running (v' + BRIDGE_VERSION + ')');return;}
   if(window.__MARK_BRIDGE_STOP__) window.__MARK_BRIDGE_STOP__();
   window.__MARK_BRIDGE__ = true;
@@ -856,6 +856,9 @@
           moduleScores,
           diagnostics,
           usedTelemetry,
+          environment: (typeof process !== 'undefined' && process.env && process.env.LIVE_COLLECTION_SERVICE_URL)
+            ? (process.env.LIVE_COLLECTION_SERVICE_URL.includes('staging') ? 'staging' : 'production')
+            : 'production',
           ts: Date.now(),
         }));
 
