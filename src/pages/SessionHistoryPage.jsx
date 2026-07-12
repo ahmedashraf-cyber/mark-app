@@ -1036,7 +1036,8 @@ export default function SessionHistoryPage({ onBack, initialSession }) {
         </div>
 
         {/* Admin toggle */}
-        {isAdmin && (\n          <div style={{ display:'flex', alignItems:'center', gap:6,
+        {isAdmin && (
+          <div style={{ display:'flex', alignItems:'center', gap:6,
             padding:'3px 4px', borderRadius:20,
             background:'rgba(255,215,0,0.06)', border:'1px solid rgba(255,215,0,0.2)',
           }}>
