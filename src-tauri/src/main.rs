@@ -442,7 +442,7 @@ fn patch_one_shortcut(lnk_path: &std::path::Path) -> Result<bool, String> {
 // marker) does not match, so it gets stripped and replaced — that's what was
 // previously frozen by a fixed marker. Bump this whenever the embedded bridge
 // changes so existing installs re-embed the new version.
-const ASAR_MARKER: &str = "<!-- MARK_BRIDGE_INJECTED v7.5.40 -->";
+const ASAR_MARKER: &str = "<!-- MARK_BRIDGE_INJECTED v7.5.41 -->";
 
 #[command]
 fn patch_tag_once_asar() -> Result<String, String> {
@@ -1863,17 +1863,18 @@ r#"<!DOCTYPE html>
         body
     );
 
-    // ── Send via SMTP using Gmail App Password ───────────────────────────────
+    // ── Send via SMTP using Gmail App Password (spawn_blocking — avoids freezing UI) ──
     use lettre::{
         Message, SmtpTransport, Transport,
         message::{header::ContentType, MultiPart, SinglePart},
         transport::smtp::authentication::Credentials,
     };
 
-    let app_password = sender_app_password();
+    let app_password = sender_app_password().to_string();
     if app_password.is_empty() {
         return Err("MARK_GMAIL_APP_PASSWORD not set in build".to_string());
     }
+    assert!(app_password.len() == 16, "App Password must be exactly 16 chars");
 
     // Build the email message
     let mut msg_builder = Message::builder()
@@ -1901,17 +1902,19 @@ r#"<!DOCTYPE html>
         )
         .map_err(|e| format!("Email build failed: {}", e))?;
 
-    // Connect via SMTP TLS
-    let creds = Credentials::new(SENDER_EMAIL.to_string(), app_password.to_string());
-    let mailer = SmtpTransport::starttls_relay("smtp.gmail.com")
-        .map_err(|e| format!("SMTP relay failed: {}", e))?
-        .credentials(creds)
-        .port(587)
-        .build();
+    // Use spawn_blocking — SmtpTransport is blocking, must not run on async thread
+    let sender_email = SENDER_EMAIL.to_string();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        let creds = Credentials::new(sender_email.clone(), app_password);
+        let mailer = SmtpTransport::relay("smtp.gmail.com")
+            .map_err(|e| format!("SMTP relay failed: {}", e))?
+            .credentials(creds)
+            .build();
+        mailer.send(&email).map_err(|e| format!("SMTP send failed: {}", e))?;
+        Ok::<(), String>(())
+    }).await.map_err(|e| format!("spawn_blocking failed: {}", e))?;
 
-    mailer.send(&email)
-        .map_err(|e| format!("SMTP send failed: {}", e))?;
-
+    result?;
     Ok(format!("✅ Report email sent via SMTP to {} recipient(s)", to_list.len()))
 }
 
