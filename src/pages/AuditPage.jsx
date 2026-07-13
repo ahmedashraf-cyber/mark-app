@@ -1939,7 +1939,7 @@ export default function AuditPage({ session, onBack, onFullReport, initialResult
             }
 
             if (!TO_EMAILS) {
-              setEmailToast({ status: 'skipped', msg: `📧 Email skipped — HR code "${collectorHr}" (env:${env}) not found in directory` })
+              setEmailToast({ status: 'skipped', msg: '📧 Email skipped — collector HR code not found in directory' })
               setTimeout(() => setEmailToast(null), 10000)
               return
             }

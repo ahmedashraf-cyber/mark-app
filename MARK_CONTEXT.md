@@ -173,6 +173,15 @@ Higher = better. 100 = perfect.
 
 ---
 
+## Version Bump Procedure — Semantic Versioning (SemVer)
+
+**Format: MAJOR.MINOR.PATCH**
+- **MAJOR** — breaking change (rare, complete rewrite)
+- **MINOR** — new feature or capability → resets PATCH to 0 (e.g. `7.5.x` → `7.6.0`)
+- **PATCH** — bug fix only, no new functionality (e.g. `7.6.0` → `7.6.1`)
+
+**Quick rule:** Did a reviewer gain something new? → MINOR. Was something broken fixed? → PATCH.
+
 ## Version Bump Procedure
 
 ```bash

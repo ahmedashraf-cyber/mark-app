@@ -405,3 +405,33 @@ The batchUpdate call returns without error (200 OK) but produces no visible effe
 - Verify the service account's OAuth scopes include Sheets API
 - Test batchUpdate on a personal Drive file (not Shared Drive) to isolate the issue
 - Consider alternative: use XLSX library to apply styling before upload, then upload as `.xlsx`
+---
+
+## 19. Semantic Versioning — MAJOR.MINOR.PATCH rules (from v7.6.0)
+
+**Format:** `MAJOR.MINOR.PATCH` — each number has a strict meaning.
+
+| Part | When to bump | Examples |
+|---|---|---|
+| **MAJOR** | Breaking change — incompatible with all previous sessions/data | Complete rewrite, auth system change |
+| **MINOR** | New feature or capability added | Email engine, new dashboard role, new Tauri command |
+| **PATCH** | Bug fix only — no new functionality | Crash fix, wrong variable, UI text correction |
+
+**Rules:**
+- Adding a new Tauri command → **MINOR**
+- Adding a new screen or dashboard → **MINOR**  
+- Fixing a crash or wrong behavior → **PATCH**
+- Fixing a typo or UI text → **PATCH**
+- When in doubt: if a reviewer gains new functionality → **MINOR**, if just fixed → **PATCH**
+
+**MINOR bump resets PATCH to 0:** `7.5.41` → new feature → `7.6.0` (not `7.5.42`)
+
+**All 5 places must always match — no exceptions:**
+1. `package.json` → `"version": "X.Y.Z"`
+2. `src-tauri/Cargo.toml` → `version = "X.Y.Z"`
+3. `src-tauri/tauri.conf.json` → `"version": "X.Y.Z"`
+4. `src-tauri/src/bridge_script.js` → `const BRIDGE_VERSION = 'X.Y.Z'`
+5. `src-tauri/src/main.rs` → `const ASAR_MARKER: &str = "<!-- MARK_BRIDGE_INJECTED vX.Y.Z -->"`
+
+**History note:** Versions `7.5.29` through `7.5.41` used patch bumps for both features
+and fixes. From `7.6.0` onward, SemVer is applied correctly.
