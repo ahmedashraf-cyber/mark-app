@@ -1885,31 +1885,14 @@ export default function AuditPage({ session, onBack, onFullReport, initialResult
         setTimeout(() => setEmailToast(null), 8000) // fallback clear
         ;(async () => {
           try {
-            // ── 1. Read refresh token from Firestore ─────────────────────────
-            const tokenDoc = await getDoc(doc(db, 'system_config', 'gmail_sender'))
-            if (!tokenDoc.exists()) {
-              setEmailToast({ status: 'failed', msg: '📧 Email failed — sender not configured. Reconnect in FIELD.' })
-              setTimeout(() => setEmailToast(null), 8000)
-              return
-            }
-            const refreshToken = tokenDoc.data()?.refresh_token || ''
-            if (!refreshToken) {
-              setEmailToast({ status: 'failed', msg: '📧 Email failed — empty refresh token. Reconnect in FIELD.' })
-              setTimeout(() => setEmailToast(null), 8000)
-              return
-            }
-
-            // ── 2. Get fresh access token via Tauri ──────────────────────────
+            // ── 1. Get fresh access token via baked-in refresh token ────────
             let accessToken
             try {
-              accessToken = await invoke('refresh_sender_token', { refreshToken })
+              accessToken = await invoke('get_sender_access_token_cmd')
             } catch(tokenErr) {
-              const isAuthErr = String(tokenErr).includes('OAuth error') || String(tokenErr).includes('invalid_grant')
               setEmailToast({
                 status: 'failed',
-                msg: isAuthErr
-                  ? '📧 Sender token expired — reconnect in FIELD → Training Manager → Reconnect Sender'
-                  : '📧 Email failed — token refresh error: ' + String(tokenErr).slice(0, 80)
+                msg: '📧 Email failed — sender token error: ' + String(tokenErr).slice(0, 80)
               })
               setTimeout(() => setEmailToast(null), 10000)
               return

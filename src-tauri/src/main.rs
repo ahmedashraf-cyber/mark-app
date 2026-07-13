@@ -442,7 +442,7 @@ fn patch_one_shortcut(lnk_path: &std::path::Path) -> Result<bool, String> {
 // marker) does not match, so it gets stripped and replaced — that's what was
 // previously frozen by a fixed marker. Bump this whenever the embedded bridge
 // changes so existing installs re-embed the new version.
-const ASAR_MARKER: &str = "<!-- MARK_BRIDGE_INJECTED v7.5.35 -->";
+const ASAR_MARKER: &str = "<!-- MARK_BRIDGE_INJECTED v7.5.36 -->";
 
 #[command]
 fn patch_tag_once_asar() -> Result<String, String> {
@@ -1559,6 +1559,12 @@ async fn get_sender_access_token() -> Result<String, String> {
         .ok_or_else(|| format!("No access_token: {}", resp))
 }
 
+// ─── Expose sender access token to JS ────────────────────────────────────────
+#[command]
+async fn get_sender_access_token_cmd() -> Result<String, String> {
+    get_sender_access_token().await
+}
+
 // ─── Refresh sender token from a Firestore-stored refresh token ───────────────
 // Called from AuditPage.jsx with the refresh token read from Firestore.
 // Returns a fresh access token or an error string.
@@ -2384,6 +2390,7 @@ fn save_text_file(path: String, content: String) -> Result<(), String> {
             send_gmail_report,
             connect_sender_account,
             refresh_sender_token,
+            get_sender_access_token_cmd,
         ])
         .run(tauri::generate_context!())
         .expect("error while running MARK");
