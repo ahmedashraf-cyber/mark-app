@@ -1901,19 +1901,39 @@ export default function AuditPage({ session, onBack, onFullReport, initialResult
 
           if (env === 'staging') {
             // ── Staging: send only to collector(s), no reviewer, no leaders ──
-            const stagingCollectors = recipientsData?.staging?.collectors || []
+            // Step 1: search staging tab (Sheet2)
+            // Step 2: if not found there, fall back to production tab (Sheet1)
+            // Step 3: if still not found, don't send to anyone
+            const stagingCollectors  = recipientsData?.staging?.collectors || []
+            const productionPeople   = recipientsData?.production?.people  || []
+            const byProdCode = {}
+            productionPeople.forEach(p => { byProdCode[p.code] = p })
 
-            // collectorHr may be comma-separated (multi-collector sessions)
             const collectorCodes = String(collectorHr || '').split(',').map(c => c.trim()).filter(Boolean)
-            const collectorEmails = collectorCodes
-              .map(code => stagingCollectors.find(c => c.code === code))
-              .filter(Boolean)
-              .map(c => c.email)
-              .filter(e => e && e.includes('@'))
+            const collectorEmails = []
 
-            TO_EMAILS = collectorEmails.join(',')
+            collectorCodes.forEach(code => {
+              // Try staging tab first
+              const stagingMatch = stagingCollectors.find(c => c.code === code)
+              if (stagingMatch && stagingMatch.email && stagingMatch.email.includes('@')) {
+                collectorEmails.push(stagingMatch.email)
+                console.log('[MARK] Staging lookup: found', code, 'in staging tab →', stagingMatch.email)
+                return
+              }
+              // Fall back to production tab
+              const prodMatch = byProdCode[code]
+              if (prodMatch && prodMatch.email && prodMatch.email.includes('@')) {
+                collectorEmails.push(prodMatch.email)
+                console.log('[MARK] Staging lookup: found', code, 'in production tab →', prodMatch.email)
+                return
+              }
+              // Not found anywhere
+              console.warn('[MARK] Staging lookup: code not found in either tab:', code)
+            })
+
+            TO_EMAILS = [...new Set(collectorEmails)].join(',')
             CC_EMAILS = ''
-            console.log('[MARK] Staging email — TO:', TO_EMAILS)
+            console.log('[MARK] Staging email — TO:', TO_EMAILS || '(none — no codes matched)')
 
           } else {
             // ── Production: collector + sup (TO), reviewer + sup (CC) ────────
