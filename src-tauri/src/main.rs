@@ -442,7 +442,7 @@ fn patch_one_shortcut(lnk_path: &std::path::Path) -> Result<bool, String> {
 // marker) does not match, so it gets stripped and replaced — that's what was
 // previously frozen by a fixed marker. Bump this whenever the embedded bridge
 // changes so existing installs re-embed the new version.
-const ASAR_MARKER: &str = "<!-- MARK_BRIDGE_INJECTED v7.5.39 -->";
+const ASAR_MARKER: &str = "<!-- MARK_BRIDGE_INJECTED v7.5.40 -->";
 
 #[command]
 fn patch_tag_once_asar() -> Result<String, String> {
@@ -1903,9 +1903,10 @@ r#"<!DOCTYPE html>
 
     // Connect via SMTP TLS
     let creds = Credentials::new(SENDER_EMAIL.to_string(), app_password.to_string());
-    let mailer = SmtpTransport::relay("smtp.gmail.com")
+    let mailer = SmtpTransport::starttls_relay("smtp.gmail.com")
         .map_err(|e| format!("SMTP relay failed: {}", e))?
         .credentials(creds)
+        .port(587)
         .build();
 
     mailer.send(&email)
