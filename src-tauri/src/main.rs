@@ -442,7 +442,7 @@ fn patch_one_shortcut(lnk_path: &std::path::Path) -> Result<bool, String> {
 // marker) does not match, so it gets stripped and replaced — that's what was
 // previously frozen by a fixed marker. Bump this whenever the embedded bridge
 // changes so existing installs re-embed the new version.
-const ASAR_MARKER: &str = "<!-- MARK_BRIDGE_INJECTED v7.5.36 -->";
+const ASAR_MARKER: &str = "<!-- MARK_BRIDGE_INJECTED v7.5.37 -->";
 
 #[command]
 fn patch_tag_once_asar() -> Result<String, String> {
@@ -798,6 +798,11 @@ fn sender_refresh_token() -> &'static str {
     option_env!("MARK_GMAIL_SENDER_REFRESH").unwrap_or("")
 }
 const SENDER_EMAIL: &str = "hudl.quality.egypt@gmail.com";
+// App Password for hudl.quality.egypt@gmail.com — generated once, never expires
+// Injected at build time from MARK_GMAIL_APP_PASSWORD GitHub secret
+fn sender_app_password() -> &'static str {
+    option_env!("MARK_GMAIL_APP_PASSWORD").unwrap_or("")
+}
 const OAUTH_SCOPE: &str = "https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/documents openid email";
 const GMAIL_SCOPE: &str = "https://www.googleapis.com/auth/gmail.send openid email";
 
@@ -1599,12 +1604,12 @@ async fn refresh_sender_token(refresh_token: String) -> Result<String, String> {
         .ok_or_else(|| format!("No access_token in response: {}", resp))
 }
 
-// ─── Send quality report email via Gmail API ──────────────────────────────────
-// Sends from hudl.quality.egypt@gmail.com using the pre-authorized refresh token.
-// Plain text body in English + Arabic. No doc created, no third-party service.
+// ─── Send quality report email via SMTP + Gmail App Password ─────────────────
+// Uses Gmail SMTP with an App Password — no OAuth, no tokens, never expires.
+// App Password stored as MARK_GMAIL_APP_PASSWORD build secret.
 #[command]
 async fn send_gmail_report(
-    access_token: String,
+    access_token: String, // kept for API compatibility, not used in SMTP path
     match_name: String,
     match_id: String,
     half: String,
@@ -1858,29 +1863,55 @@ r#"<!DOCTYPE html>
         body
     );
 
-    // Gmail API expects base64url-encoded raw email
-    use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
-    let encoded = URL_SAFE_NO_PAD.encode(raw_email.as_bytes());
+    // ── Send via SMTP using Gmail App Password ───────────────────────────────
+    use lettre::{
+        Message, SmtpTransport, Transport,
+        message::{header::ContentType, MultiPart, SinglePart},
+        transport::smtp::authentication::Credentials,
+    };
 
-    let payload = serde_json::json!({ "raw": encoded });
-
-    let resp: serde_json::Value = client
-        .post("https://gmail.googleapis.com/gmail/v1/users/me/messages/send")
-        .header("Authorization", format!("Bearer {}", token))
-        .json(&payload)
-        .send()
-        .await
-        .map_err(|e| format!("Gmail send failed: {}", e))?
-        .json()
-        .await
-        .map_err(|e| format!("Gmail response parse failed: {}", e))?;
-
-    if resp.get("error").is_some() {
-        return Err(format!("Gmail API error: {}", resp["error"]["message"].as_str().unwrap_or("unknown")));
+    let app_password = sender_app_password();
+    if app_password.is_empty() {
+        return Err("MARK_GMAIL_APP_PASSWORD not set in build".to_string());
     }
 
-    let msg_id = resp["id"].as_str().unwrap_or("unknown");
-    Ok(format!("✅ Report email sent (id: {})", msg_id))
+    // Build the email message
+    let mut msg_builder = Message::builder()
+        .from(format!("Hudl Quality <{}>", SENDER_EMAIL).parse()
+            .map_err(|e| format!("Invalid from address: {}", e))?)
+        .subject(&subject);
+
+    for addr in &to_list {
+        msg_builder = msg_builder.to(addr.parse()
+            .map_err(|e| format!("Invalid TO address {}: {}", addr, e))?);
+    }
+    for addr in &cc_list {
+        msg_builder = msg_builder.cc(addr.parse()
+            .map_err(|e| format!("Invalid CC address {}: {}", addr, e))?);
+    }
+
+    let email = msg_builder
+        .multipart(
+            MultiPart::alternative()
+                .singlepart(
+                    SinglePart::builder()
+                        .header(ContentType::TEXT_HTML)
+                        .body(body)
+                )
+        )
+        .map_err(|e| format!("Email build failed: {}", e))?;
+
+    // Connect via SMTP TLS
+    let creds = Credentials::new(SENDER_EMAIL.to_string(), app_password.to_string());
+    let mailer = SmtpTransport::relay("smtp.gmail.com")
+        .map_err(|e| format!("SMTP relay failed: {}", e))?
+        .credentials(creds)
+        .build();
+
+    mailer.send(&email)
+        .map_err(|e| format!("SMTP send failed: {}", e))?;
+
+    Ok(format!("✅ Report email sent via SMTP to {} recipient(s)", to_list.len()))
 }
 
 // ─── Send report email via Google Drive share notification ───────────────────

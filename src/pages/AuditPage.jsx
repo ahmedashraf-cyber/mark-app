@@ -1885,18 +1885,8 @@ export default function AuditPage({ session, onBack, onFullReport, initialResult
         setTimeout(() => setEmailToast(null), 8000) // fallback clear
         ;(async () => {
           try {
-            // ── 1. Get fresh access token via baked-in refresh token ────────
-            let accessToken
-            try {
-              accessToken = await invoke('get_sender_access_token_cmd')
-            } catch(tokenErr) {
-              setEmailToast({
-                status: 'failed',
-                msg: '📧 Email failed — sender token error: ' + String(tokenErr).slice(0, 80)
-              })
-              setTimeout(() => setEmailToast(null), 10000)
-              return
-            }
+            // ── SMTP path — no token needed, App Password baked into build ──
+            const accessToken = '' // not used in SMTP path
 
             // ── 3. Fetch recipients.json from GitHub ─────────────────────────
             const recipientsRes = await fetch('https://raw.githubusercontent.com/ahmedashraf-cyber/mark-app/main/recipients.json')
