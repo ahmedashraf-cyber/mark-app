@@ -1608,6 +1608,7 @@ export default function AuditPage({ session, onBack, onFullReport, initialResult
       const collectorName = primaryCollectorEntry?.name || `Collector ${results.collectorId}`
       const primaryReviewerEntry = idMap[String(results.reviewerId)] || null
       const reviewerName = primaryReviewerEntry?.name || profile.displayName || 'Reviewer'
+      const reviewerHr = primaryReviewerEntry?.hrcode || primaryReviewerEntry?.hrCode || results?.reviewerHrCode || ''
 
       const matchId   = safe(session.matchId)
       const matchName = safe(session.matchName)
