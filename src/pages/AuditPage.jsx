@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { db } from '../firebase/config'
-import { collection, addDoc, serverTimestamp, getDocs, query, where, deleteDoc, doc } from 'firebase/firestore'
+import { collection, addDoc, serverTimestamp, getDocs, query, where, deleteDoc, doc, getDoc, setDoc } from 'firebase/firestore'
 import { useAuth } from '../hooks/useAuth.jsx'
 import { useSync } from '../hooks/useSync.js'
 import { formatHalf } from '../utils/half.js'
@@ -1282,6 +1282,7 @@ export default function AuditPage({ session, onBack, onFullReport, initialResult
   const [reauditConfirm, setReauditConfirm] = useState(false)  // true when confirm dialog is shown
   const [resolvingIds,   setResolvingIds]   = useState(false)
   const [exportState,    setExportState]    = useState(null)   // null | { phase, step, total, done, driveLink }
+  const [emailToast,     setEmailToast]     = useState(null)   // null | { status: 'sending'|'sent'|'failed'|'skipped', msg: string }
 
   // Master Drive folder ID — all sessions go inside sub-folders here
   // Set once via Settings or first-run prompt, persisted to localStorage
@@ -1879,97 +1880,103 @@ export default function AuditPage({ session, onBack, onFullReport, initialResult
       const folderUrl = `https://drive.google.com/drive/folders/${subFolderId}`
       setExportState({ phase: 'done', step: total, total, done: true, driveLink: folderUrl })
 
-        // ── Send report email via Gmail API (hudl.quality.egypt@gmail.com) ──────
-        // Fires automatically after upload — free, unlimited, fully automatic.
-        try {
-          const errorTypes = {}
-          filteredAmends.forEach(a => {
-            errorTypes[a.type] = (errorTypes[a.type] || 0) + 1
-          })
+        // ── Send report email via Gmail API — self-healing via Firestore token ──
+        setEmailToast({ status: 'sending', msg: 'Sending quality report email...' })
+        setTimeout(() => setEmailToast(null), 8000) // fallback clear
+        ;(async () => {
+          try {
+            // ── 1. Read refresh token from Firestore ─────────────────────────
+            const tokenDoc = await getDoc(doc(db, 'system_config', 'gmail_sender'))
+            if (!tokenDoc.exists()) {
+              setEmailToast({ status: 'failed', msg: '📧 Email failed — sender not configured. Reconnect in FIELD.' })
+              setTimeout(() => setEmailToast(null), 8000)
+              return
+            }
+            const refreshToken = tokenDoc.data()?.refresh_token || ''
+            if (!refreshToken) {
+              setEmailToast({ status: 'failed', msg: '📧 Email failed — empty refresh token. Reconnect in FIELD.' })
+              setTimeout(() => setEmailToast(null), 8000)
+              return
+            }
 
-          // ── Fetch recipients.json from GitHub ─────────────────────────────
-          const recipientsUrl = 'https://raw.githubusercontent.com/ahmedashraf-cyber/mark-app/main/recipients.json'
-          const recipientsRes = await fetch(recipientsUrl)
-          const recipientsData = await recipientsRes.json()
+            // ── 2. Get fresh access token via Tauri ──────────────────────────
+            let accessToken
+            try {
+              accessToken = await invoke('refresh_sender_token', { refreshToken })
+            } catch(tokenErr) {
+              const isAuthErr = String(tokenErr).includes('OAuth error') || String(tokenErr).includes('invalid_grant')
+              setEmailToast({
+                status: 'failed',
+                msg: isAuthErr
+                  ? '📧 Sender token expired — reconnect in FIELD → Training Manager → Reconnect Sender'
+                  : '📧 Email failed — token refresh error: ' + String(tokenErr).slice(0, 80)
+              })
+              setTimeout(() => setEmailToast(null), 10000)
+              return
+            }
 
-          // ── Detect environment from bridge payload ─────────────────────────
-          const env = results?.environment || 'production'
-          console.log('[MARK] Email env:', env)
+            // ── 3. Fetch recipients.json from GitHub ─────────────────────────
+            const recipientsRes = await fetch('https://raw.githubusercontent.com/ahmedashraf-cyber/mark-app/main/recipients.json')
+            const recipientsData = await recipientsRes.json()
 
-          let TO_EMAILS = ''
-          let CC_EMAILS = ''
+            // ── 4. Resolve recipients based on environment ───────────────────
+            const env = results?.environment || 'production'
+            let TO_EMAILS = ''
+            let CC_EMAILS = ''
 
-          if (env === 'staging') {
-            // ── Staging: send only to collector(s), no reviewer, no leaders ──
-            // Step 1: search staging tab (Sheet2)
-            // Step 2: if not found there, fall back to production tab (Sheet1)
-            // Step 3: if still not found, don't send to anyone
-            const stagingCollectors  = recipientsData?.staging?.collectors || []
-            const productionPeople   = recipientsData?.production?.people  || []
-            const byProdCode = {}
-            productionPeople.forEach(p => { byProdCode[p.code] = p })
+            if (env === 'staging') {
+              const stagingCollectors = recipientsData?.staging?.collectors || []
+              const productionPeople  = recipientsData?.production?.people  || []
+              const byProdCode = {}
+              productionPeople.forEach(p => { byProdCode[p.code] = p })
+              const collectorCodes = String(collectorHr || '').split(',').map(c => c.trim()).filter(Boolean)
+              const collectorEmails = []
+              collectorCodes.forEach(code => {
+                const stagingMatch = stagingCollectors.find(c => c.code === code)
+                if (stagingMatch?.email?.includes('@')) { collectorEmails.push(stagingMatch.email); return }
+                const prodMatch = byProdCode[code]
+                if (prodMatch?.email?.includes('@')) { collectorEmails.push(prodMatch.email); return }
+              })
+              TO_EMAILS = [...new Set(collectorEmails)].join(',')
+              CC_EMAILS = ''
+            } else {
+              const people = recipientsData?.production?.people || []
+              const byCode = {}
+              people.forEach(p => { byCode[p.code] = p })
+              const collectorCodes = String(collectorHr || '').split(',').map(c => c.trim()).filter(Boolean)
+              const toEmails = []
+              collectorCodes.forEach(code => {
+                const p = byCode[code]
+                if (!p) return
+                if (p.email)    toEmails.push(p.email)
+                if (p.supEmail) toEmails.push(p.supEmail)
+              })
+              const reviewerHrCode = results?.reviewerHrCode || reviewerHr || ''
+              const reviewerCodes = String(reviewerHrCode).split(',').map(c => c.trim()).filter(Boolean)
+              const ccEmails = []
+              reviewerCodes.forEach(code => {
+                const p = byCode[code]
+                if (!p) return
+                if (p.email)    ccEmails.push(p.email)
+                if (p.supEmail) ccEmails.push(p.supEmail)
+              })
+              TO_EMAILS = [...new Set(toEmails.filter(e => e?.includes('@')))].join(',')
+              CC_EMAILS = [...new Set(ccEmails.filter(e => e?.includes('@')))].join(',')
+            }
 
-            const collectorCodes = String(collectorHr || '').split(',').map(c => c.trim()).filter(Boolean)
-            const collectorEmails = []
+            if (!TO_EMAILS) {
+              setEmailToast({ status: 'skipped', msg: '📧 Email skipped — collector HR code not found in directory' })
+              setTimeout(() => setEmailToast(null), 6000)
+              return
+            }
 
-            collectorCodes.forEach(code => {
-              // Try staging tab first
-              const stagingMatch = stagingCollectors.find(c => c.code === code)
-              if (stagingMatch && stagingMatch.email && stagingMatch.email.includes('@')) {
-                collectorEmails.push(stagingMatch.email)
-                console.log('[MARK] Staging lookup: found', code, 'in staging tab →', stagingMatch.email)
-                return
-              }
-              // Fall back to production tab
-              const prodMatch = byProdCode[code]
-              if (prodMatch && prodMatch.email && prodMatch.email.includes('@')) {
-                collectorEmails.push(prodMatch.email)
-                console.log('[MARK] Staging lookup: found', code, 'in production tab →', prodMatch.email)
-                return
-              }
-              // Not found anywhere
-              console.warn('[MARK] Staging lookup: code not found in either tab:', code)
-            })
+            // ── 5. Build error types map ─────────────────────────────────────
+            const errorTypes = {}
+            filteredAmends.forEach(a => { errorTypes[a.type] = (errorTypes[a.type] || 0) + 1 })
 
-            TO_EMAILS = [...new Set(collectorEmails)].join(',')
-            CC_EMAILS = ''
-            console.log('[MARK] Staging email — TO:', TO_EMAILS || '(none — no codes matched)')
-
-          } else {
-            // ── Production: collector + sup (TO), reviewer + sup (CC) ────────
-            const people = recipientsData?.production?.people || []
-            const byCode = {}
-            people.forEach(p => { byCode[p.code] = p })
-
-            // Collector(s)
-            const collectorCodes = String(collectorHr || '').split(',').map(c => c.trim()).filter(Boolean)
-            const toEmails = []
-            collectorCodes.forEach(code => {
-              const p = byCode[code]
-              if (!p) return
-              if (p.email)    toEmails.push(p.email)
-              if (p.supEmail) toEmails.push(p.supEmail)
-            })
-
-            // Reviewer(s)
-            const reviewerHrCode = results?.reviewerHrCode || reviewerHr || ''
-            const reviewerCodes = String(reviewerHrCode).split(',').map(c => c.trim()).filter(Boolean)
-            const ccEmails = []
-            reviewerCodes.forEach(code => {
-              const p = byCode[code]
-              if (!p) return
-              if (p.email)    ccEmails.push(p.email)
-              if (p.supEmail) ccEmails.push(p.supEmail)
-            })
-
-            // Dedupe
-            TO_EMAILS = [...new Set(toEmails.filter(e => e && e.includes('@')))].join(',')
-            CC_EMAILS = [...new Set(ccEmails.filter(e => e && e.includes('@')))].join(',')
-            console.log('[MARK] Production email — TO:', TO_EMAILS, '| CC:', CC_EMAILS)
-          }
-
-          if (TO_EMAILS) {
+            // ── 6. Send via Gmail API ────────────────────────────────────────
             const emailResult = await invoke('send_gmail_report', {
+              accessToken,
               matchName:     session.matchName || '',
               matchId:       String(session.matchId || ''),
               half:          halfLabel,
@@ -1987,14 +1994,18 @@ export default function AuditPage({ session, onBack, onFullReport, initialResult
               toEmails:      TO_EMAILS,
               ccEmails:      CC_EMAILS,
             })
+
+            // ── 7. Show success toast ────────────────────────────────────────
+            setEmailToast({ status: 'sent', msg: '📧 Quality report emailed successfully' })
+            setTimeout(() => setEmailToast(null), 6000)
             console.log('[MARK] Gmail report:', emailResult)
-          } else {
-            console.warn('[MARK] Gmail report skipped — no recipients resolved for HR code:', collectorHr)
+
+          } catch(emailErr) {
+            setEmailToast({ status: 'failed', msg: '📧 Email failed — ' + String(emailErr).slice(0, 100) })
+            setTimeout(() => setEmailToast(null), 8000)
+            console.warn('[MARK] Gmail report failed:', emailErr)
           }
-        } catch(emailErr) {
-          // Never block the UI for email failures
-          console.warn('[MARK] Gmail report failed (non-blocking):', emailErr)
-        }
+        })()
 
     } catch(e) {
       setExportState(null)
@@ -2606,6 +2617,30 @@ export default function AuditPage({ session, onBack, onFullReport, initialResult
                   </div>
                 </div>
               )}
+
+              {/* Email toast — shown after export */}
+              {emailToast && (() => {
+                const colors = {
+                  sending: { bg: 'rgba(10,132,255,0.08)', border: 'rgba(10,132,255,0.2)', text: '#0A84FF' },
+                  sent:    { bg: 'rgba(48,209,88,0.08)',  border: 'rgba(48,209,88,0.2)',  text: '#30D158' },
+                  failed:  { bg: 'rgba(255,69,58,0.08)',  border: 'rgba(255,69,58,0.2)',  text: '#FF453A' },
+                  skipped: { bg: 'rgba(142,142,147,0.08)',border: 'rgba(142,142,147,0.2)',text: '#8E8E93' },
+                }
+                const c = colors[emailToast.status] || colors.skipped
+                return (
+                  <div className="fade-in" style={{
+                    marginTop: 8, background: c.bg, border: `0.5px solid ${c.border}`,
+                    borderRadius: 12, padding: '10px 14px',
+                    display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8,
+                  }}>
+                    <span style={{ fontSize: 12, fontWeight: 600, color: c.text }}>{emailToast.msg}</span>
+                    <button onClick={() => setEmailToast(null)} style={{
+                      background: 'none', border: 'none', color: c.text, cursor: 'pointer',
+                      fontSize: 14, lineHeight: 1, opacity: 0.6, padding: '0 2px',
+                    }}>✕</button>
+                  </div>
+                )
+              })()}
             </>
           )}
 

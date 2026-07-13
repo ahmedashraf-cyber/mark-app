@@ -442,7 +442,7 @@ fn patch_one_shortcut(lnk_path: &std::path::Path) -> Result<bool, String> {
 // marker) does not match, so it gets stripped and replaced — that's what was
 // previously frozen by a fixed marker. Bump this whenever the embedded bridge
 // changes so existing installs re-embed the new version.
-const ASAR_MARKER: &str = "<!-- MARK_BRIDGE_INJECTED v7.5.34 -->";
+const ASAR_MARKER: &str = "<!-- MARK_BRIDGE_INJECTED v7.5.35 -->";
 
 #[command]
 fn patch_tag_once_asar() -> Result<String, String> {
@@ -1503,7 +1503,32 @@ async fn connect_sender_account() -> Result<String, String> {
         .ok_or_else(|| format!("No refresh_token in response: {}", resp))?
         .to_string();
 
-    Ok(format!("✅ Connected! Refresh token (save as MARK_GMAIL_SENDER_REFRESH secret):\n\n{}", refresh))
+    // ── Save refresh token to Firestore system_config/gmail_sender ────────
+    // This makes the token available to MARK at runtime without a rebuild.
+    let firestore_url = format!(
+        "https://firestore.googleapis.com/v1/projects/hudl-training-ops/databases/(default)/documents/system_config/gmail_sender"
+    );
+
+    // Get a Firestore access token using the service account
+    let sa_token = get_google_access_token().await.unwrap_or_default();
+
+    if !sa_token.is_empty() {
+        let firestore_body = serde_json::json!({
+            "fields": {
+                "refresh_token": { "stringValue": refresh },
+                "sender_email":  { "stringValue": "hudl.quality.egypt@gmail.com" },
+                "updated_at":    { "stringValue": chrono::Utc::now().to_rfc3339() },
+            }
+        });
+        let _ = client
+            .patch(&firestore_url)
+            .header("Authorization", format!("Bearer {}", sa_token))
+            .json(&firestore_body)
+            .send()
+            .await;
+    }
+
+    Ok(format!("✅ Sender account connected and saved to Firestore!\n\nThe refresh token has been stored automatically — MARK will use it immediately without any rebuild.\n\nRefresh token (backup copy):\n{}", refresh))
 }
 
 // ─── Get a fresh access token for the sender account ─────────────────────────
@@ -1534,11 +1559,46 @@ async fn get_sender_access_token() -> Result<String, String> {
         .ok_or_else(|| format!("No access_token: {}", resp))
 }
 
+// ─── Refresh sender token from a Firestore-stored refresh token ───────────────
+// Called from AuditPage.jsx with the refresh token read from Firestore.
+// Returns a fresh access token or an error string.
+#[command]
+async fn refresh_sender_token(refresh_token: String) -> Result<String, String> {
+    if refresh_token.is_empty() {
+        return Err("Empty refresh token".to_string());
+    }
+    let client = reqwest::Client::new();
+    let resp: serde_json::Value = client
+        .post("https://oauth2.googleapis.com/token")
+        .form(&[
+            ("client_id", OAUTH_CLIENT_ID),
+            ("client_secret", oauth_client_secret()),
+            ("refresh_token", refresh_token.as_str()),
+            ("grant_type", "refresh_token"),
+        ])
+        .send()
+        .await
+        .map_err(|e| format!("Token refresh failed: {}", e))?
+        .json()
+        .await
+        .map_err(|e| format!("Token parse failed: {}", e))?;
+
+    if let Some(err) = resp.get("error") {
+        return Err(format!("OAuth error: {} — {}", err, resp.get("error_description").and_then(|d| d.as_str()).unwrap_or("")));
+    }
+
+    resp["access_token"]
+        .as_str()
+        .map(|s| s.to_string())
+        .ok_or_else(|| format!("No access_token in response: {}", resp))
+}
+
 // ─── Send quality report email via Gmail API ──────────────────────────────────
 // Sends from hudl.quality.egypt@gmail.com using the pre-authorized refresh token.
 // Plain text body in English + Arabic. No doc created, no third-party service.
 #[command]
 async fn send_gmail_report(
+    access_token: String,
     match_name: String,
     match_id: String,
     half: String,
@@ -1556,7 +1616,7 @@ async fn send_gmail_report(
     to_emails: String,
     cc_emails: String,
 ) -> Result<String, String> {
-    let token = get_sender_access_token().await?;
+    let token = access_token;
     let client = reqwest::Client::new();
 
     // ── Build error breakdown lines ───────────────────────────────────────
@@ -2323,6 +2383,7 @@ fn save_text_file(path: String, content: String) -> Result<(), String> {
             send_report_email,
             send_gmail_report,
             connect_sender_account,
+            refresh_sender_token,
         ])
         .run(tauri::generate_context!())
         .expect("error while running MARK");

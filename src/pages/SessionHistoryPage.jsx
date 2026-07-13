@@ -1056,6 +1056,26 @@ export default function SessionHistoryPage({ onBack, initialSession }) {
           </div>
         )}
 
+        {/* Reconnect sender — admin only, hidden unless needed */}
+        {isAdmin && (
+          <button
+            onClick={async () => {
+              try {
+                const result = await invoke('connect_sender_account')
+                alert(result)
+              } catch(e) {
+                alert('Reconnect failed: ' + e)
+              }
+            }}
+            style={{
+              padding:'3px 10px', borderRadius:16, fontSize:10, fontWeight:700,
+              cursor:'pointer', border:'1px solid rgba(142,142,147,0.2)',
+              background:'transparent', color:'#636366',
+            }}
+            title="Reconnect hudl.quality.egypt@gmail.com sender — saves token to Firestore automatically"
+          >↺ Sender</button>
+        )}
+
         {/* Stats pills */}
         {!loading && displayedSessions.length > 0 && (
           <div style={{ display:'flex', gap:8 }}>

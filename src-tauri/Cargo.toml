@@ -1,6 +1,6 @@
 [package]
 name = "mark-app"
-version = "7.5.34"
+version = "7.5.35"
 description = "MARK — Review App for Hudl Egypt"
 authors = ["Ahmed Ashraf"]
 edition = "2021"
@@ -21,6 +21,7 @@ reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-feature
 jsonwebtoken = "9"
 urlencoding = "2"
 base64 = "0.22"
+chrono = { version = "0.4", features = ["serde"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio-tungstenite = { version = "0.21", features = ["native-tls"] }
