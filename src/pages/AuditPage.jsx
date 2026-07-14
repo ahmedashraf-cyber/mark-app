@@ -373,18 +373,28 @@ function QuickSummary({ results, score, abcScores, onFullReport }) {
   results.amendments.forEach(a => { types[a.type] = (types[a.type] || 0) + 1 })
   const uniqueEdited = computeErrorKeys(results.baseEvents, results.amendments, results.reviewerIds).size
 
+  // Prefer bridge reviewGroupScores (confirmed accurate) over client-side calc
+  const rg = results.reviewGroupScores
+  const getScore  = (key) => rg ? (rg[key]?.score  ?? null) : (abcScores?.[key]?.score  ?? null)
+  const getViewed = (key) => rg ? (rg[key]?.viewed  ?? 0)    : (abcScores?.[key]?.reviewed ?? 0)
+  const getErrors = (key) => rg ? (rg[key]?.errors  ?? 0)    : (abcScores?.[key]?.edited   ?? 0)
+  const overallScore  = rg ? (rg.overall?.score  ?? score) : score
+  const overallViewed = rg ? (rg.overall?.viewed ?? results.baseEvents.length) : results.baseEvents.length
+  const overallErrors = rg ? (rg.overall?.errors ?? uniqueEdited) : uniqueEdited
+
   return (
     <div className="scale-in" style={{
       background: 'var(--bg-2)', border: '1px solid var(--b-1)',
       borderRadius: 16, padding: '16px',
       boxShadow: '0 8px 32px rgba(0,0,0,0.5)',
     }}>
-      {/* 4 equal score cards */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: 10, marginBottom: 14 }}>
-        <ScoreCard label="Overall" score={score} reviewed={results.baseEvents.length} edited={uniqueEdited} color="var(--p2)" isOverall/>
-        <ScoreCard label="A - Review" score={abcScores?.A?.score ?? null} reviewed={abcScores?.A?.reviewed ?? 0} edited={abcScores?.A?.edited ?? 0} color="#0A84FF"/>
-        <ScoreCard label="B - Review" score={abcScores?.B?.score ?? null} reviewed={abcScores?.B?.reviewed ?? 0} edited={abcScores?.B?.edited ?? 0} color="#30D158"/>
-        <ScoreCard label="C - Review" score={abcScores?.C?.score ?? null} reviewed={abcScores?.C?.reviewed ?? 0} edited={abcScores?.C?.edited ?? 0} color="#FFD60A"/>
+      {/* 5 score cards: Overall + A + B + C + Others */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr 1fr', gap: 10, marginBottom: 14 }}>
+        <ScoreCard label="Overall"    score={overallScore}      reviewed={overallViewed}      edited={overallErrors}      color="var(--p2)" isOverall/>
+        <ScoreCard label="A - Review" score={getScore('A')}      reviewed={getViewed('A')}      edited={getErrors('A')}      color="#0A84FF"/>
+        <ScoreCard label="B - Review" score={getScore('B')}      reviewed={getViewed('B')}      edited={getErrors('B')}      color="#30D158"/>
+        <ScoreCard label="C - Review" score={getScore('C')}      reviewed={getViewed('C')}      edited={getErrors('C')}      color="#FFD60A"/>
+        <ScoreCard label="Others"     score={getScore('Others')} reviewed={getViewed('Others')} edited={getErrors('Others')} color="#BF5AF2"/>
       </div>
 
       {/* Bottom: stats + badges + full report */}
