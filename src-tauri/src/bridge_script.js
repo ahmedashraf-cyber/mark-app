@@ -1,5 +1,5 @@
 (async function(){
-  const BRIDGE_VERSION = '7.6.0';
+  const BRIDGE_VERSION = '7.7.0';
   if(window.__MARK_BRIDGE_VERSION__ === BRIDGE_VERSION){console.log('[MARK] bridge already running (v' + BRIDGE_VERSION + ')');return;}
   if(window.__MARK_BRIDGE_STOP__) window.__MARK_BRIDGE_STOP__();
   window.__MARK_BRIDGE__ = true;
@@ -371,6 +371,140 @@
   document.addEventListener('visibilitychange', function () { if (!document.hidden) setTimeout(maybeAutoSweep, 600); });
   window.__MARK_SWEEP__ = function () { return sweepMatchIdentities(); };   // manual trigger for debugging
 
+  // ── A/B/C Review groups (Quality Review Tracker) ──────────────────────────
+  // Tag Once's Event Review Tracker buckets every event into named categories,
+  // then groups those into A/B/C-Review. The category→letter mapping below is
+  // CONFIRMED from Tag Once's own `updateQualityReviewToolList` IPC payload
+  // (data.qualityCategorizationContext.categorizedEvents). Per-group score =
+  //   (viewedInGroup − errorsInGroup) / viewedInGroup × 100
+  // reusing the same reviewer viewed/error key signals as the overall score.
+  const A_CATS = ['lineupsAndFormation','substitutions','tacticalShifts','playerOff','playerOn',
+    'goals','keyPassesBeforeShots','ownGoals','cards','fouls','offside','freeKickPass','corners',
+    'errors','kickOffs','throughBalls','stoppage','freezeFrame','pressuresBeforeShots',
+    'refereeBallDrop','endShots','g.K.-Actions-shots'];
+  const B_CATS = ['Clearances','passRecoveries','interceptions','blocks','dribbles','tackles',
+    'miscontrols','g.K.-Actions-Other','shields','fiftyFifty'];
+  const C_CATS = ['ballRecovery','aerialLosts','pressures'];
+  const ALL_CATS_SET = new Set([...A_CATS, ...B_CATS, ...C_CATS]);
+
+  const ipc = (function () { try { return window.require && window.require('electron').ipcRenderer; } catch (_) { return null; } })();
+
+  // READ-ONLY tap on ipcRenderer.send (outgoing). The main renderer is the
+  // SENDER of updateQualityReviewToolList, so we must watch .send, not .on.
+  // Correct (non-recursive) wrap: save the ORIGINAL bound reference first and
+  // call THAT — the earlier recursion crash came from a wrapper that re-called
+  // the reassigned .send. Body is O(1) so it's safe on Tag Once's hot render path.
+  function installQrtTap() {
+    try {
+      if (!ipc || typeof ipc.send !== 'function') return false;
+      if (ipc.__markQrtTapped) return true;
+      const orig = ipc.send.bind(ipc);
+      ipc.__markQrtOrigSend = orig;
+      ipc.send = function (channel) {
+        if (channel === 'updateQualityReviewToolList') {
+          try { window.__MARK_QRT__ = arguments[1]; window.__MARK_QRT_TS__ = Date.now(); } catch (_) {}
+        }
+        return orig.apply(ipc, arguments);
+      };
+      ipc.__markQrtTapped = true;
+      window.__MARK_QRT_RESTORE__ = function () { try { ipc.send = orig; ipc.__markQrtTapped = false; } catch (_) {} };
+      console.log('[MARK] QRT ipc send-tap installed');
+      return true;
+    } catch (e) { console.warn('[MARK] QRT tap install failed:', e && e.message); return false; }
+  }
+
+  // Does an object look like `categorizedEvents` (category-name keys → arrays)?
+  function looksCategorized(o) {
+    if (!o || typeof o !== 'object' || Array.isArray(o)) return false;
+    const ks = Object.keys(o);
+    if (ks.length < 3 || ks.length > 120) return false;
+    let catHits = 0, arrKeys = 0;
+    for (let i = 0; i < ks.length; i++) { if (ALL_CATS_SET.has(ks[i])) catHits++; if (Array.isArray(o[ks[i]])) arrKeys++; }
+    return catHits >= 3 || (arrKeys >= 5 && arrKeys === ks.length);
+  }
+
+  // PRIMARY (pure read): cycle-safe walk of the fiber tree — props, the hook
+  // memoizedState chain, and XState actors (via getSnapshot().context) — to find
+  // the live categorizedEvents. No JSON.stringify (XState state is circular).
+  function readCategorizedFromFiber(budgetMs) {
+    const root = document.querySelector('#root') || document.body;
+    if (!root) return null;
+    const fkey = Object.keys(root).find(k => k.startsWith('__reactContainer') || k.startsWith('__reactFiber'));
+    if (!fkey) return null;
+    let fiber = root[fkey];
+    if (fiber && fiber.current) fiber = fiber.current;
+    const deadline = Date.now() + (budgetMs || 800);
+    let found = null;
+
+    const scan = (val, seen, depth) => {
+      if (found || !val || typeof val !== 'object' || depth > 8 || seen.has(val)) return;
+      seen.add(val);
+      if (typeof val.getSnapshot === 'function') {           // XState actor
+        try { const s = val.getSnapshot(); if (s && s.context) scan(s.context, seen, depth + 1); } catch (_) {}
+      }
+      if (val.categorizedEvents && looksCategorized(val.categorizedEvents)) { found = val.categorizedEvents; return; }
+      if (looksCategorized(val)) { found = val; return; }
+      const ks = Object.keys(val);
+      for (let i = 0; i < ks.length && i < 300 && !found; i++) { try { scan(val[ks[i]], seen, depth + 1); } catch (_) {} }
+    };
+
+    const seenFibers = new Set();
+    const stack = [fiber]; let n = 0;
+    while (stack.length && n < 60000 && !found && Date.now() < deadline) {
+      const f = stack.pop();
+      if (!f || seenFibers.has(f)) continue;
+      seenFibers.add(f); n++;
+      try { let h = f.memoizedState, hc = 0; while (h && hc < 40 && !found) { scan(h.memoizedState, new Set(), 0); h = h.next; hc++; } } catch (_) {}
+      try { scan(f.memoizedProps, new Set(), 0); } catch (_) {}
+      if (f.child) stack.push(f.child);
+      if (f.sibling) stack.push(f.sibling);
+    }
+    return found;
+  }
+
+  // SECONDARY (trigger + tap): provoke Tag Once's OWN refresh handler with a
+  // LOCAL emit (in-process — no main-process round trip, no window opened), then
+  // read whatever it sent through the tap. .emit is a no-op if the listener isn't
+  // registered, so it can't crash.
+  async function getCategorizedViaIpc(timeoutMs) {
+    installQrtTap();
+    const before = window.__MARK_QRT_TS__ || 0;
+    try { if (ipc && typeof ipc.emit === 'function') ipc.emit('requestQualityReviewTrackerData', {}); } catch (_) {}
+    const start = Date.now();
+    while (Date.now() - start < (timeoutMs || 1500)) {
+      const p = window.__MARK_QRT__;
+      if (p && (window.__MARK_QRT_TS__ || 0) >= before && p.qualityCategorizationContext && p.qualityCategorizationContext.categorizedEvents) {
+        return p.qualityCategorizationContext.categorizedEvents;
+      }
+      await new Promise(r => setTimeout(r, 50));
+    }
+    const p = window.__MARK_QRT__;
+    return (p && p.qualityCategorizationContext && p.qualityCategorizationContext.categorizedEvents) || null;
+  }
+
+  // Orchestrator: pure read first, then trigger+tap, then any passive capture.
+  async function getCategorizedEvents() {
+    try { const r = readCategorizedFromFiber(800); if (r) return { source: 'fiber', categorizedEvents: r }; } catch (_) {}
+    try { const c = await getCategorizedViaIpc(1500); if (c) return { source: 'ipc-emit', categorizedEvents: c }; } catch (_) {}
+    const p = window.__MARK_QRT__;
+    if (p && p.qualityCategorizationContext && p.qualityCategorizationContext.categorizedEvents)
+      return { source: 'ipc-passive', categorizedEvents: p.qualityCategorizationContext.categorizedEvents };
+    return null;
+  }
+
+  // Score A/B/C from categorizedEvents + the reviewer's viewed/error keys.
+  function computeReviewGroupScores(categorizedEvents, viewedKeys, errorKeys) {
+    const keysOf = cats => { const s = new Set(); cats.forEach(c => (categorizedEvents[c] || []).forEach(e => { const k = e && e.key; if (k) s.add(k); })); return s; };
+    const scoreGroup = groupKeys => {
+      let viewed = 0, errors = 0;
+      viewedKeys.forEach(k => { if (groupKeys.has(k)) { viewed++; if (errorKeys.has(k)) errors++; } });
+      return { viewed, errors, score: viewed ? Math.round(((viewed - errors) / viewed) * 1000) / 10 : null };
+    };
+    return { A: scoreGroup(keysOf(A_CATS)), B: scoreGroup(keysOf(B_CATS)), C: scoreGroup(keysOf(C_CATS)) };
+  }
+
+  installQrtTap();   // start capturing any natural sends from bridge startup
+
   // ── localhost WebSocket connection ────────────────────────────────────────
   // All sync commands (navCommand, posSync, seekCommand) arrive here.
   // Firebase is NOT used for sync — zero writes per keypress.
@@ -385,6 +519,7 @@
     wsConnected = false;
     if (unsubActiveQuery) { unsubActiveQuery(); unsubActiveQuery = null; }
     try { if (window.__MARK_LINK_RESTORE__) window.__MARK_LINK_RESTORE__(); } catch(_) {}
+    try { if (window.__MARK_QRT_RESTORE__) window.__MARK_QRT_RESTORE__(); } catch(_) {}
     console.log('[MARK] old bridge stopped cleanly');
   };
 
@@ -797,6 +932,44 @@
           moduleScores = null;
         }
 
+        // ── A/B/C Review-group scores (Update: Quality Review Tracker) ────────
+        // Additive. Pulls Tag Once's own categorizedEvents (zero user action —
+        // fiber read, else local-emit + send-tap), buckets keys into A/B/C via
+        // the confirmed category lists, and scores each group with the same
+        // reviewer viewed/error signals as the overall score. Fully guarded:
+        // any failure leaves reviewGroupScores = null and changes nothing else.
+        let reviewGroupScores = null;
+        try {
+          const reviewerSetG = new Set((reviewerIds || []).map(Number));
+          const viewedKeysG = new Set(), errorKeysG = new Set();
+          Object.values(cache).forEach(v => {
+            if (!v || v.__typename !== 'Event') return;
+            if (v.matchId !== numMatchId && v.matchId !== String(numMatchId)) return;
+            if (partId && v.partId !== partId) return;
+            if (!reviewerSetG.has(Number(v.author))) return;
+            if (v.category === 'telemetry' && v.type === 'event-activation') viewedKeysG.add(v.key);
+            else if (v.category === 'amendment') errorKeysG.add(v.key);
+          });
+          const cat = await getCategorizedEvents();
+          if (cat && cat.categorizedEvents && viewedKeysG.size > 0) {
+            const groups = computeReviewGroupScores(cat.categorizedEvents, viewedKeysG, errorKeysG);
+            const overallViewed = viewedKeysG.size;
+            let overallErrors = 0; viewedKeysG.forEach(k => { if (errorKeysG.has(k)) overallErrors++; });
+            reviewGroupScores = {
+              source: cat.source,
+              overall: { viewed: overallViewed, errors: overallErrors,
+                score: overallViewed ? Math.round(((overallViewed - overallErrors) / overallViewed) * 1000) / 10 : null },
+              A: groups.A, B: groups.B, C: groups.C,
+              categoriesSeen: Object.keys(cat.categorizedEvents).length,
+            };
+          } else {
+            reviewGroupScores = { source: cat ? cat.source : 'unavailable', error: 'categorizedEvents not reachable' };
+          }
+        } catch (rgErr) {
+          console.warn('[MARK] reviewGroupScores failed:', rgErr && rgErr.message);
+          reviewGroupScores = null;
+        }
+
         // ── Lineup players (home + away with team info) ───────────────────────
         // Used by MARK to resolve player names/jersey numbers in amendments
         let lineupPlayers = [];
@@ -854,6 +1027,7 @@
           identities: identitiesArray(),
           lineupPlayers,
           moduleScores,
+          reviewGroupScores,
           diagnostics,
           usedTelemetry,
           environment: (typeof process !== 'undefined' && process.env && process.env.LIVE_COLLECTION_SERVICE_URL)
