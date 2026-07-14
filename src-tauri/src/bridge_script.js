@@ -1,5 +1,5 @@
 (async function(){
-  const BRIDGE_VERSION = '7.6.0';
+  const BRIDGE_VERSION = '7.7.0';
   if(window.__MARK_BRIDGE_VERSION__ === BRIDGE_VERSION){console.log('[MARK] bridge already running (v' + BRIDGE_VERSION + ')');return;}
   if(window.__MARK_BRIDGE_STOP__) window.__MARK_BRIDGE_STOP__();
   window.__MARK_BRIDGE__ = true;
@@ -797,6 +797,142 @@
           moduleScores = null;
         }
 
+        // ── Review group scores (A / B / C / Others) ─────────────────────────
+        // Programmatically clicks the Event Review Tracker button to capture
+        // Tag Once's own categorizedEvents payload, then computes per-group scores
+        // using the same viewed/error keys already resolved above.
+        // Zero user intervention: button click + capture + close in ~200ms.
+        // Fully guarded: any failure leaves reviewGroupScores null.
+        let reviewGroupScores = null;
+        try {
+          const A_CATS = ['lineupsAndFormation','substitutions','tacticalShifts','playerOff','playerOn',
+            'goals','keyPassesBeforeShots','ownGoals','cards','fouls','offside','freeKickPass','corners',
+            'errors','kickOffs','throughBalls','stoppage','freezeFrame','pressuresBeforeShots',
+            'refereeBallDrop','endShots','g.K.-Actions-shots'];
+          const B_CATS = ['Clearances','passRecoveries','interceptions','blocks','dribbles','tackles',
+            'miscontrols','g.K.-Actions-Other','shields','fiftyFifty'];
+          const C_CATS = ['ballRecovery','aerialLosts','pressures'];
+
+          // Step 1: Install read-only tap on ipcRenderer.send (outgoing).
+          // The main renderer SENDS openQualityReviewToolWindow — tap it.
+          // Non-recursive: saves original first.
+          const ipcR = (function() { try { return window.require && window.require('electron').ipcRenderer; } catch(_) { return null; } })();
+          if (!ipcR) throw new Error('ipcRenderer unavailable');
+
+          const origSend = ipcR.__markOrigSend || ipcR.send.bind(ipcR);
+          ipcR.__markOrigSend = origSend;
+          window.__MARK_QRT__ = null;
+          window.__MARK_QRT_TS__ = null;
+          const tapStart = Date.now();
+
+          ipcR.send = function(channel) {
+            if (channel === 'openQualityReviewToolWindow') {
+              try {
+                const cats = arguments[1] && arguments[1].qualityCategorizationContext && arguments[1].qualityCategorizationContext.categorizedEvents;
+                if (cats && Object.keys(cats).length > 0) {
+                  window.__MARK_QRT__ = arguments[1];
+                  window.__MARK_QRT_TS__ = Date.now();
+                }
+              } catch(_) {}
+            }
+            return origSend.apply(ipcR, arguments);
+          };
+
+          // Step 2: Find and click the tracker button (bp6-icon-form).
+          const trackerIcon = document.querySelector('span.bp6-icon-form');
+          const trackerBtn = trackerIcon && trackerIcon.closest('a');
+          if (!trackerBtn) throw new Error('tracker button not found in DOM');
+          trackerBtn.click();
+
+          // Step 3: Wait for tap to capture data (max 3s).
+          await new Promise(r => setTimeout(r, 100));
+          let waited = 100;
+          while (waited < 3000) {
+            const ts = window.__MARK_QRT_TS__ || 0;
+            if (ts > tapStart && window.__MARK_QRT__) break;
+            await new Promise(r => setTimeout(r, 50));
+            waited += 50;
+          }
+
+          // Step 4: Close tracker immediately.
+          origSend('closeQualityReviewToolWindow');
+
+          // Step 5: Restore original send.
+          ipcR.send = origSend;
+
+          const capturedCats = window.__MARK_QRT__ &&
+            window.__MARK_QRT__.qualityCategorizationContext &&
+            window.__MARK_QRT__.qualityCategorizationContext.categorizedEvents;
+
+          if (!capturedCats || Object.keys(capturedCats).length === 0) throw new Error('categorizedEvents empty or not captured');
+
+          // Step 6: Build reviewed unique key sets (reuse telemetry from above).
+          const reviewerSetRG = new Set((reviewerIds || []).map(Number));
+          const viewedKeysRG = new Set();
+          const errorKeysRG = new Set();
+          Object.values(cache).forEach(v => {
+            if (!v || v.__typename !== 'Event') return;
+            if (v.matchId !== numMatchId && v.matchId !== String(numMatchId)) return;
+            if (partId && v.partId !== partId) return;
+            if (v.category === 'telemetry' && v.type === 'event-activation' && reviewerSetRG.has(Number(v.author)))
+              viewedKeysRG.add(v.key);
+            if (v.category === 'amendment' && reviewerSetRG.has(Number(v.author)))
+              errorKeysRG.add(v.key);
+          });
+
+          // Step 7: Assign each categorized event key to ONE group (A > B > C priority).
+          const keyToGroup = {};
+          const assignGroup = (groupCats, groupName) => {
+            groupCats.forEach(cat => {
+              if (!capturedCats[cat] || !Array.isArray(capturedCats[cat])) return;
+              capturedCats[cat].forEach(e => { if (!keyToGroup[e.key]) keyToGroup[e.key] = groupName; });
+            });
+          };
+          assignGroup(A_CATS, 'A');
+          assignGroup(B_CATS, 'B');
+          assignGroup(C_CATS, 'C');
+
+          // Step 8: Bucket viewed keys into groups.
+          const buckets = {
+            A: { viewed: 0, errors: 0 },
+            B: { viewed: 0, errors: 0 },
+            C: { viewed: 0, errors: 0 },
+            Others: { viewed: 0, errors: 0 },
+          };
+          viewedKeysRG.forEach(k => {
+            const g = keyToGroup[k] || 'Others';
+            buckets[g].viewed++;
+            if (errorKeysRG.has(k)) buckets[g].errors++;
+          });
+
+          const mkRG = b => ({
+            viewed: b.viewed,
+            errors: b.errors,
+            score: b.viewed > 0 ? Math.round(((b.viewed - b.errors) / b.viewed) * 100) : null,
+          });
+
+          const overallViewed = viewedKeysRG.size;
+          const overallErrors = errorKeysRG.size;
+
+          reviewGroupScores = {
+            overall: {
+              viewed: overallViewed,
+              errors: overallErrors,
+              score: overallViewed > 0 ? Math.round(((overallViewed - overallErrors) / overallViewed) * 100) : null,
+            },
+            A: mkRG(buckets.A),
+            B: mkRG(buckets.B),
+            C: mkRG(buckets.C),
+            Others: mkRG(buckets.Others),
+            captureMs: (window.__MARK_QRT_TS__ || tapStart) - tapStart,
+          };
+
+          console.log('[MARK] reviewGroupScores:', JSON.stringify(reviewGroupScores));
+        } catch (rgErr) {
+          console.warn('[MARK] reviewGroupScores failed:', rgErr && rgErr.message);
+          reviewGroupScores = null;
+        }
+
         // ── Lineup players (home + away with team info) ───────────────────────
         // Used by MARK to resolve player names/jersey numbers in amendments
         let lineupPlayers = [];
@@ -854,6 +990,7 @@
           identities: identitiesArray(),
           lineupPlayers,
           moduleScores,
+          reviewGroupScores,
           diagnostics,
           usedTelemetry,
           environment: (typeof process !== 'undefined' && process.env && process.env.LIVE_COLLECTION_SERVICE_URL)
