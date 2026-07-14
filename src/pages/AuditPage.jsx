@@ -485,16 +485,27 @@ function filterAmendments(amendments, reviewerIds) {
 
 // Error events = reviewed events where a reviewer made a change, counted once
 // per event key:
-//   • a reviewer EDIT or DELETION  → amendment authored by a reviewer, OR
-//   • a reviewer-ADDED event       → the collector missed it; the base event
-//                                     itself is authored by a reviewer.
+//   • a reviewer EDIT or DELETION  → amendment authored by a reviewer
+//   • reviewer-ADDED event         → only if the reviewer did NOT also collect
+//                                     that event (dual-role: reviewer also tagged
+//                                     some base events themselves — those are NOT
+//                                     errors, they are legitimate collection work)
 // This Set is the numerator behind every score.
 function computeErrorKeys(baseEvents, amendments, reviewerIds) {
   const set = new Set((reviewerIds || []).map(Number))
   const errs = new Set()
   if (set.size === 0) return errs
-  ;(baseEvents || []).forEach(e => { if (set.has(Number(e.author))) errs.add(e.key) })
-  ;(amendments || []).forEach(a => { if (set.has(Number(a.author))) errs.add(a.key) })
+  // Reviewer-authored amendments = errors (they corrected someone else's event)
+  // BUT exclude amendments on events they ALSO collected (self-correction is not a review error)
+  const reviewerBaseKeys = new Set(
+    (baseEvents || []).filter(e => set.has(Number(e.author))).map(e => e.key)
+  )
+  ;(amendments || []).forEach(a => {
+    if (!set.has(Number(a.author))) return
+    // Skip if the reviewer also authored the base event (dual-role self-correction)
+    if (reviewerBaseKeys.has(a.key)) return
+    errs.add(a.key)
+  })
   return errs
 }
 
@@ -793,7 +804,14 @@ function AmendmentsTable({ results, session, reviewerIds, identityMap, onSeek })
     const types = [...new Set(amends.map(a => a.type))]
 
     // Collector = base event author; Reviewer = amendment author
-    const collectorId = base?.author
+    // Special case: if the base event was authored by the reviewer (missed/added
+    // event — the reviewer tagged it because the collector missed it), show the
+    // PRIMARY collector as responsible, not the reviewer.
+    const reviewerSet = new Set((results.reviewerIds || []).map(Number))
+    const baseAuthorIsReviewer = base?.author != null && reviewerSet.has(Number(base.author))
+    const collectorId = baseAuthorIsReviewer
+      ? (results.collectorId ?? base?.author)
+      : base?.author
     const reviewerAuthorId = latestAmend?.author
     const collector = resolveIdentity(collectorId)
     const reviewer = resolveIdentity(reviewerAuthorId)
@@ -1758,7 +1776,14 @@ export default function AuditPage({ session, onBack, onFullReport, initialResult
         }
 
         const teamName = base?.teamId ? (teamMap[base.teamId] || String(base.teamId)) : '—'
-        const collId = idMap[String(base?.author)] || {}
+        // If base event was authored by the reviewer (missed/added event), show
+        // the primary collector as responsible — the collector missed it.
+        const reviewerSetExp = new Set((results.reviewerIds || []).map(Number))
+        const baseAuthorIsRev = base?.author != null && reviewerSetExp.has(Number(base.author))
+        const effectiveCollectorId = baseAuthorIsRev
+          ? (results.collectorId ?? base?.author)
+          : base?.author
+        const collId = idMap[String(effectiveCollectorId)] || {}
         const revId  = idMap[String(latestAmend?.author)] || {}
 
         return {
@@ -1770,7 +1795,7 @@ export default function AuditPage({ session, onBack, onFullReport, initialResult
           errorTypeLabel: errorLabels[errorType] || errorType,
           module: moduleLabels[errorType] || 'Base',
           beforeStr, afterStr,
-          collectorHr: collId.hrcode || collId.hrCode || String(base?.author || '—'),
+          collectorHr: collId.hrcode || collId.hrCode || String(effectiveCollectorId || '—'),
           collectorName: collId.name || '',
           reviewerHr: revId.hrcode || revId.hrCode || String(latestAmend?.author || '—'),
           reviewerName: revId.name || reviewerName,
