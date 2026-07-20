@@ -1,7 +1,7 @@
 {
-  "updatedAt": "2026-07-20T12:25:14.327Z",
+  "updatedAt": "2026-07-20T13:25:16.539Z",
   "production": {
-    "count": 1265,
+    "count": 1266,
     "people": [
       {
         "code": "A-001",
@@ -12592,6 +12592,16 @@
         "supName": "Mohamed Ahmed Fouad Attia",
         "supTitle": "Senior Video Team Leader",
         "supEmail": "mohamed.fouad@hudl.com"
+      },
+      {
+        "code": "A-602",
+        "name": "Mostafa Magdy Mahmoud Sayed",
+        "title": "Video Coordinator",
+        "email": "mostafamagdye9@gmail.com",
+        "supCode": "#N/A",
+        "supName": "",
+        "supTitle": "",
+        "supEmail": ""
       },
       {
         "code": "B-002",
