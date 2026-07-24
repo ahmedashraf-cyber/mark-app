@@ -1,5 +1,5 @@
 {
-  "updatedAt": "2026-07-24T14:25:15.823Z",
+  "updatedAt": "2026-07-24T15:25:14.693Z",
   "production": {
     "count": 1266,
     "people": [
@@ -168,10 +168,10 @@
         "name": "Abdelrahman Khaled Nouby Badawy",
         "title": "Video Planning Specialist",
         "email": "abdelrahman.noubi@hudl.com",
-        "supCode": "A-946",
-        "supName": "",
-        "supTitle": "",
-        "supEmail": ""
+        "supCode": "A-208",
+        "supName": "Omar Mohamed Sayed Ali Elsayed",
+        "supTitle": "Video Planning Supervisor",
+        "supEmail": "omar.sayed@hudl.com"
       },
       {
         "code": "A-035",
@@ -4108,10 +4108,10 @@
         "name": "Ali Tarek Ali Abdullah",
         "title": "Video Planning Specialist",
         "email": "ali.tarek@hudl.com",
-        "supCode": "A-946",
-        "supName": "",
-        "supTitle": "",
-        "supEmail": ""
+        "supCode": "A-208",
+        "supName": "Omar Mohamed Sayed Ali Elsayed",
+        "supTitle": "Video Planning Supervisor",
+        "supEmail": "omar.sayed@hudl.com"
       },
       {
         "code": "A-1149",
@@ -8518,10 +8518,10 @@
         "name": "Amr Ayman Mohamed Mohamed",
         "title": "Video Coordinator",
         "email": "amr.ayman@hudl.com",
-        "supCode": "",
-        "supName": "",
+        "supCode": "A-008",
+        "supName": "Mohamed Bahaaeldin Ahmed Mohamed",
         "supTitle": "",
-        "supEmail": ""
+        "supEmail": "mohamed.bahaajr@hudl.com"
       },
       {
         "code": "A-1943",
@@ -12575,7 +12575,7 @@
       },
       {
         "code": "A-2504",
-        "name": "Osama Zaki",
+        "name": "Osama Mohamed Zaki Sayed Abdelhafiz",
         "title": "Video Coordinator",
         "email": "o.zaki95@yahoo.com",
         "supCode": "A-008",
@@ -12585,7 +12585,7 @@
       },
       {
         "code": "A-2505",
-        "name": "Ahmed Hafez",
+        "name": "Ahmed Ali Abdelhafez Ali Mohamed",
         "title": "Video Coordinator",
         "email": "ahmedhaafeez99@gmail.com",
         "supCode": "A-334",
@@ -12598,10 +12598,10 @@
         "name": "Mostafa Magdy Mahmoud Sayed",
         "title": "Video Coordinator",
         "email": "mostafamagdye9@gmail.com",
-        "supCode": "#N/A",
-        "supName": "",
-        "supTitle": "",
-        "supEmail": ""
+        "supCode": "A-334",
+        "supName": "Mohamed Ahmed Fouad Attia",
+        "supTitle": "Senior Video Team Leader",
+        "supEmail": "mohamed.fouad@hudl.com"
       },
       {
         "code": "B-002",
