@@ -373,14 +373,17 @@ function QuickSummary({ results, score, abcScores, onFullReport }) {
   results.amendments.forEach(a => { types[a.type] = (types[a.type] || 0) + 1 })
   const uniqueEdited = computeErrorKeys(results.baseEvents, results.amendments, results.reviewerIds).size
 
-  // Prefer bridge reviewGroupScores (confirmed accurate) over client-side calc
+  // Prefer recalculated bridge reviewGroupScores (rules 1-5) over client-side calc
+  // Bridge recalculates scores using accurate error keys from the 5 confirmed rules
   const rg = results.reviewGroupScores
   const getScore  = (key) => rg ? (rg[key]?.score  ?? null) : (abcScores?.[key]?.score  ?? null)
   const getViewed = (key) => rg ? (rg[key]?.viewed  ?? 0)    : (abcScores?.[key]?.reviewed ?? 0)
   const getErrors = (key) => rg ? (rg[key]?.errors  ?? 0)    : (abcScores?.[key]?.edited   ?? 0)
   const overallScore  = rg ? (rg.overall?.score  ?? score) : score
   const overallViewed = rg ? (rg.overall?.viewed ?? results.baseEvents.length) : results.baseEvents.length
-  const overallErrors = rg ? (rg.overall?.errors ?? uniqueEdited) : uniqueEdited
+  // Use total computed errors count (non-FF + FF) when available
+  const totalComputedErrors = (results.computedErrors?.length || 0) + (results.computedFFErrors?.length || 0)
+  const overallErrors = totalComputedErrors > 0 ? totalComputedErrors : (rg ? (rg.overall?.errors ?? uniqueEdited) : uniqueEdited)
 
   return (
     <div className="scale-in" style={{
@@ -1134,6 +1137,9 @@ function AmendmentsTable({ results, session, reviewerIds, identityMap, onSeek })
   // ── CSV export ─────────────────────────────────────────────────────────────
   const downloadCSV = () => {
     const safe = (s) => String(s ?? '').replace(/"/g, '""')
+    const resolveHr  = (id) => { const e = idMap[String(id)]; return e ? (e.hrcode || e.hrCode || String(id)) : String(id || '—') }
+    const resolveName = (id) => { const e = idMap[String(id)]; return e ? (e.name || '') : '' }
+
     const locationStr = (loc) => {
       if (!loc) return '—'
       const a = loc.actual || loc
@@ -1146,29 +1152,67 @@ function AmendmentsTable({ results, session, reviewerIds, identityMap, onSeek })
         return p ? `${d.role}: #${p.jersey} ${p.name} (${p.teamName})` : `${d.role}: Missing`
       }).join(' | ')
     }
+
     const headers = ['Match ID','Match Name','Half','Timestamp','Event Name','Team','Error Type','Module','Before','After','Collector HR','Collector Name','Reviewer HR','Reviewer Name','Captured At']
-    const csvRows = rows.map(r => {
-      let bStr = '—', aStr = '—'
-      const b = r.before, a = r.after
-      if (r.errorType === 'deletion') { bStr = b?.eventName || '—'; aStr = 'Deleted' }
-      else if (r.errorType === 'rename') { bStr = b?.eventName || '—'; aStr = a?.eventName || '—' }
-      else if (r.errorType === 'replacement') { bStr = `${b?.eventName}`; aStr = `${a?.eventName}` }
-      else if (r.errorType === 'wrong-extras') { bStr = Object.entries(b?.fields||{}).map(([k,v])=>`${k}: ${Array.isArray(v)?v.join(','):v}`).join(' | '); aStr = Object.entries(a?.fields||{}).map(([k,v])=>`${k}: ${Array.isArray(v)?v.join(','):v}`).join(' | ') }
-      else if (r.errorType === 'wrong-location') { bStr = locationStr(b?.location); aStr = locationStr(a?.location) }
-      else if (r.errorType === 'wrong-player') { bStr = playerStr(b?.playerDiff, false); aStr = playerStr(a?.playerDiff, true) }
-      else if (r.errorType === 'wrong-timestamp') { bStr = b?.ts || '—'; aStr = a?.ts || '—' }
-      else if (r.errorType === 'freeze-frame') { bStr = `Keeper: ${b?.ff?.beforeKeeper?.name||'Not set'} · Shooter: ${b?.ff?.beforeShooter?.name||'Not set'}`; aStr = `Keeper: ${a?.ff?.afterKeeper?.name||'Not set'} · Shooter: ${a?.ff?.afterShooter?.name||'Not set'}` }
-      else if (r.errorType === 'goal-location') { bStr = locationStr(b?.goalLoc); aStr = locationStr(a?.goalLoc) }
-      else if (r.errorType === 'squad') { bStr = b?.formation||'—'; aStr = a?.formation||'—' }
-      else if (r.errorType === 'added') { bStr = 'Missing'; aStr = a?.eventName||'—' }
-      return [session.matchId, session.matchName, formatHalf(session.half), r.timestamp, r.eventName, r.teamName, ERROR_CONFIG[r.errorType]?.label || r.errorType, r.module, bStr, aStr, r.collectorHr, r.collectorName, r.reviewerHr, r.reviewerName, r.capturedTime].map(v => `"${safe(v)}"`)
+
+    // ── Non-FF rows ─────────────────────────────────────────────────────────
+    const computedE = results.computedErrors
+    let csvRows = []
+
+    if (computedE && computedE.length > 0) {
+      // Use bridge-computed errors (rules 1-5)
+      csvRows = computedE.map(r => {
+        const cHr   = resolveHr(r.collectorId)
+        const cName = resolveName(r.collectorId)
+        const rHr   = resolveHr(r.reviewerId)
+        const rName = resolveName(r.reviewerId)
+        return [session.matchId, session.matchName, formatHalf(session.half), r.timestamp, r.eventName, '—', r.errorType, r.module, r.oldValue, r.newValue, cHr, cName, rHr, rName, '—'].map(v => `"${safe(v)}"`)
+      })
+    } else {
+      // Fallback to old row-based computation
+      csvRows = rows.map(r => {
+        let bStr = '—', aStr = '—'
+        const b = r.before, a = r.after
+        if (r.errorType === 'deletion') { bStr = b?.eventName || '—'; aStr = 'Deleted' }
+        else if (r.errorType === 'rename') { bStr = b?.eventName || '—'; aStr = a?.eventName || '—' }
+        else if (r.errorType === 'replacement') { bStr = `${b?.eventName}`; aStr = `${a?.eventName}` }
+        else if (r.errorType === 'wrong-extras') { bStr = Object.entries(b?.fields||{}).map(([k,v])=>`${k}: ${Array.isArray(v)?v.join(','):v}`).join(' | '); aStr = Object.entries(a?.fields||{}).map(([k,v])=>`${k}: ${Array.isArray(v)?v.join(','):v}`).join(' | ') }
+        else if (r.errorType === 'wrong-location') { bStr = locationStr(b?.location); aStr = locationStr(a?.location) }
+        else if (r.errorType === 'wrong-player') { bStr = playerStr(b?.playerDiff, false); aStr = playerStr(a?.playerDiff, true) }
+        else if (r.errorType === 'wrong-timestamp') { bStr = b?.ts || '—'; aStr = a?.ts || '—' }
+        else if (r.errorType === 'freeze-frame') { bStr = `Keeper: ${b?.ff?.beforeKeeper?.name||'Not set'} · Shooter: ${b?.ff?.beforeShooter?.name||'Not set'}`; aStr = `Keeper: ${a?.ff?.afterKeeper?.name||'Not set'} · Shooter: ${a?.ff?.afterShooter?.name||'Not set'}` }
+        else if (r.errorType === 'goal-location') { bStr = locationStr(b?.goalLoc); aStr = locationStr(a?.goalLoc) }
+        else if (r.errorType === 'squad') { bStr = b?.formation||'—'; aStr = a?.formation||'—' }
+        else if (r.errorType === 'added') { bStr = 'Missing'; aStr = a?.eventName||'—' }
+        return [session.matchId, session.matchName, formatHalf(session.half), r.timestamp, r.eventName, r.teamName, ERROR_CONFIG[r.errorType]?.label || r.errorType, r.module, bStr, aStr, r.collectorHr, r.collectorName, r.reviewerHr, r.reviewerName, r.capturedTime].map(v => `"${safe(v)}"`)
+      })
+    }
+
+    // ── FF rows ─────────────────────────────────────────────────────────────
+    const computedFF = results.computedFFErrors || []
+    const ffCsvRows = computedFF.map(r => {
+      const cHr   = resolveHr(r.collectorId)
+      const cName = resolveName(r.collectorId)
+      const rHr   = resolveHr(r.reviewerId)
+      const rName = resolveName(r.reviewerId)
+      // Resolve player names for FF errors
+      const resolvePlayerName = (pid) => {
+        if (!pid || pid === '—') return pid
+        const p = playerMap[Number(pid)] || playerMap[pid]
+        return p ? `${p.name} (#${p.jersey})` : `id:${pid}`
+      }
+      const oldVal = r.playerId && r.playerId !== '—' ? resolvePlayerName(r.oldValue !== '— (missing)' ? r.oldValue : r.playerId) : r.oldValue
+      const newVal = r.playerId && r.playerId !== '—' ? resolvePlayerName(r.newValue !== '— (removed)' ? r.newValue : r.playerId) : r.newValue
+      return [session.matchId, session.matchName, formatHalf(session.half), r.timestamp, r.eventName, '—', r.errorType, 'Freeze Frame', oldVal, newVal, cHr, cName, rHr, rName, '—'].map(v => `"${safe(v)}"`)
     })
-    const csv = [headers.map(h=>`"${h}"`), ...csvRows].map(row => row.join(',')).join('\r\n')
+
+    const allRows = [...csvRows, ...ffCsvRows]
+    const csv = [headers.map(h=>`"${h}"`), ...allRows].map(row => row.join(',')).join('\r\n')
     const blob = new Blob([csv], { type: 'text/csv' })
     const url = URL.createObjectURL(blob)
     const el = document.createElement('a')
     el.href = url
-    const s = (v) => String(v||'').replace(/[\\/:*?"<>|]/g,'').trim()
+    const s = (v) => String(v||'').replace(/[\/:*?"<>|]/g,'').trim()
     el.download = `${s(session.matchId)}_${s(session.matchName)}_${s(formatHalf(session.half))}_${s(results.collectorHrCode||'')}.csv`
     el.click()
     URL.revokeObjectURL(url)
@@ -1282,6 +1326,71 @@ function AmendmentsTable({ results, session, reviewerIds, identityMap, onSeek })
           })}
         </div>
       </div>
+
+      {/* ── Freeze Frame Errors Table ─────────────────────────────────── */}
+      {results.computedFFErrors && results.computedFFErrors.length > 0 && (
+        <div style={{ marginTop: 24 }}>
+          <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:10 }}>
+            <div style={{ fontSize:10, fontWeight:800, color:'#5AC8FA', letterSpacing:1.2 }}>
+              FREEZE FRAME ERRORS — {results.computedFFErrors.length} RECORDS
+            </div>
+          </div>
+          <div style={{ display:'flex', flexDirection:'column', gap:4 }}>
+            {/* FF Table Header */}
+            <div style={{ display:'grid', gridTemplateColumns:'90px 80px 1fr 80px 80px 1fr 1fr', gap:8, padding:'6px 10px', background:'var(--bg-3)', borderRadius:6, fontSize:9, fontWeight:700, color:'var(--t-3)', letterSpacing:0.8 }}>
+              <span>TIMESTAMP</span>
+              <span>EVENT</span>
+              <span>ERROR TYPE</span>
+              <span>PLAYER ID</span>
+              <span>COLLECTOR</span>
+              <span>BEFORE</span>
+              <span>AFTER</span>
+            </div>
+            {results.computedFFErrors.map((r, i) => {
+              const cEntry = idMap[String(r.collectorId)] || {}
+              const rEntry = idMap[String(r.reviewerId)]  || {}
+              const cHr   = cEntry.hrcode || cEntry.hrCode || String(r.collectorId || '—')
+              const cName = cEntry.name || ''
+              const rHr   = rEntry.hrcode || rEntry.hrCode || String(r.reviewerId  || '—')
+              // Resolve player name from lineupPlayers
+              const resolvePlayerName = (pid) => {
+                if (!pid || pid === '—') return pid
+                const p = playerMap[Number(pid)] || playerMap[pid]
+                return p ? `${p.name} (#${p.jersey})` : `id:${pid}`
+              }
+              const oldVal = r.playerId && r.playerId !== '—'
+                ? (r.oldValue !== '— (missing)' ? resolvePlayerName(r.oldValue) : '— (missing)')
+                : r.oldValue
+              const newVal = r.playerId && r.playerId !== '—'
+                ? (r.newValue !== '— (removed)' ? resolvePlayerName(r.newValue) : '— (removed)')
+                : r.newValue
+
+              // Color per error type
+              const ffColors = {
+                'Wrong Keeper': '#5AC8FA', 'Wrong Shooter': '#5AC8FA', 'Wrong Opponent': '#5AC8FA',
+                'Added Player': '#30D158', 'Deleted Player': '#FF453A',
+                'Wrong Team': '#FF9F0A', 'Wrong Location': '#0A84FF',
+              }
+              const ffColor = ffColors[r.errorType] || '#5AC8FA'
+
+              return (
+                <div key={i} style={{ display:'grid', gridTemplateColumns:'90px 80px 1fr 80px 80px 1fr 1fr', gap:8, padding:'8px 10px', background:'var(--bg-2)', borderRadius:6, border:'1px solid var(--b-1)', fontSize:11, alignItems:'center' }}>
+                  <span style={{ fontFamily:'JetBrains Mono, monospace', fontSize:10, color:'var(--t-2)' }}>{r.timestamp}</span>
+                  <span style={{ color:'var(--t-2)', fontWeight:600 }}>{r.eventName}</span>
+                  <span style={{ display:'inline-flex', alignItems:'center', padding:'2px 8px', borderRadius:5, fontSize:10, fontWeight:600, background:`${ffColor}18`, color:ffColor, border:`0.5px solid ${ffColor}40` }}>{r.errorType}</span>
+                  <span style={{ fontFamily:'JetBrains Mono, monospace', fontSize:10, color:'var(--t-3)' }}>{r.playerId || '—'}</span>
+                  <div style={{ display:'flex', flexDirection:'column', gap:1 }}>
+                    <span style={{ fontSize:11, fontFamily:'JetBrains Mono, monospace', fontWeight:500, color:'#E8590C' }}>{cHr}</span>
+                    <span style={{ fontSize:10, color:'var(--t-3)' }}>{cName}</span>
+                  </div>
+                  <span style={{ fontSize:11, color:'#FF453A', fontFamily:'JetBrains Mono, monospace' }}>{oldVal}</span>
+                  <span style={{ fontSize:11, color:'#30D158', fontFamily:'JetBrains Mono, monospace' }}>{newVal}</span>
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      )}
     </div>
   )
 }
@@ -1554,6 +1663,12 @@ export default function AuditPage({ session, onBack, onFullReport, initialResult
         if (best) replacementMap[del.key] = { addedEvent: best, renamed: best.name !== delBase.name }
       })
       data.replacementMap = replacementMap
+
+      // ── Store bridge-computed errors (rules 1-5) ──────────────────────────
+      // Bridge pre-computes all errors using the 5 confirmed rules.
+      // Fall back gracefully if bridge didn't compute them.
+      data.computedErrors   = data.computedErrors   || null
+      data.computedFFErrors = data.computedFFErrors || null
 
       // ── Score calculation (reviewer-only, correct) ───────────────────────
       const errorKeys = computeErrorKeys(data.baseEvents, data.amendments, reviewerIds)

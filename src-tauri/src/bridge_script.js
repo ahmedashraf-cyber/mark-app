@@ -1,5 +1,5 @@
 (async function(){
-  const BRIDGE_VERSION = '7.7.0';
+  const BRIDGE_VERSION = '7.8.0';
   if(window.__MARK_BRIDGE_VERSION__ === BRIDGE_VERSION){console.log('[MARK] bridge already running (v' + BRIDGE_VERSION + ')');return;}
   if(window.__MARK_BRIDGE_STOP__) window.__MARK_BRIDGE_STOP__();
   window.__MARK_BRIDGE__ = true;
@@ -933,6 +933,350 @@
           reviewGroupScores = null;
         }
 
+
+        // ── Error computation engine (rules 1-5) ─────────────────────────────
+        // Computes all errors using 5 confirmed rules from console testing.
+        // Returns computedErrors[] (non-FF) + computedFFErrors[] (freeze frame)
+        // + newReviewGroupScores (recalculated using accurate error keys)
+        let computedErrors = null;
+        let computedFFErrors = null;
+        let newReviewGroupScores = null;
+        try {
+          const EUCLIDEAN_THRESHOLD = 5;
+          const PAIR_TOLERANCE_MS   = 1000;
+          const reviewerSetE = new Set((reviewerIds || []).map(Number));
+          const inMatch = v => v.__typename === 'Event'
+            && (v.matchId === numMatchId || v.matchId === String(numMatchId))
+            && (!partId || v.partId === partId);
+
+          const euclidean = (x1,y1,x2,y2) => Math.sqrt(Math.pow(x2-x1,2)+Math.pow(y2-y1,2));
+
+          const fmtTsE = (ms) => {
+            if (ms == null) return '—';
+            const totalSec = Math.floor(ms / 1000);
+            const min = Math.floor(totalSec / 60);
+            const sec = totalSec % 60;
+            const millis = Math.floor(ms % 1000);
+            return String(min).padStart(2,'0') + ':' + String(sec).padStart(2,'0') + '.' + String(millis).padStart(3,'0');
+          };
+
+          // Shot keys (for FF — shots only)
+          const shotKeysE = new Set();
+          Object.values(cache).forEach(v => {
+            if (inMatch(v) && v.category === 'base' && (v.payload?.name === 'shot' || v.name === 'shot'))
+              shotKeysE.add(v.key);
+          });
+
+          // Reviewer-added keys (rule #1 — self-edits excluded)
+          const reviewerAddedKeysE = new Set();
+          Object.values(cache).forEach(v => {
+            if (inMatch(v) && v.category === 'base' && reviewerSetE.has(Number(v.author)))
+              reviewerAddedKeysE.add(v.key);
+          });
+
+          // All reviewer amendments excl self-edits
+          const allReviewerAmends = Object.values(cache).filter(v =>
+            inMatch(v) && v.category === 'amendment' &&
+            reviewerSetE.has(Number(v.author)) &&
+            !reviewerAddedKeysE.has(v.key)
+          );
+
+          // Reviewer added base events
+          const reviewerAddedEventsE = Object.values(cache).filter(v =>
+            inMatch(v) && v.category === 'base' && reviewerSetE.has(Number(v.author))
+          );
+
+          // Deletions
+          const deletionsE = allReviewerAmends.filter(v => v.type === 'deletion');
+
+          // Pair deletions with reviewer-added events
+          const pairedDeletedKeysE = new Set();
+          const pairedAddedKeysE   = new Set();
+          const deletionPairsE     = [];
+
+          deletionsE.forEach(del => {
+            const delBase = Object.values(cache).find(v => v.key === del.key && v.category === 'base' && inMatch(v));
+            const delTs   = delBase?.payload?.videoTimestamp || 0;
+            const delName = delBase?.payload?.name || '—';
+            const nearby  = reviewerAddedEventsE
+              .map(added => ({ added, diff: Math.abs((added.payload?.videoTimestamp || 0) - delTs) }))
+              .filter(r => r.diff <= PAIR_TOLERANCE_MS)
+              .sort((a,b) => a.diff - b.diff);
+            if (nearby.length === 0) return;
+            const closest    = nearby[0];
+            const pairedName = closest.added.payload?.name || '—';
+            const pairType   = pairedName === delName ? 'deleted+edited' : 'deleted+added';
+            pairedDeletedKeysE.add(del.key);
+            pairedAddedKeysE.add(closest.added.key);
+            deletionPairsE.push({ del, delBase, delTs, delName, paired: closest.added, pairType, diff: closest.diff });
+          });
+
+          // Group non-deletion amendments by key
+          const amendsByKeyE = {};
+          allReviewerAmends.filter(v => v.type !== 'deletion').forEach(a => {
+            if (!amendsByKeyE[a.key]) amendsByKeyE[a.key] = [];
+            amendsByKeyE[a.key].push(a);
+          });
+
+          // Helper: latest refinement by non-reviewer for a key+type
+          const latestCollectorRef = (key, type) => Object.values(cache)
+            .filter(v => v.key === key && v.category === 'refinement' && v.type === type && !reviewerSetE.has(Number(v.author)) && inMatch(v))
+            .sort((a,b) => (b.capturedTime||'').localeCompare(a.capturedTime||''))[0];
+
+          // Helper: latest FF by non-reviewer (any category)
+          const latestCollectorFF = (key) => Object.values(cache)
+            .filter(v => v.key === key && v.type === 'freeze-frame' && !reviewerSetE.has(Number(v.author)) && inMatch(v))
+            .sort((a,b) => (b.capturedTime||'').localeCompare(a.capturedTime||''))[0];
+
+          // Helper: latest FF by reviewer
+          const latestReviewerFF = (key) => Object.values(cache)
+            .filter(v => v.key === key && v.type === 'freeze-frame' && reviewerSetE.has(Number(v.author)) && inMatch(v))
+            .sort((a,b) => (b.capturedTime||'').localeCompare(a.capturedTime||''))[0];
+
+          // Helper: base event for key
+          const getBase = (key) => Object.values(cache).find(v => v.key === key && v.category === 'base' && inMatch(v));
+
+          const errorsE   = [];
+          const ffErrorsE = [];
+
+          // ── 1. DELETIONS (standalone) ───────────────────────────────────────
+          deletionsE.filter(d => !pairedDeletedKeysE.has(d.key)).forEach(del => {
+            const base = getBase(del.key);
+            errorsE.push({
+              errorType: 'Deleted', module: 'base', key: del.key,
+              eventName: base?.payload?.name || '—', timestamp: fmtTsE(base?.payload?.videoTimestamp),
+              collectorId: base?.author || '—', reviewerId: reviewerIds[0] || '—',
+              oldValue: base?.payload?.name || '—', newValue: 'Deleted', detail: '—'
+            });
+          });
+
+          // ── 2. ADDED (standalone) ───────────────────────────────────────────
+          reviewerAddedEventsE.filter(e => !pairedAddedKeysE.has(e.key)).forEach(e => {
+            errorsE.push({
+              errorType: 'Added', module: 'base', key: e.key,
+              eventName: e.payload?.name || '—', timestamp: fmtTsE(e.payload?.videoTimestamp),
+              collectorId: '— (missing)', reviewerId: reviewerIds[0] || '—',
+              oldValue: '— (missing)', newValue: e.payload?.name || '—', detail: '—'
+            });
+          });
+
+          // ── 3. DELETED+ADDED / DELETED+EDITED ──────────────────────────────
+          deletionPairsE.forEach(pair => {
+            const base = pair.delBase;
+            const cId  = base?.author || '— (missing)';
+            const rId  = reviewerIds[0] || '—';
+            if (pair.pairType === 'deleted+added') {
+              errorsE.push({
+                errorType: 'Deleted+Added', module: 'base', key: pair.del.key,
+                eventName: pair.delName, timestamp: fmtTsE(pair.delTs),
+                collectorId: cId, reviewerId: rId,
+                oldValue: pair.delName, newValue: pair.paired.payload?.name || '—',
+                detail: 'timeDiff: ' + pair.diff + 'ms | addedKey: ' + pair.paired.key
+              });
+            }
+            if (pair.pairType === 'deleted+edited') {
+              const DE_MODULES = ['players','extras','location','goal-location','impact','base'];
+              DE_MODULES.forEach(module => {
+                const oldRef = latestCollectorRef(pair.del.key, module);
+                const newRef = Object.values(cache)
+                  .filter(v => v.key === pair.paired.key && (v.category === 'refinement' || (v.category === 'amendment' && reviewerSetE.has(Number(v.author)))) && v.type === module && inMatch(v))
+                  .sort((a,b) => (b.capturedTime||'').localeCompare(a.capturedTime||''))[0];
+                if (!oldRef && !newRef) return;
+                const oldVal = JSON.stringify(oldRef?.payload || {});
+                const newVal = JSON.stringify(newRef?.payload || {});
+                if (oldVal === newVal) return;
+                errorsE.push({
+                  errorType: 'Deleted+Edited', module, key: pair.del.key,
+                  eventName: pair.delName, timestamp: fmtTsE(pair.delTs),
+                  collectorId: cId, reviewerId: rId,
+                  oldValue: oldVal.slice(0,120), newValue: newVal.slice(0,120),
+                  detail: 'addedKey: ' + pair.paired.key + ' | timeDiff: ' + pair.diff + 'ms'
+                });
+              });
+            }
+          });
+
+          // ── 4. EDITS (per module, rule #2 same-value excluded) ──────────────
+          Object.entries(amendsByKeyE).forEach(([key, amends]) => {
+            const base = getBase(key);
+            const types = [...new Set(amends.map(a => a.type))];
+            types.forEach(type => {
+              if (type === 'freeze-frame') return;
+              const oldRef = latestCollectorRef(key, type);
+              const latestAmend = amends.filter(a => a.type === type).sort((a,b) => (b.capturedTime||'').localeCompare(a.capturedTime||''))[0];
+              const oldVal = JSON.stringify(oldRef?.payload || {});
+              const newVal = JSON.stringify(latestAmend?.payload || {});
+              if (oldVal === newVal) return; // rule #2 — same value excluded
+
+              const cId = base?.author || '—';
+              const rId = reviewerIds[0] || '—';
+              const ts  = fmtTsE(base?.payload?.videoTimestamp);
+              const en  = base?.payload?.name || '—';
+
+              if (type === 'location') {
+                const ox = oldRef?.payload?.location?.actual?.x ?? null, oy = oldRef?.payload?.location?.actual?.y ?? null;
+                const nx = latestAmend?.payload?.location?.actual?.x ?? null, ny = latestAmend?.payload?.location?.actual?.y ?? null;
+                if (ox !== null && oy !== null && nx !== null && ny !== null) {
+                  const dist = euclidean(ox,oy,nx,ny);
+                  if (dist <= EUCLIDEAN_THRESHOLD) return;
+                  errorsE.push({ errorType: 'Wrong Location', module: 'location', key, eventName: en, timestamp: ts, collectorId: cId, reviewerId: rId, oldValue: '(' + ox.toFixed(2) + ',' + oy.toFixed(2) + ')', newValue: '(' + nx.toFixed(2) + ',' + ny.toFixed(2) + ')', detail: 'dist: ' + dist.toFixed(2) });
+                  return;
+                }
+              }
+
+              if (type === 'goal-location') {
+                const ox = oldRef?.payload?.['goal-location']?.x ?? null, oy = oldRef?.payload?.['goal-location']?.y ?? null;
+                const nx = latestAmend?.payload?.['goal-location']?.x ?? null, ny = latestAmend?.payload?.['goal-location']?.y ?? null;
+                if (ox !== null && oy !== null && nx !== null && ny !== null) {
+                  const dist = euclidean(ox,oy,nx,ny);
+                  if (dist <= EUCLIDEAN_THRESHOLD) return;
+                  errorsE.push({ errorType: 'Wrong Goal Location', module: 'goal-location', key, eventName: en, timestamp: ts, collectorId: cId, reviewerId: rId, oldValue: '(' + ox.toFixed(2) + ',' + oy.toFixed(2) + ')', newValue: '(' + nx.toFixed(2) + ',' + ny.toFixed(2) + ')', detail: 'dist: ' + dist.toFixed(2) });
+                  return;
+                }
+              }
+
+              const etMap = { players: 'Wrong Player', extras: 'Wrong Extras', impact: 'Wrong Impact', base: 'Wrong Event' };
+              errorsE.push({
+                errorType: etMap[type] || 'Edited', module: type, key, eventName: en, timestamp: ts,
+                collectorId: cId, reviewerId: rId,
+                oldValue: oldVal.slice(0,120), newValue: newVal.slice(0,120), detail: '—'
+              });
+            });
+          });
+
+          // ── 5. FREEZE FRAME — shots only ────────────────────────────────────
+          const resolveRoleE = (roles, indexMap) => {
+            const idx = roles?.[0];
+            if (idx == null) return null;
+            return indexMap[String(idx)]?.playerId ?? null;
+          };
+
+          const ffKeysE = [...new Set(
+            Object.values(cache)
+              .filter(v => inMatch(v) && v.type === 'freeze-frame' && reviewerSetE.has(Number(v.author)) && shotKeysE.has(v.key) && !reviewerAddedKeysE.has(v.key))
+              .map(v => v.key)
+          )];
+
+          ffKeysE.forEach(key => {
+            const base       = getBase(key);
+            const collFF     = latestCollectorFF(key);
+            const reviewerFF = latestReviewerFF(key);
+            if (!collFF || !reviewerFF) return;
+
+            const cP = collFF.payload?.freezeFrame || collFF.payload;
+            const rP = reviewerFF.payload?.freezeFrame || reviewerFF.payload;
+            const cPlayers = cP?.players || [], rPlayers = rP?.players || [];
+            const cMap = {}, rMap = {}, cIndexMap = {}, rIndexMap = {};
+            cPlayers.forEach(p => { if (p.playerId != null) cMap[String(p.playerId)] = p; cIndexMap[String(p.id)] = p; });
+            rPlayers.forEach(p => { if (p.playerId != null) rMap[String(p.playerId)] = p; rIndexMap[String(p.id)] = p; });
+
+            const cPlayerIds = new Set(Object.keys(cMap)), rPlayerIds = new Set(Object.keys(rMap));
+            const added   = [...rPlayerIds].filter(pid => !cPlayerIds.has(pid));
+            const deleted = [...cPlayerIds].filter(pid => !rPlayerIds.has(pid));
+            const matched = [...cPlayerIds].filter(pid =>  rPlayerIds.has(pid));
+
+            const cId = collFF.author, rId = reviewerIds[0] || '—';
+            const en  = base?.payload?.name || '—', ts = fmtTsE(base?.payload?.videoTimestamp);
+
+            const addFF = (errorType, playerId, oldValue, newValue, detail) => ffErrorsE.push({
+              errorType, module: 'freeze-frame', key, eventName: en, timestamp: ts,
+              collectorId: cId, reviewerId: rId,
+              playerId: playerId ?? '—', oldValue: String(oldValue), newValue: String(newValue), detail: detail || '—'
+            });
+
+            // Roles
+            const cKeeperPid  = resolveRoleE(cP?.roles?.keeper,   cIndexMap), rKeeperPid  = resolveRoleE(rP?.roles?.keeper,   rIndexMap);
+            const cShooterPid = resolveRoleE(cP?.roles?.shooter,  cIndexMap), rShooterPid = resolveRoleE(rP?.roles?.shooter,  rIndexMap);
+            const cOppPid     = resolveRoleE(cP?.roles?.opponent, cIndexMap), rOppPid     = resolveRoleE(rP?.roles?.opponent, rIndexMap);
+
+            if (cKeeperPid  !== rKeeperPid)  addFF('Wrong Keeper',   '—', cKeeperPid  ?? '— (missing)', rKeeperPid  ?? '— (missing)');
+            if (cShooterPid !== rShooterPid) addFF('Wrong Shooter',  '—', cShooterPid ?? '— (missing)', rShooterPid ?? '— (missing)');
+            if (cOppPid     !== rOppPid)     addFF('Wrong Opponent', '—', cOppPid     ?? '— (missing)', rOppPid     ?? '— (missing)');
+
+            // Players
+            added.forEach(pid   => addFF('Added Player',   pid, '— (missing)', pid));
+            deleted.forEach(pid => addFF('Deleted Player', pid, pid, '— (removed)'));
+            matched.forEach(pid => {
+              const cp = cMap[pid], rp = rMap[pid];
+              if (cp.groupIndicator !== rp.groupIndicator)
+                addFF('Wrong Team', pid, cp.groupIndicator, rp.groupIndicator);
+              const cx = cp.pitchPosition?.default?.x ?? null, cy = cp.pitchPosition?.default?.y ?? null;
+              const rx = rp.pitchPosition?.default?.x ?? null, ry = rp.pitchPosition?.default?.y ?? null;
+              if (cx !== null && cy !== null && rx !== null && ry !== null) {
+                const dist = euclidean(cx,cy,rx,ry);
+                if (dist > EUCLIDEAN_THRESHOLD)
+                  addFF('Wrong Location', pid, '(' + cx.toFixed(2) + ',' + cy.toFixed(2) + ')', '(' + rx.toFixed(2) + ',' + ry.toFixed(2) + ')', 'dist: ' + dist.toFixed(2));
+              }
+            });
+          });
+
+          // Sort by timestamp
+          errorsE.sort((a,b)   => a.timestamp.localeCompare(b.timestamp));
+          ffErrorsE.sort((a,b) => a.timestamp.localeCompare(b.timestamp));
+
+          computedErrors   = errorsE;
+          computedFFErrors = ffErrorsE;
+
+          // ── Recalculate reviewGroupScores using accurate error keys ──────────
+          if (reviewGroupScores) {
+            // Build accurate error key set (non-FF only — FF errors are separate)
+            const accurateErrorKeys = new Set([...errorsE, ...ffErrorsE].map(e => e.key));
+
+            // Viewed keys from telemetry
+            const viewedKeysNew = new Set();
+            Object.values(cache).forEach(v => {
+              if (inMatch(v) && v.category === 'telemetry' && v.type === 'event-activation' && reviewerSetE.has(Number(v.author)))
+                viewedKeysNew.add(v.key);
+            });
+
+            const capturedCatsNew = reviewGroupScores._capturedCats ||
+              (window.__MARK_QRT__ && window.__MARK_QRT__.qualityCategorizationContext && window.__MARK_QRT__.qualityCategorizationContext.categorizedEvents);
+
+            if (capturedCatsNew && Object.keys(capturedCatsNew).length > 0) {
+              const A_CATS_N = ['lineupsAndFormation','substitutions','tacticalShifts','playerOff','playerOn','goals','keyPassesBeforeShots','ownGoals','cards','fouls','offside','freeKickPass','corners','errors','kickOffs','throughBalls','stoppage','freezeFrame','pressuresBeforeShots','refereeBallDrop','endShots','g.K.-Actions-shots'];
+              const B_CATS_N = ['Clearances','passRecoveries','interceptions','blocks','dribbles','tackles','miscontrols','g.K.-Actions-Other','shields','fiftyFifty'];
+              const C_CATS_N = ['ballRecovery','aerialLosts','pressures'];
+
+              const keyToGroupN = {};
+              const assignGroupN = (groupCats, groupName) => {
+                groupCats.forEach(cat => {
+                  if (!capturedCatsNew[cat] || !Array.isArray(capturedCatsNew[cat])) return;
+                  capturedCatsNew[cat].forEach(e => { if (!keyToGroupN[e.key]) keyToGroupN[e.key] = groupName; });
+                });
+              };
+              assignGroupN(A_CATS_N, 'A');
+              assignGroupN(B_CATS_N, 'B');
+              assignGroupN(C_CATS_N, 'C');
+
+              const bucketsN = { A:{viewed:0,errors:0}, B:{viewed:0,errors:0}, C:{viewed:0,errors:0}, Others:{viewed:0,errors:0} };
+              viewedKeysNew.forEach(k => {
+                const g = keyToGroupN[k] || 'Others';
+                bucketsN[g].viewed++;
+                if (accurateErrorKeys.has(k)) bucketsN[g].errors++;
+              });
+
+              const mkN = b => ({ viewed: b.viewed, errors: b.errors, score: b.viewed > 0 ? Math.round(((b.viewed - b.errors) / b.viewed) * 100) : null });
+              const ov = viewedKeysNew.size, oe = accurateErrorKeys.size;
+
+              newReviewGroupScores = {
+                overall: { viewed: ov, errors: oe, score: ov > 0 ? Math.round(((ov - oe) / ov) * 100) : null },
+                A: mkN(bucketsN.A), B: mkN(bucketsN.B), C: mkN(bucketsN.C), Others: mkN(bucketsN.Others),
+                captureMs: reviewGroupScores.captureMs,
+                recalculated: true,
+              };
+            } else {
+              newReviewGroupScores = reviewGroupScores;
+            }
+          }
+
+          console.log('[MARK] computedErrors:', errorsE.length, '| computedFFErrors:', ffErrorsE.length);
+        } catch (errEngineErr) {
+          console.warn('[MARK] error engine failed:', errEngineErr && errEngineErr.message);
+          computedErrors   = null;
+          computedFFErrors = null;
+          newReviewGroupScores = null;
+        }
+
         // ── Lineup players (home + away with team info) ───────────────────────
         // Used by MARK to resolve player names/jersey numbers in amendments
         let lineupPlayers = [];
@@ -990,7 +1334,9 @@
           identities: identitiesArray(),
           lineupPlayers,
           moduleScores,
-          reviewGroupScores,
+          reviewGroupScores: newReviewGroupScores || reviewGroupScores,
+          computedErrors,
+          computedFFErrors,
           diagnostics,
           usedTelemetry,
           environment: (typeof process !== 'undefined' && process.env && process.env.LIVE_COLLECTION_SERVICE_URL)
