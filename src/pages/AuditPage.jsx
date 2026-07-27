@@ -1599,11 +1599,12 @@ export default function AuditPage({ session, onBack, onFullReport, initialResult
         if (viewers.length > 0) {
           // Sort by views descending — highest viewer is the reviewer
           viewers.sort((a, b) => (b.views || 0) - (a.views || 0))
-          viewers.forEach(w => {
-            // Exclude if they are the primary base collector (most base events)
-            const isPrimaryCollector = w.author === topBaseAuthor.author && (w.base || 0) > 100
-            if (!isPrimaryCollector) trueReviewerIds.push(Number(w.author))
-          })
+          // Only the TOP viewer is the reviewer — not all viewers.
+          // Other authors with views may be specialists or playthrough viewers.
+          // Exclude if they are the primary base collector (most base events).
+          const topViewer = viewers[0]
+          const isPrimaryCollector = topViewer.author === topBaseAuthor.author && (topViewer.base || 0) > 100
+          if (!isPrimaryCollector) trueReviewerIds.push(Number(topViewer.author))
         } else {
           // No views at all — fall back to amendment-only detection
           workProfiles.forEach(w => {
