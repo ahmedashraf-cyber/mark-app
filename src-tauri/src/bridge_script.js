@@ -582,8 +582,9 @@
         const allAuthors = new Set();
         [baseAuthorCounts, refinementCounts, amendmentCounts, viewCounts].forEach(m =>
           Object.keys(m).forEach(k => allAuthors.add(parseInt(k))));
+        // Collector detection: high base+refinement work regardless of views.
+        // Some collectors also view events (specialists) — don't exclude on views>0.
         let collectorIds = [...allAuthors].filter(a =>
-          (viewCounts[a] || 0) === 0 &&
           ((baseAuthorCounts[a] || 0) + (refinementCounts[a] || 0)) > COLLECTOR_WORK_MIN
         );
         if (collectorIds.length === 0 && topBase != null) collectorIds = [parseInt(topBase)];
@@ -615,8 +616,16 @@
           // amendments. Reviewers = distinct view authors, MINUS all collectors,
           // who also made >=1 change. (Many amendments + 0 views = collector/refiner,
           // not a reviewer.) Playthrough viewers (0 changes) are dropped.
-          reviewerIds = [...new Set(telemetryAll.map(t => t.author))]
+          // Only the TOP viewer (most views) is the reviewer — not all non-collector viewers.
+          // Collectors can have views too (specialists), and there may be playthrough viewers.
+          const candidateReviewers = [...new Set(telemetryAll.map(t => t.author))]
             .filter(a => !collectorSet.has(a) && hasChange(a));
+          // Sort by view count descending — top viewer is the reviewer
+          const viewCountsPerAuthor = {};
+          telemetryAll.forEach(t => { viewCountsPerAuthor[t.author] = (viewCountsPerAuthor[t.author]||0)+1; });
+          candidateReviewers.sort((a,b) => (viewCountsPerAuthor[b]||0) - (viewCountsPerAuthor[a]||0));
+          // Take only the top reviewer (highest views)
+          reviewerIds = candidateReviewers.length > 0 ? [candidateReviewers[0]] : [];
           const reviewerSet = new Set(reviewerIds);
 
           // Reviewed events = distinct base events a reviewer OPENED (telemetry key === base key)
