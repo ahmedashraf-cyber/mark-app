@@ -596,11 +596,19 @@
         const hasChange = a => (changeCounts[a] || 0) > 0 || (baseAuthorCounts[a] || 0) > 0;
 
         try {
-          const telemetryAll = Object.values(cache).filter(v =>
-            v.__typename === 'Event' && v.category === 'telemetry' &&
-            (v.matchId === numMatchId || v.matchId === String(numMatchId)) &&
-            v.type === 'event-activation' && (!partId || v.partId === partId)
-          );
+          // Deduplicate telemetry by key+author to avoid inflated viewed counts
+          // when the same match is loaded multiple times in the same Tag Once session.
+          const telSeenMap = {};
+          Object.values(cache).forEach(v => {
+            if (v.__typename !== 'Event' || v.category !== 'telemetry') return;
+            if (v.matchId !== numMatchId && v.matchId !== String(numMatchId)) return;
+            if (v.type !== 'event-activation') return;
+            if (partId && v.partId !== partId) return;
+            const dk = v.key + '|' + v.author;
+            if (!telSeenMap[dk] || (v.capturedTime||'') > (telSeenMap[dk].capturedTime||''))
+              telSeenMap[dk] = v;
+          });
+          const telemetryAll = Object.values(telSeenMap);
 
           // ── REVIEWER(S) — Update #1 ─────────────────────────────────────────
           // KEY FIX: the reviewer signal is VIEWS (event-activation), NOT
@@ -960,19 +968,9 @@
             return String(min).padStart(2,'0') + ':' + String(sec).padStart(2,'0') + '.' + String(millis).padStart(3,'0');
           };
 
-          // Deduplicate cache events by event key+category+type — Apollo cache
-          // accumulates duplicate entries when the same match is loaded multiple
-          // times in a session. We keep only the LATEST record per unique
-          // (key, category, type, author) combination to avoid inflated counts.
-          const dedupeMap = {};
-          Object.values(cache).forEach(v => {
-            if (!inMatch(v)) return;
-            const dk = v.key + '|' + v.category + '|' + (v.type || '') + '|' + v.author;
-            const existing = dedupeMap[dk];
-            if (!existing || (v.capturedTime || '') > (existing.capturedTime || ''))
-              dedupeMap[dk] = v;
-          });
-          const dedupedEvents = Object.values(dedupeMap);
+          // Build dedupedEvents from inMatch events — used by error engine.
+          // Since all events have unique IDs, we just filter by match/part.
+          const dedupedEvents = Object.values(cache).filter(v => inMatch(v));
 
           // Shot keys (for FF — shots only)
           const shotKeysE = new Set();
