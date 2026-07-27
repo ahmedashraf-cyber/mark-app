@@ -166,7 +166,7 @@ export function useSync(onStatusChange, sessionId) {
       const timeout = setTimeout(() => {
         ws.removeEventListener('message', handler)
         resolve(null)
-      }, 8000)
+      }, 30000)
 
       // Convert half string ('1H'/'2H') to partId (1/2)
       const partId = half === '2H' ? 2 : 1

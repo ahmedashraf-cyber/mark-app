@@ -1018,23 +1018,51 @@
             amendsByKeyE[a.key].push(a);
           });
 
-          // Helper: latest refinement by non-reviewer for a key+type
-          const latestCollectorRef = (key, type) => Object.values(cache)
-            .filter(v => v.key === key && v.category === 'refinement' && v.type === type && !reviewerSetE.has(Number(v.author)) && inMatch(v))
-            .sort((a,b) => (b.capturedTime||'').localeCompare(a.capturedTime||''))[0];
+          // Pre-build lookup maps for O(1) access — avoids O(n²) cache scans
+          const baseMapE = {};           // key → base event
+          const refMapE  = {};           // key_type → [refinement events]
+          const ffCollMapE = {};         // key → [collector FF events]
+          const ffRevMapE  = {};         // key → [reviewer FF events]
 
-          // Helper: latest FF by non-reviewer (any category)
-          const latestCollectorFF = (key) => Object.values(cache)
-            .filter(v => v.key === key && v.type === 'freeze-frame' && !reviewerSetE.has(Number(v.author)) && inMatch(v))
-            .sort((a,b) => (b.capturedTime||'').localeCompare(a.capturedTime||''))[0];
+          Object.values(cache).forEach(v => {
+            if (!v || v.__typename !== 'Event' || !inMatch(v)) return;
+            if (v.category === 'base') {
+              if (!baseMapE[v.key]) baseMapE[v.key] = v;
+            } else if (v.category === 'refinement') {
+              const k = v.key + '_' + v.type;
+              if (!refMapE[k]) refMapE[k] = [];
+              refMapE[k].push(v);
+            } else if (v.type === 'freeze-frame') {
+              if (reviewerSetE.has(Number(v.author))) {
+                if (!ffRevMapE[v.key]) ffRevMapE[v.key] = [];
+                ffRevMapE[v.key].push(v);
+              } else {
+                if (!ffCollMapE[v.key]) ffCollMapE[v.key] = [];
+                ffCollMapE[v.key].push(v);
+              }
+            }
+          });
+
+          // Helper: latest collector refinement for key+type
+          const latestCollectorRef = (key, type) => {
+            const arr = (refMapE[key + '_' + type] || []).filter(v => !reviewerSetE.has(Number(v.author)));
+            return arr.sort((a,b) => (b.capturedTime||'').localeCompare(a.capturedTime||''))[0];
+          };
+
+          // Helper: latest FF by collector (any category)
+          const latestCollectorFF = (key) => {
+            const arr = ffCollMapE[key] || [];
+            return arr.sort((a,b) => (b.capturedTime||'').localeCompare(a.capturedTime||''))[0];
+          };
 
           // Helper: latest FF by reviewer
-          const latestReviewerFF = (key) => Object.values(cache)
-            .filter(v => v.key === key && v.type === 'freeze-frame' && reviewerSetE.has(Number(v.author)) && inMatch(v))
-            .sort((a,b) => (b.capturedTime||'').localeCompare(a.capturedTime||''))[0];
+          const latestReviewerFF = (key) => {
+            const arr = ffRevMapE[key] || [];
+            return arr.sort((a,b) => (b.capturedTime||'').localeCompare(a.capturedTime||''))[0];
+          };
 
           // Helper: base event for key
-          const getBase = (key) => Object.values(cache).find(v => v.key === key && v.category === 'base' && inMatch(v));
+          const getBase = (key) => baseMapE[key];
 
           const errorsE   = [];
           const ffErrorsE = [];
