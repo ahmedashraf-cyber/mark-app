@@ -1,5 +1,5 @@
 {
-  "updatedAt": "2026-07-27T11:25:15.568Z",
+  "updatedAt": "2026-07-27T12:25:14.777Z",
   "production": {
     "count": 1266,
     "people": [
@@ -1706,7 +1706,7 @@
       {
         "code": "A-486",
         "name": "Ahmed Khaled Abdelaziz Mohamed Hassanien",
-        "title": "Offline Data Collector",
+        "title": "Offline Data Collector (Part)",
         "email": "ahmeeedarqam@gmail.com",
         "supCode": "A-608",
         "supName": "Ali Fathy Ali Sayed",
@@ -2626,7 +2626,7 @@
       {
         "code": "A-766",
         "name": "Ahmed Gamal Abdelnasser Abdelmohsen",
-        "title": "Offline Data Collector (Part)",
+        "title": "Offline Data Collector",
         "email": "ahmed.gamal@hud.com",
         "supCode": "A-582",
         "supName": "Ahmed Reda Salah Elsafty",
@@ -2838,10 +2838,10 @@
         "name": "Alaa Eldin Samir Aboelnaga Aboelela",
         "title": "AMF Quality Reviewer",
         "email": "alaa.samir.naga@gmail.com",
-        "supCode": "A-173",
+        "supCode": "A-213",
         "supName": "",
         "supTitle": "",
-        "supEmail": "ahmed.maken@hudl.com"
+        "supEmail": "ahmed.saied@hudl.com"
       },
       {
         "code": "A-818",
@@ -2858,10 +2858,10 @@
         "name": "Mark Mokhles Sleem Masoud",
         "title": "AMF Quality Reviewer",
         "email": "markmokhles388@gmail.com",
-        "supCode": "A-987",
-        "supName": "Maher Osama Maher Ali",
+        "supCode": "A-1080",
+        "supName": "Belal Ayman Ali Khamees",
         "supTitle": "AMF Quality Team Leader",
-        "supEmail": "maher.osama@hudl.com"
+        "supEmail": "belal.ayman@hudl.com"
       },
       {
         "code": "A-823",
@@ -3536,7 +3536,7 @@
       {
         "code": "A-1017",
         "name": "Abdullah Saleh Shaaban Mohammed",
-        "title": "Offline Data Collector",
+        "title": "Offline Data Collector (Part)",
         "email": "aboodsaleharqam@gmail.com",
         "supCode": "A-318",
         "supName": "Mohamed Reda Elsayed Ahmed Elshabaka",
@@ -3558,10 +3558,10 @@
         "name": "Omar Mohamed Shabaan Mohamed",
         "title": "AMF Quality Reviewer",
         "email": "omarm6956@gmail.com",
-        "supCode": "A-987",
-        "supName": "Maher Osama Maher Ali",
+        "supCode": "A-173",
+        "supName": "Ahmed Maken Ali Ahmed",
         "supTitle": "AMF Quality Team Leader",
-        "supEmail": "maher.osama@hudl.com"
+        "supEmail": "ahmed.maken@hudl.com"
       },
       {
         "code": "A-1024",
@@ -3728,10 +3728,10 @@
         "name": "Ahmed Magdy Mohamed Mohamed Elsayed",
         "title": "AMF Quality Reviewer",
         "email": "ahmedarqam1416@gmail.com",
-        "supCode": "A-1080",
-        "supName": "Belal Ayman Ali Khamees",
+        "supCode": "A-987",
+        "supName": "Maher Osama Maher Ali",
         "supTitle": "AMF Quality Team Leader",
-        "supEmail": "belal.ayman@hudl.com"
+        "supEmail": "maher.osama@hudl.com"
       },
       {
         "code": "A-1072",
@@ -3988,10 +3988,10 @@
         "name": "Abdelrahman Fouad Farouk Abdelfattah",
         "title": "AMF Quality Reviewer",
         "email": "abdelrahmanfouadarqam@gmail.com",
-        "supCode": "A-213",
-        "supName": "Ahmed Saeed Ahmed Abdelshafy",
+        "supCode": "A-987",
+        "supName": "Maher Osama Maher Ali",
         "supTitle": "AMF Quality Team Leader",
-        "supEmail": "ahmed.saied@hudl.com"
+        "supEmail": "maher.osama@hudl.com"
       },
       {
         "code": "A-1126",
@@ -5306,7 +5306,7 @@
       {
         "code": "A-1382",
         "name": "Yousef Ahmed Mohamed Ibrahim",
-        "title": "Offline Data Collector",
+        "title": "Offline Data Collector (Part)",
         "email": "youssefahmedarqam@gmail.com",
         "supCode": "A-727",
         "supName": "Mohamed Ashraf Awad Sayed",
@@ -5496,7 +5496,7 @@
       {
         "code": "A-1407",
         "name": "Anas Abdelfadil Hassan Mohamed Hussein",
-        "title": "Offline Data Collector (Part)",
+        "title": "Offline Data Collector",
         "email": "anasabdelfadilarqam@gmail.com",
         "supCode": "A-200",
         "supName": "Mohamed Tarek Mohamed Abdelsalam",
@@ -6766,7 +6766,7 @@
       {
         "code": "A-1630",
         "name": "Mahdy Mohamed Sayed Mohamed Abdelmaksoud",
-        "title": "Offline Data Collector (Part)",
+        "title": "Offline Data Collector",
         "email": "mahdyarqam11@gmail.com",
         "supCode": "A-728",
         "supName": "Mohamed Adel Mohamed Zaky",
@@ -7036,7 +7036,7 @@
       {
         "code": "A-1669",
         "name": "Mohamed Ramadan Badr Awad Badr",
-        "title": "Offline Data Collector (Part)",
+        "title": "Offline Data Collector",
         "email": "badrarqam@gmail.com",
         "supCode": "A-728",
         "supName": "Mohamed Adel Mohamed Zaky",
@@ -7726,7 +7726,7 @@
       {
         "code": "A-1812",
         "name": "Mostafa Mohamed Abdelmagid Ibrahim Hassan",
-        "title": "Offline Data Collector (Part)",
+        "title": "Offline Data Collector",
         "email": "gedaa.arqam@gmail.com",
         "supCode": "A-727",
         "supName": "Mohamed Ashraf Awad Sayed",
@@ -7786,7 +7786,7 @@
       {
         "code": "A-1825",
         "name": "Joseph Bahrawi Ebead Gabriel Ebead",
-        "title": "Offline Data Collector (Part)",
+        "title": "Offline Data Collector",
         "email": "josepharqam@gmail.com",
         "supCode": "A-728",
         "supName": "Mohamed Adel Mohamed Zaky",
@@ -7876,7 +7876,7 @@
       {
         "code": "A-1850",
         "name": "Ziad Ayman Abdallah Elsaeed Hewady",
-        "title": "Offline Data Collector (Part)",
+        "title": "Offline Data Collector",
         "email": "ziadarqam009@gmail.com",
         "supCode": "A-1271",
         "supName": "Mohamed Nour Abdelwahab Amin",
@@ -9326,7 +9326,7 @@
       {
         "code": "A-2063",
         "name": "Loay Shawky Eid AbdELnabi Ghoneim",
-        "title": "Offline Data Collector",
+        "title": "Offline Data Collector (Part)",
         "email": "loay.shawky@hudl.com",
         "supCode": "A-379",
         "supName": "Tarek Adel Elsayed Mohamed",
@@ -9826,7 +9826,7 @@
       {
         "code": "A-2166",
         "name": "Abdelrahman Ahmed Hassan Abdelkader",
-        "title": "Offline Data Collector (Part)",
+        "title": "Offline Data Collector",
         "email": "abdoarqam3@gmail.com",
         "supCode": "A-064",
         "supName": "Mina Talaat Fanous Gadoun",
@@ -10336,7 +10336,7 @@
       {
         "code": "A-2236",
         "name": "Moamen Ramadan Abdel-Gawad Hassan",
-        "title": "Offline Data Collector (Part)",
+        "title": "Offline Data Collector",
         "email": "moamenr219@gmail.com",
         "supCode": "A-1271",
         "supName": "Mohamed Nour Abdelwahab Amin",
@@ -10436,7 +10436,7 @@
       {
         "code": "A-2251",
         "name": "Saeed Tarek Saeed El-Sayed",
-        "title": "Offline Data Collector (Part)",
+        "title": "Offline Data Collector",
         "email": "said444693@gmail.com",
         "supCode": "A-947",
         "supName": "Moamen Abdelhalim Younes Elsayed",
@@ -10586,7 +10586,7 @@
       {
         "code": "A-2267",
         "name": "Abdelrahman Waheed Bardeis Mohamed",
-        "title": "Offline Data Collector",
+        "title": "Offline Data Collector (Part)",
         "email": "abdowaheed106@gmail.com",
         "supCode": "A-125",
         "supName": "Mahmoud Hosny Mohamed Hassan",
@@ -10766,7 +10766,7 @@
       {
         "code": "A-2290",
         "name": "Mohamed Essam Hassan Mahgoub Ahmed",
-        "title": "Offline Data Collector",
+        "title": "Offline Data Collector (Part)",
         "email": "mohamed82arqam@gmail.com",
         "supCode": "A-503",
         "supName": "Abdelrahman Hesham Mahmoud Abdelrahman",
@@ -12086,7 +12086,7 @@
       {
         "code": "A-2454",
         "name": "Mohamed Adel Mohamed Abdelrazek",
-        "title": "Offline Data Collector",
+        "title": "Offline Data Collector (Part)",
         "email": "madelarqam@gmail.com",
         "supCode": "A-318",
         "supName": "Mohamed Reda Elsayed Ahmed Elshabaka",
@@ -12096,7 +12096,7 @@
       {
         "code": "A-2455",
         "name": "Mahmoud Yasser Abdelaziz Ali",
-        "title": "Offline Data Collector",
+        "title": "Offline Data Collector (Part)",
         "email": "ho7a14@gmail.com",
         "supCode": "A-727",
         "supName": "Mohamed Ashraf Awad Sayed",
@@ -12306,7 +12306,7 @@
       {
         "code": "A-2477",
         "name": "Abdelrahman Rabie Abdo Hassan",
-        "title": "Offline Data Collector",
+        "title": "Offline Data Collector (Part)",
         "email": "abdulrahman.rabea18@gmail.com",
         "supCode": "A-727",
         "supName": "Mohamed Ashraf Awad Sayed",
@@ -12326,7 +12326,7 @@
       {
         "code": "A-2479",
         "name": "Mahmoud Sayed Ahmed Mahmoud Elsayed Ahmed",
-        "title": "Offline Data Collector",
+        "title": "Offline Data Collector (Part)",
         "email": "mahomudahmed31@gmail.com",
         "supCode": "A-379",
         "supName": "Tarek Adel Elsayed Mohamed",
