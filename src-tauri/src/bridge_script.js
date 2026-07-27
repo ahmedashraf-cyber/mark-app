@@ -960,30 +960,44 @@
             return String(min).padStart(2,'0') + ':' + String(sec).padStart(2,'0') + '.' + String(millis).padStart(3,'0');
           };
 
+          // Deduplicate cache events by event key+category+type — Apollo cache
+          // accumulates duplicate entries when the same match is loaded multiple
+          // times in a session. We keep only the LATEST record per unique
+          // (key, category, type, author) combination to avoid inflated counts.
+          const dedupeMap = {};
+          Object.values(cache).forEach(v => {
+            if (!inMatch(v)) return;
+            const dk = v.key + '|' + v.category + '|' + (v.type || '') + '|' + v.author;
+            const existing = dedupeMap[dk];
+            if (!existing || (v.capturedTime || '') > (existing.capturedTime || ''))
+              dedupeMap[dk] = v;
+          });
+          const dedupedEvents = Object.values(dedupeMap);
+
           // Shot keys (for FF — shots only)
           const shotKeysE = new Set();
-          Object.values(cache).forEach(v => {
-            if (inMatch(v) && v.category === 'base' && (v.payload?.name === 'shot' || v.name === 'shot'))
+          dedupedEvents.forEach(v => {
+            if (v.category === 'base' && (v.payload?.name === 'shot' || v.name === 'shot'))
               shotKeysE.add(v.key);
           });
 
           // Reviewer-added keys (rule #1 — self-edits excluded)
           const reviewerAddedKeysE = new Set();
-          Object.values(cache).forEach(v => {
-            if (inMatch(v) && v.category === 'base' && reviewerSetE.has(Number(v.author)))
+          dedupedEvents.forEach(v => {
+            if (v.category === 'base' && reviewerSetE.has(Number(v.author)))
               reviewerAddedKeysE.add(v.key);
           });
 
           // All reviewer amendments excl self-edits
-          const allReviewerAmends = Object.values(cache).filter(v =>
-            inMatch(v) && v.category === 'amendment' &&
+          const allReviewerAmends = dedupedEvents.filter(v =>
+            v.category === 'amendment' &&
             reviewerSetE.has(Number(v.author)) &&
             !reviewerAddedKeysE.has(v.key)
           );
 
           // Reviewer added base events
-          const reviewerAddedEventsE = Object.values(cache).filter(v =>
-            inMatch(v) && v.category === 'base' && reviewerSetE.has(Number(v.author))
+          const reviewerAddedEventsE = dedupedEvents.filter(v =>
+            v.category === 'base' && reviewerSetE.has(Number(v.author))
           );
 
           // Deletions
@@ -995,7 +1009,7 @@
           const deletionPairsE     = [];
 
           deletionsE.forEach(del => {
-            const delBase = Object.values(cache).find(v => v.key === del.key && v.category === 'base' && inMatch(v));
+            const delBase = baseMapE[del.key];
             const delTs   = delBase?.payload?.videoTimestamp || 0;
             const delName = delBase?.payload?.name || '—';
             const nearby  = reviewerAddedEventsE
@@ -1024,8 +1038,8 @@
           const ffCollMapE = {};         // key → [collector FF events]
           const ffRevMapE  = {};         // key → [reviewer FF events]
 
-          Object.values(cache).forEach(v => {
-            if (!v || v.__typename !== 'Event' || !inMatch(v)) return;
+          dedupedEvents.forEach(v => {
+            if (!v) return;
             if (v.category === 'base') {
               if (!baseMapE[v.key]) baseMapE[v.key] = v;
             } else if (v.category === 'refinement') {
@@ -1106,8 +1120,8 @@
               const DE_MODULES = ['players','extras','location','goal-location','impact','base'];
               // Pre-build new ref map for paired key to avoid O(n) scan per module
               const pairedRefMap = {};
-              Object.values(cache).forEach(v => {
-                if (v.key === pair.paired.key && inMatch(v) &&
+              dedupedEvents.forEach(v => {
+                if (v.key === pair.paired.key &&
                     (v.category === 'refinement' || (v.category === 'amendment' && reviewerSetE.has(Number(v.author))))) {
                   if (!pairedRefMap[v.type]) pairedRefMap[v.type] = [];
                   pairedRefMap[v.type].push(v);
@@ -1187,8 +1201,8 @@
           };
 
           const ffKeysE = [...new Set(
-            Object.values(cache)
-              .filter(v => inMatch(v) && v.type === 'freeze-frame' && reviewerSetE.has(Number(v.author)) && shotKeysE.has(v.key) && !reviewerAddedKeysE.has(v.key))
+            dedupedEvents
+              .filter(v => v.type === 'freeze-frame' && reviewerSetE.has(Number(v.author)) && shotKeysE.has(v.key) && !reviewerAddedKeysE.has(v.key))
               .map(v => v.key)
           )];
 
@@ -1259,8 +1273,8 @@
 
             // Viewed keys from telemetry
             const viewedKeysNew = new Set();
-            Object.values(cache).forEach(v => {
-              if (inMatch(v) && v.category === 'telemetry' && v.type === 'event-activation' && reviewerSetE.has(Number(v.author)))
+            dedupedEvents.forEach(v => {
+              if (v.category === 'telemetry' && v.type === 'event-activation' && reviewerSetE.has(Number(v.author)))
                 viewedKeysNew.add(v.key);
             });
 
