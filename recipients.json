@@ -1,7 +1,7 @@
 {
-  "updatedAt": "2026-07-27T14:25:24.862Z",
+  "updatedAt": "2026-07-27T15:25:15.516Z",
   "production": {
-    "count": 1266,
+    "count": 1383,
     "people": [
       {
         "code": "A-001",
@@ -3545,7 +3545,7 @@
       },
       {
         "code": "A-1022",
-        "name": "Mohamed Waleed Saber Kamel Ibrahim",
+        "name": "Mohamed Walid Saber Kamel Ibrahim",
         "title": "AMF Data Collector",
         "email": "mohamedwalyd633@gmail.com",
         "supCode": "A-1240",
@@ -4475,7 +4475,7 @@
       },
       {
         "code": "A-1211",
-        "name": "Mahmoud Atiya Mohamed Abdeldaem Khalaf Allah",
+        "name": "Mahmoud Attia Mohamed Abdeldayem Khalafallah",
         "title": "AMF Data Collector",
         "email": "ateyaarqam@gmail.com",
         "supCode": "A-813",
@@ -6215,7 +6215,7 @@
       },
       {
         "code": "A-1527",
-        "name": "Mahmoud Magdy Abdelaziz Abdelrahman El-Dessouki",
+        "name": "Mahmoud Magdy Abdelaziz Abdelrahman",
         "title": "AMF Data Collector",
         "email": "mahmoudarqam1122@gmail.com",
         "supCode": "A-465",
@@ -12595,7 +12595,7 @@
       },
       {
         "code": "A-602",
-        "name": "Mostafa Magdy Mahmoud Sayed",
+        "name": "Mustafa Magdy Mahmoud Sayed",
         "title": "Video Coordinator",
         "email": "mostafamagdye9@gmail.com",
         "supCode": "A-008",
@@ -12662,6 +12662,1176 @@
         "supName": "Ramy Nasr Anwar Gomaa Zaalouk",
         "supTitle": "Head Of Data Quality & Training",
         "supEmail": "rami.zalook@hudl.com"
+      },
+      {
+        "code": "A-1053",
+        "name": "Islam Bassem Ahmed Abdullah Zidan",
+        "title": "Live Data Collector",
+        "email": "zeslam688@gmail.com",
+        "supCode": "A-738",
+        "supName": "Mostafa Mohamed Hanafy Mohamed Ibrahim",
+        "supTitle": "Wyscout Collection Team Leader",
+        "supEmail": "mostafa.hanafy@hudl.com"
+      },
+      {
+        "code": "A-1476",
+        "name": "Abdelrahman Gamal Eldin Mohamed Saleh",
+        "title": "Live Data Collector (Part)",
+        "email": "abdrhmanarqam@gmail.com",
+        "supCode": "A-738",
+        "supName": "Mostafa Mohamed Hanafy Mohamed Ibrahim",
+        "supTitle": "Wyscout Collection Team Leader",
+        "supEmail": "mostafa.hanafy@hudl.com"
+      },
+      {
+        "code": "A-1984",
+        "name": "Mazen Yasser Mohamed Hassan",
+        "title": "Live Data Collector (Part)",
+        "email": "mazentab3q002@gmail.com",
+        "supCode": "#N/A",
+        "supName": "",
+        "supTitle": "",
+        "supEmail": ""
+      },
+      {
+        "code": "A-1992",
+        "name": "Abdelrahman Mohamed Samih Abdelbarr",
+        "title": "Live Data Collector (Part)",
+        "email": "samee7.boty@gmail.com",
+        "supCode": "A-738",
+        "supName": "Mostafa Mohamed Hanafy Mohamed Ibrahim",
+        "supTitle": "Wyscout Collection Team Leader",
+        "supEmail": "mostafa.hanafy@hudl.com"
+      },
+      {
+        "code": "A-2506",
+        "name": "Hesham Emad Abdelfattah Refaie Ali",
+        "title": "Live Data Collector (Part)",
+        "email": "hishamemad349@gmail.com",
+        "supCode": "#N/A",
+        "supName": "",
+        "supTitle": "",
+        "supEmail": ""
+      },
+      {
+        "code": "A-2507",
+        "name": "Youssef Mostafa Mohamed Ahmed Mahmoud",
+        "title": "Live Data Collector (Part)",
+        "email": "yossif.m777@gmail.com",
+        "supCode": "A-738",
+        "supName": "Mostafa Mohamed Hanafy Mohamed Ibrahim",
+        "supTitle": "Wyscout Collection Team Leader",
+        "supEmail": "mostafa.hanafy@hudl.com"
+      },
+      {
+        "code": "A-2508",
+        "name": "Hossam Hassan Sayed Mostafa",
+        "title": "Live Data Collector (Part)",
+        "email": "hossamhasan2712@gmail.com",
+        "supCode": "A-738",
+        "supName": "Mostafa Mohamed Hanafy Mohamed Ibrahim",
+        "supTitle": "Wyscout Collection Team Leader",
+        "supEmail": "mostafa.hanafy@hudl.com"
+      },
+      {
+        "code": "A-2509",
+        "name": "Ahmed Ramy Mohamed Elkelawy Elmetwaly",
+        "title": "Live Data Collector (Part)",
+        "email": "ahmadramiy928@gmail.com",
+        "supCode": "#N/A",
+        "supName": "",
+        "supTitle": "",
+        "supEmail": ""
+      },
+      {
+        "code": "A-2510",
+        "name": "Mohamed Magdy Abdelaziz Ahmed",
+        "title": "Live Data Collector (Part)",
+        "email": "mohamed22magday@gmail.com",
+        "supCode": "A-738",
+        "supName": "Mostafa Mohamed Hanafy Mohamed Ibrahim",
+        "supTitle": "Wyscout Collection Team Leader",
+        "supEmail": "mostafa.hanafy@hudl.com"
+      },
+      {
+        "code": "A-2511",
+        "name": "Ahmed Assem Elsayed Ali",
+        "title": "Live Data Collector",
+        "email": "a46079830@gmail.com",
+        "supCode": "#N/A",
+        "supName": "",
+        "supTitle": "",
+        "supEmail": ""
+      },
+      {
+        "code": "A-2512",
+        "name": "Ahmed Mostafa Ahmed Mohamed",
+        "title": "Live Data Collector (Part)",
+        "email": "ahmedma2005@icloud.com",
+        "supCode": "A-738",
+        "supName": "Mostafa Mohamed Hanafy Mohamed Ibrahim",
+        "supTitle": "Wyscout Collection Team Leader",
+        "supEmail": "mostafa.hanafy@hudl.com"
+      },
+      {
+        "code": "A-2513",
+        "name": "Moaz Ahmed Abdelrahman Elsayed Ahmed",
+        "title": "Live Data Collector (Part)",
+        "email": "moaz72045@gmail.com",
+        "supCode": "#N/A",
+        "supName": "",
+        "supTitle": "",
+        "supEmail": ""
+      },
+      {
+        "code": "A-2514",
+        "name": "Moamen Mohamed Abdelmohsen Abdelaziz",
+        "title": "Live Data Collector (Part)",
+        "email": "momen.mohamed.962005@gmail.com",
+        "supCode": "A-738",
+        "supName": "Mostafa Mohamed Hanafy Mohamed Ibrahim",
+        "supTitle": "Wyscout Collection Team Leader",
+        "supEmail": "mostafa.hanafy@hudl.com"
+      },
+      {
+        "code": "A-2515",
+        "name": "Adam Ashraf Darwish Abdelhamid",
+        "title": "Live Data Collector (Part)",
+        "email": "adamawadaa7@gmail.com",
+        "supCode": "A-738",
+        "supName": "Mostafa Mohamed Hanafy Mohamed Ibrahim",
+        "supTitle": "Wyscout Collection Team Leader",
+        "supEmail": "mostafa.hanafy@hudl.com"
+      },
+      {
+        "code": "A-2516",
+        "name": "Bassam Sherif Ahmed Abdelghani",
+        "title": "Live Data Collector (Part)",
+        "email": "basamsherifabdelghany@gmail.com",
+        "supCode": "A-738",
+        "supName": "Mostafa Mohamed Hanafy Mohamed Ibrahim",
+        "supTitle": "Wyscout Collection Team Leader",
+        "supEmail": "mostafa.hanafy@hudl.com"
+      },
+      {
+        "code": "A-2517",
+        "name": "Mohamed Ahmed Abdelazim Abdelrahman Selim",
+        "title": "Live Data Collector (Part)",
+        "email": "mohameazem158@gmail.com",
+        "supCode": "A-738",
+        "supName": "Mostafa Mohamed Hanafy Mohamed Ibrahim",
+        "supTitle": "Wyscout Collection Team Leader",
+        "supEmail": "mostafa.hanafy@hudl.com"
+      },
+      {
+        "code": "A-2518",
+        "name": "Mohamed Ashraf Mohamed Abdelrazek Mohamed Ragab",
+        "title": "Live Data Collector (Part)",
+        "email": "momedashraf033@gmail.com",
+        "supCode": "A-738",
+        "supName": "Mostafa Mohamed Hanafy Mohamed Ibrahim",
+        "supTitle": "Wyscout Collection Team Leader",
+        "supEmail": "mostafa.hanafy@hudl.com"
+      },
+      {
+        "code": "A-2519",
+        "name": "Seif Saadeldin Eid Abdelghaffar",
+        "title": "Live Data Collector (Part)",
+        "email": "saifsaad8.2020@gmail.com",
+        "supCode": "A-738",
+        "supName": "Mostafa Mohamed Hanafy Mohamed Ibrahim",
+        "supTitle": "Wyscout Collection Team Leader",
+        "supEmail": "mostafa.hanafy@hudl.com"
+      },
+      {
+        "code": "A-2520",
+        "name": "Karim Ahmed Mohamed Ali Soliman",
+        "title": "Live Data Collector (Part)",
+        "email": "ka416309@gmail.com",
+        "supCode": "#N/A",
+        "supName": "",
+        "supTitle": "",
+        "supEmail": ""
+      },
+      {
+        "code": "A-2521",
+        "name": "Anas Osama Hassan Abdelhamid",
+        "title": "Live Data Collector (Part)",
+        "email": "anaskotb2007@gmail.com",
+        "supCode": "A-738",
+        "supName": "Mostafa Mohamed Hanafy Mohamed Ibrahim",
+        "supTitle": "Wyscout Collection Team Leader",
+        "supEmail": "mostafa.hanafy@hudl.com"
+      },
+      {
+        "code": "A-2522",
+        "name": "Abdelrahman Essam Abdelhamid Ali Mansour",
+        "title": "Live Data Collector (Part)",
+        "email": "abdelrahmanessam9752@gmail.com",
+        "supCode": "#N/A",
+        "supName": "",
+        "supTitle": "",
+        "supEmail": ""
+      },
+      {
+        "code": "A-2523",
+        "name": "Mohamed Khaled Mazhar Bekhit",
+        "title": "Live Data Collector (Part)",
+        "email": "mohamed5aliedkz23@gmail.com",
+        "supCode": "A-738",
+        "supName": "Mostafa Mohamed Hanafy Mohamed Ibrahim",
+        "supTitle": "Wyscout Collection Team Leader",
+        "supEmail": "mostafa.hanafy@hudl.com"
+      },
+      {
+        "code": "A-2524",
+        "name": "Youssef Mostafa Rabie Ali Khafaga",
+        "title": "Live Data Collector (Part)",
+        "email": "youseeifmarcello@gmail.com",
+        "supCode": "A-738",
+        "supName": "Mostafa Mohamed Hanafy Mohamed Ibrahim",
+        "supTitle": "Wyscout Collection Team Leader",
+        "supEmail": "mostafa.hanafy@hudl.com"
+      },
+      {
+        "code": "A-2525",
+        "name": "Abdelwahab Fathy Abbas Mohamed Hashem",
+        "title": "Live Data Collector (Part)",
+        "email": "bodyfathy012@gmail.com",
+        "supCode": "A-738",
+        "supName": "Mostafa Mohamed Hanafy Mohamed Ibrahim",
+        "supTitle": "Wyscout Collection Team Leader",
+        "supEmail": "mostafa.hanafy@hudl.com"
+      },
+      {
+        "code": "A-2526",
+        "name": "Noureldin Mohamed Hassan Marouf",
+        "title": "Live Data Collector (Part)",
+        "email": "noureldenmohamed62@gmail.com",
+        "supCode": "A-738",
+        "supName": "Mostafa Mohamed Hanafy Mohamed Ibrahim",
+        "supTitle": "Wyscout Collection Team Leader",
+        "supEmail": "mostafa.hanafy@hudl.com"
+      },
+      {
+        "code": "A-2527",
+        "name": "Mohamed Khaled Abdeltawab Soliman El Khawaga",
+        "title": "Live Data Collector (Part)",
+        "email": "mohamedkhaled3086@gmail.com",
+        "supCode": "A-738",
+        "supName": "Mostafa Mohamed Hanafy Mohamed Ibrahim",
+        "supTitle": "Wyscout Collection Team Leader",
+        "supEmail": "mostafa.hanafy@hudl.com"
+      },
+      {
+        "code": "A-2528",
+        "name": "Ahmed Alaaeldin Mohamed Naguib Ezzat",
+        "title": "Live Data Collector (Part)",
+        "email": "ahmed27alaa26@gmail.com",
+        "supCode": "A-738",
+        "supName": "Mostafa Mohamed Hanafy Mohamed Ibrahim",
+        "supTitle": "Wyscout Collection Team Leader",
+        "supEmail": "mostafa.hanafy@hudl.com"
+      },
+      {
+        "code": "A-2529",
+        "name": "Mohamed Tarek Yaqout Youssef Afifi",
+        "title": "Live Data Collector (Part)",
+        "email": "mohamedtarek2722003@gmail.com",
+        "supCode": "A-738",
+        "supName": "Mostafa Mohamed Hanafy Mohamed Ibrahim",
+        "supTitle": "Wyscout Collection Team Leader",
+        "supEmail": "mostafa.hanafy@hudl.com"
+      },
+      {
+        "code": "A-2530",
+        "name": "Youssef Mohamed Abdelzaher Elmasry",
+        "title": "Live Data Collector (Part)",
+        "email": "youssefxp980@gmail.com",
+        "supCode": "A-738",
+        "supName": "Mostafa Mohamed Hanafy Mohamed Ibrahim",
+        "supTitle": "Wyscout Collection Team Leader",
+        "supEmail": "mostafa.hanafy@hudl.com"
+      },
+      {
+        "code": "A-2531",
+        "name": "Mostafa Mahmoud Abdelmenam Abdelgawad Mohamed",
+        "title": "Live Data Collector (Part)",
+        "email": "mostafawel3a185200@gmail.com",
+        "supCode": "#N/A",
+        "supName": "",
+        "supTitle": "",
+        "supEmail": ""
+      },
+      {
+        "code": "A-788",
+        "name": "Khaled Taha Sayed Hassanein Taha",
+        "title": "Live Data Collector (Part)",
+        "email": "khaledarqam28@gmail.com",
+        "supCode": "A-738",
+        "supName": "Mostafa Mohamed Hanafy Mohamed Ibrahim",
+        "supTitle": "Wyscout Collection Team Leader",
+        "supEmail": "mostafa.hanafy@hudl.com"
+      },
+      {
+        "code": "A-2542",
+        "name": "Shady Abdelhaq Mamoun Ahmed",
+        "title": "Offline Data Collector (Part)",
+        "email": "adelshady058@gmail.com",
+        "supCode": "A-125",
+        "supName": "Mahmoud Hosny Mohamed Hassan",
+        "supTitle": "Offline Collection Team Leader",
+        "supEmail": "mahmoud.hosny@hudl.com"
+      },
+      {
+        "code": "A-2547",
+        "name": "Abanoub Adly Attia Ayoub",
+        "title": "Offline Data Collector (Part)",
+        "email": "abanoubadly832@gmail.com",
+        "supCode": "A-379",
+        "supName": "Tarek Adel Elsayed Mohamed",
+        "supTitle": "Offline Collection Team Leader",
+        "supEmail": "tarek.adel@hudl.com"
+      },
+      {
+        "code": "A-2551",
+        "name": "Mohamed Fares Deif Shiboub",
+        "title": "Offline Data Collector (Part)",
+        "email": "mohamedfares1003@gmail.com",
+        "supCode": "A-608",
+        "supName": "Ali Fathy Ali Sayed",
+        "supTitle": "Offline Collection Team Leader",
+        "supEmail": "ali.fathy@hudl.com"
+      },
+      {
+        "code": "A-2553",
+        "name": "Abdellatif Raafat Abdellatif Abou Elwaly Abdellatif",
+        "title": "Offline Data Collector (Part)",
+        "email": "poparafat6@gmail.com",
+        "supCode": "A-947",
+        "supName": "Moamen Abdelhalim Younes Elsayed",
+        "supTitle": "Offline Collection Team Leader",
+        "supEmail": "moamen.abdelhalim@hudl.com"
+      },
+      {
+        "code": "A-2554",
+        "name": "Shehab Eldin Abdelhamid Mohamed Ahmed",
+        "title": "Offline Data Collector (Part)",
+        "email": "shehababdelhamed24@gmail.com",
+        "supCode": "A-291",
+        "supName": "Ahmed Khaled Badawy Ali Ramadan",
+        "supTitle": "Offline Collection Team Leader",
+        "supEmail": "ahmed.badawy@hudl.com"
+      },
+      {
+        "code": "A-2556",
+        "name": "Mahmoud Mohamed Ramadan Mahmoud Abughonima",
+        "title": "Offline Data Collector (Part)",
+        "email": "dododamdam55@gmail.com",
+        "supCode": "A-291",
+        "supName": "Ahmed Khaled Badawy Ali Ramadan",
+        "supTitle": "Offline Collection Team Leader",
+        "supEmail": "ahmed.badawy@hudl.com"
+      },
+      {
+        "code": "A-2558",
+        "name": "Abdullah Atef Mostafa Mohamed",
+        "title": "Offline Data Collector (Part)",
+        "email": "abdallaatef161@gmail.com",
+        "supCode": "A-581",
+        "supName": "Mohamed Abdelaziz Mohamed Zaky",
+        "supTitle": "Offline Collection Team Leader",
+        "supEmail": "mohamed.zaky@hudl.com"
+      },
+      {
+        "code": "A-2560",
+        "name": "Bassem Mohamed Shehata Mohamed",
+        "title": "Offline Data Collector (Part)",
+        "email": "bassemmohamed116@gmail.com",
+        "supCode": "A-581",
+        "supName": "Mohamed Abdelaziz Mohamed Zaky",
+        "supTitle": "Offline Collection Team Leader",
+        "supEmail": "mohamed.zaky@hudl.com"
+      },
+      {
+        "code": "A-2561",
+        "name": "Ali Abdelsalam Massaad Mohamed",
+        "title": "Offline Data Collector (Part)",
+        "email": "alimosaad329@gmail.com",
+        "supCode": "A-503",
+        "supName": "Abdelrahman Hesham Mahmoud Abdelrahman",
+        "supTitle": "Offline Collection Team Leader",
+        "supEmail": "abdulrahman.hesham@hudl.com"
+      },
+      {
+        "code": "A-652",
+        "name": "Mazen Mohamed Mohamed Shoaib",
+        "title": "Offline Data Collector (Part)",
+        "email": "mazenarqam123@gmail.com",
+        "supCode": "A-063",
+        "supName": "Abdelkareem Mohamed Abdelkareem Hanafy",
+        "supTitle": "Offline Collection Team Leader",
+        "supEmail": "abdelkereem.mohamed@hudl.com"
+      },
+      {
+        "code": "A-2532",
+        "name": "Mahmoud Nader Salah Eldin Mohamady",
+        "title": "Offline Data Collector (Part)",
+        "email": "bockaba10@gmail.com",
+        "supCode": "A-379",
+        "supName": "Tarek Adel Elsayed Mohamed",
+        "supTitle": "Offline Collection Team Leader",
+        "supEmail": "tarek.adel@hudl.com"
+      },
+      {
+        "code": "A-1731",
+        "name": "Ibrahim Mohamed Fathy Ibrahim",
+        "title": "Offline Data Collector (Part)",
+        "email": "fathyhema84@gmail.com",
+        "supCode": "A-318",
+        "supName": "Mohamed Reda Elsayed Ahmed Elshabaka",
+        "supTitle": "Offline Collection Team Leader",
+        "supEmail": "mohamed.redaelsayed@hudl.com"
+      },
+      {
+        "code": "A-2533",
+        "name": "Anas Sherif Ali Abdelaziz",
+        "title": "Offline Data Collector (Part)",
+        "email": "anasshref198@gmail.com",
+        "supCode": "A-318",
+        "supName": "Mohamed Reda Elsayed Ahmed Elshabaka",
+        "supTitle": "Offline Collection Team Leader",
+        "supEmail": "mohamed.redaelsayed@hudl.com"
+      },
+      {
+        "code": "A-2158",
+        "name": "Seif Eldin Ahmed Ali Abdelmoaty Mohamed",
+        "title": "Offline Data Collector (Part)",
+        "email": "saifhariqa2006@gmail.com",
+        "supCode": "#N/A",
+        "supName": "",
+        "supTitle": "",
+        "supEmail": ""
+      },
+      {
+        "code": "A-2535",
+        "name": "Ahmed Mohamed Younes Zaki Abdelbaqi",
+        "title": "Offline Data Collector (Part)",
+        "email": "ahmedmohamedyounis36@gmail.com",
+        "supCode": "A-318",
+        "supName": "Mohamed Reda Elsayed Ahmed Elshabaka",
+        "supTitle": "Offline Collection Team Leader",
+        "supEmail": "mohamed.redaelsayed@hudl.com"
+      },
+      {
+        "code": "A-2534",
+        "name": "Ahmed Nagi Anwar Abdelmegid Mohamed",
+        "title": "Offline Data Collector (Part)",
+        "email": "anagy097@gmail.com",
+        "supCode": "A-318",
+        "supName": "Mohamed Reda Elsayed Ahmed Elshabaka",
+        "supTitle": "Offline Collection Team Leader",
+        "supEmail": "mohamed.redaelsayed@hudl.com"
+      },
+      {
+        "code": "A-2537",
+        "name": "Abdelaziz Hefny Abdo Hefny Taha",
+        "title": "Offline Data Collector (Part)",
+        "email": "zezohefniy80@gmail.com",
+        "supCode": "#N/A",
+        "supName": "",
+        "supTitle": "",
+        "supEmail": ""
+      },
+      {
+        "code": "A-2538",
+        "name": "Roger Reda Khalil Karam Khalil",
+        "title": "Offline Data Collector (Part)",
+        "email": "rojihreda2@gmail.com",
+        "supCode": "A-291",
+        "supName": "Ahmed Khaled Badawy Ali Ramadan",
+        "supTitle": "Offline Collection Team Leader",
+        "supEmail": "ahmed.badawy@hudl.com"
+      },
+      {
+        "code": "A-2539",
+        "name": "Omar Magdy Omar Saad Eldin Ali",
+        "title": "Offline Data Collector (Part)",
+        "email": "omarmagdy159@gmail.com",
+        "supCode": "A-063",
+        "supName": "Abdelkareem Mohamed Abdelkareem Hanafy",
+        "supTitle": "Offline Collection Team Leader",
+        "supEmail": "abdelkereem.mohamed@hudl.com"
+      },
+      {
+        "code": "A-2445",
+        "name": "Ahmed Amr Abdelbaqi Zayed Abdelbaqi",
+        "title": "Offline Data Collector (Part)",
+        "email": "ahmedamrarqam22@gmail.com",
+        "supCode": "A-291",
+        "supName": "Ahmed Khaled Badawy Ali Ramadan",
+        "supTitle": "Offline Collection Team Leader",
+        "supEmail": "ahmed.badawy@hudl.com"
+      },
+      {
+        "code": "A-2536",
+        "name": "Abdelrahman Emad Hosny Abdelkhalek Sayed",
+        "title": "Offline Data Collector (Part)",
+        "email": "ae109376@gmail.com",
+        "supCode": "A-503",
+        "supName": "Abdelrahman Hesham Mahmoud Abdelrahman",
+        "supTitle": "Offline Collection Team Leader",
+        "supEmail": "abdulrahman.hesham@hudl.com"
+      },
+      {
+        "code": "A-1155",
+        "name": "Ahmed Akram Abualmakarem Diab",
+        "title": "Offline Data Collector",
+        "email": "ahmedakramarqam99@gmail.com",
+        "supCode": "A-503",
+        "supName": "Abdelrahman Hesham Mahmoud Abdelrahman",
+        "supTitle": "Offline Collection Team Leader",
+        "supEmail": "abdulrahman.hesham@hudl.com"
+      },
+      {
+        "code": "A-2540",
+        "name": "Karim Alaa Galal Abdelaziz",
+        "title": "Offline Data Collector (Part)",
+        "email": "kemoasd243@gmail.com",
+        "supCode": "A-125",
+        "supName": "Mahmoud Hosny Mohamed Hassan",
+        "supTitle": "Offline Collection Team Leader",
+        "supEmail": "mahmoud.hosny@hudl.com"
+      },
+      {
+        "code": "A-2541",
+        "name": "Mahmoud Ahmed Abdelhamid Mohamed Hassan",
+        "title": "Offline Data Collector (Part)",
+        "email": "mahmoud.ahmed93.y@gmail.com",
+        "supCode": "A-1271",
+        "supName": "Mohamed Nour Abdelwahab Amin",
+        "supTitle": "Offline Collection Team Leader",
+        "supEmail": "mohamed.nour@hudl.com"
+      },
+      {
+        "code": "A-2543",
+        "name": "Mohamed Rabie Zaghloul Abbas Idris",
+        "title": "Offline Data Collector (Part)",
+        "email": "mohamederz890@gmail.com",
+        "supCode": "A-125",
+        "supName": "Mahmoud Hosny Mohamed Hassan",
+        "supTitle": "Offline Collection Team Leader",
+        "supEmail": "mahmoud.hosny@hudl.com"
+      },
+      {
+        "code": "A-2608",
+        "name": "Mohamed Magdy Mohamed Aburia",
+        "title": "Offline Data Collector (Part)",
+        "email": "mohamedafroto180@gmail.com",
+        "supCode": "#N/A",
+        "supName": "",
+        "supTitle": "",
+        "supEmail": ""
+      },
+      {
+        "code": "A-2544",
+        "name": "Moaz Saleh Soliman Saleh Soliman",
+        "title": "Offline Data Collector (Part)",
+        "email": "www.moaazsaleh098@gmail.com",
+        "supCode": "A-100",
+        "supName": "Mohamed Reda Abdelgawad Abdelmageed",
+        "supTitle": "Offline Collection Team Leader",
+        "supEmail": "mohamed.reda@hudl.com"
+      },
+      {
+        "code": "A-2545",
+        "name": "Mahmoud Ibrahim Farouk Mohamed Ibrahim",
+        "title": "Offline Data Collector (Part)",
+        "email": "mmoodyelmagic@gmail.com",
+        "supCode": "A-100",
+        "supName": "Mohamed Reda Abdelgawad Abdelmageed",
+        "supTitle": "Offline Collection Team Leader",
+        "supEmail": "mohamed.reda@hudl.com"
+      },
+      {
+        "code": "A-2546",
+        "name": "Osama Abbas Ahmed Fouad Abbas",
+        "title": "Offline Data Collector (Part)",
+        "email": "osamaabass1711@gmail.com",
+        "supCode": "A-100",
+        "supName": "Mohamed Reda Abdelgawad Abdelmageed",
+        "supTitle": "Offline Collection Team Leader",
+        "supEmail": "mohamed.reda@hudl.com"
+      },
+      {
+        "code": "A-2548",
+        "name": "Eyad Mahmoud Hassan Thabet",
+        "title": "Offline Data Collector (Part)",
+        "email": "iad32590@gmail.com",
+        "supCode": "A-379",
+        "supName": "Tarek Adel Elsayed Mohamed",
+        "supTitle": "Offline Collection Team Leader",
+        "supEmail": "tarek.adel@hudl.com"
+      },
+      {
+        "code": "A-2549",
+        "name": "Girgis Younan Habib Lotfallah",
+        "title": "Offline Data Collector (Part)",
+        "email": "gergesyounan3@gmail.com",
+        "supCode": "#N/A",
+        "supName": "",
+        "supTitle": "",
+        "supEmail": ""
+      },
+      {
+        "code": "A-1481",
+        "name": "Omar Mohamed Shehata Mohamed Ismail",
+        "title": "Offline Data Collector (Part)",
+        "email": "shehataomar09@gmail.com",
+        "supCode": "A-063",
+        "supName": "Abdelkareem Mohamed Abdelkareem Hanafy",
+        "supTitle": "Offline Collection Team Leader",
+        "supEmail": "abdelkereem.mohamed@hudl.com"
+      },
+      {
+        "code": "A-2550",
+        "name": "Louay Mamdouh Abdellah Mohamed Mohamed",
+        "title": "Offline Data Collector (Part)",
+        "email": "loaymamddoh7@gmail.com",
+        "supCode": "A-608",
+        "supName": "Ali Fathy Ali Sayed",
+        "supTitle": "Offline Collection Team Leader",
+        "supEmail": "ali.fathy@hudl.com"
+      },
+      {
+        "code": "A-2552",
+        "name": "Omar Mohamed Mahmoud Abdelradi",
+        "title": "Offline Data Collector (Part)",
+        "email": "omar.shnooo1@gmail.com",
+        "supCode": "#N/A",
+        "supName": "",
+        "supTitle": "",
+        "supEmail": ""
+      },
+      {
+        "code": "A-2555",
+        "name": "Mahmoud Ahmed Hanafy Mahmoud Abdelqawy",
+        "title": "Offline Data Collector (Part)",
+        "email": "mahmoudhanffy09@gmail.com",
+        "supCode": "#N/A",
+        "supName": "",
+        "supTitle": "",
+        "supEmail": ""
+      },
+      {
+        "code": "A-2557",
+        "name": "Mohamed Ayman Mohamed Abdullah",
+        "title": "Offline Data Collector (Part)",
+        "email": "mohamedaymankooshry@gmail.com",
+        "supCode": "A-581",
+        "supName": "Mohamed Abdelaziz Mohamed Zaky",
+        "supTitle": "Offline Collection Team Leader",
+        "supEmail": "mohamed.zaky@hudl.com"
+      },
+      {
+        "code": "A-2559",
+        "name": "Sherif Mohamed Abdelgawad Abdelhamid Ahmed",
+        "title": "Offline Data Collector (Part)",
+        "email": "sherifmo2255@gmail.com",
+        "supCode": "A-581",
+        "supName": "Mohamed Abdelaziz Mohamed Zaky",
+        "supTitle": "Offline Collection Team Leader",
+        "supEmail": "mohamed.zaky@hudl.com"
+      },
+      {
+        "code": "A-793",
+        "name": "Ziad Mohamed Hanafy Mohamed Elsayed",
+        "title": "Offline Data Collector",
+        "email": "ziadarqam341@gmail.com",
+        "supCode": "A-200",
+        "supName": "Mohamed Tarek Mohamed Abdelsalam",
+        "supTitle": "Offline Collection Team Leader",
+        "supEmail": "mohamed.tarek@hudl.com"
+      },
+      {
+        "code": "A-1106",
+        "name": "Fayez Khader Mohammed Salem",
+        "title": "Offline Data Collector (Part)",
+        "email": "fayezarqam@gmail.com",
+        "supCode": "#N/A",
+        "supName": "",
+        "supTitle": "",
+        "supEmail": ""
+      },
+      {
+        "code": "A-2066",
+        "name": "Mohamed Hany Elsayed Hassan",
+        "title": "Offline Data Collector (Part)",
+        "email": "mohamedhany862004@gmail.com",
+        "supCode": "#N/A",
+        "supName": "",
+        "supTitle": "",
+        "supEmail": ""
+      },
+      {
+        "code": "A-2562",
+        "name": "Mohamed Abdullah Hassan Mohamed Hasbo",
+        "title": "Offline Data Collector (Part)",
+        "email": "mohameddiesty@gmail.com",
+        "supCode": "#N/A",
+        "supName": "",
+        "supTitle": "",
+        "supEmail": ""
+      },
+      {
+        "code": "A-2563",
+        "name": "Mohamed Khaled Ahmed Mahmoud",
+        "title": "Offline Data Collector (Part)",
+        "email": "mohamed1759khaled@gmail.com",
+        "supCode": "#N/A",
+        "supName": "",
+        "supTitle": "",
+        "supEmail": ""
+      },
+      {
+        "code": "A-2564",
+        "name": "Abdelrahman Mohamed Abdelrahman Abdelmohsen Ali",
+        "title": "Offline Data Collector (Part)",
+        "email": "abduoabuhula@gmail.com",
+        "supCode": "#N/A",
+        "supName": "",
+        "supTitle": "",
+        "supEmail": ""
+      },
+      {
+        "code": "A-2565",
+        "name": "Karim Hassan Abdullah Abdelmaqsoud",
+        "title": "Offline Data Collector (Part)",
+        "email": "kmkmhassan17@gmail.com",
+        "supCode": "#N/A",
+        "supName": "",
+        "supTitle": "",
+        "supEmail": ""
+      },
+      {
+        "code": "A-2567",
+        "name": "Hussein Nasr Mohamed Ali",
+        "title": "Offline Data Collector (Part)",
+        "email": "hussiennasr063@gmail.com",
+        "supCode": "#N/A",
+        "supName": "",
+        "supTitle": "",
+        "supEmail": ""
+      },
+      {
+        "code": "A-2568",
+        "name": "Hassan Essam Hassan Ismail Hassan",
+        "title": "Offline Data Collector (Part)",
+        "email": "hassanesam416@gmail.com",
+        "supCode": "#N/A",
+        "supName": "",
+        "supTitle": "",
+        "supEmail": ""
+      },
+      {
+        "code": "A-2569",
+        "name": "Marwan Hatem Mohamed Behairy",
+        "title": "Offline Data Collector (Part)",
+        "email": "mh220363@gmail.com",
+        "supCode": "#N/A",
+        "supName": "",
+        "supTitle": "",
+        "supEmail": ""
+      },
+      {
+        "code": "A-2570",
+        "name": "Ahmed Sayed Abdelmoghny Shabaka",
+        "title": "Offline Data Collector (Part)",
+        "email": "ahmedshabaka874@gmail.com",
+        "supCode": "#N/A",
+        "supName": "",
+        "supTitle": "",
+        "supEmail": ""
+      },
+      {
+        "code": "A-2571",
+        "name": "Youssef Hamdy Sayed Othman Elsayed",
+        "title": "Offline Data Collector (Part)",
+        "email": "yousefjoehamdi2006@gmail.com",
+        "supCode": "#N/A",
+        "supName": "",
+        "supTitle": "",
+        "supEmail": ""
+      },
+      {
+        "code": "A-2572",
+        "name": "Mohamed Ahmed Elsayed Ali Khalaf",
+        "title": "Offline Data Collector (Part)",
+        "email": "mohamedelsayed226206@gmail.com",
+        "supCode": "#N/A",
+        "supName": "",
+        "supTitle": "",
+        "supEmail": ""
+      },
+      {
+        "code": "A-2573",
+        "name": "Ali Abu Zeid Barakat Abdelaal",
+        "title": "Offline Data Collector (Part)",
+        "email": "aliabozaid1001@gmail.com",
+        "supCode": "#N/A",
+        "supName": "",
+        "supTitle": "",
+        "supEmail": ""
+      },
+      {
+        "code": "A-2574",
+        "name": "Samy Mohamed Samy Mohamed Mohamed",
+        "title": "Offline Data Collector (Part)",
+        "email": "samyexmple@gmail.com",
+        "supCode": "#N/A",
+        "supName": "",
+        "supTitle": "",
+        "supEmail": ""
+      },
+      {
+        "code": "A-2576",
+        "name": "Bilal Emad Hussein Sayed Mohamed",
+        "title": "Offline Data Collector (Part)",
+        "email": "be658098@gmail.com",
+        "supCode": "#N/A",
+        "supName": "",
+        "supTitle": "",
+        "supEmail": ""
+      },
+      {
+        "code": "A-2577",
+        "name": "Moamen Mohamed Zeineldin Sayed",
+        "title": "Offline Data Collector (Part)",
+        "email": "hossamghaly19849@gmail.com",
+        "supCode": "#N/A",
+        "supName": "",
+        "supTitle": "",
+        "supEmail": ""
+      },
+      {
+        "code": "A-2578",
+        "name": "Abdelrahman Shehata Mabrouk Ammar",
+        "title": "Offline Data Collector (Part)",
+        "email": "abdoshehat83@gmail.com",
+        "supCode": "#N/A",
+        "supName": "",
+        "supTitle": "",
+        "supEmail": ""
+      },
+      {
+        "code": "A-2579",
+        "name": "Youssef Gaber Refaat Abbas",
+        "title": "Offline Data Collector (Part)",
+        "email": "youssefgaber88@icloud.com",
+        "supCode": "#N/A",
+        "supName": "",
+        "supTitle": "",
+        "supEmail": ""
+      },
+      {
+        "code": "A-2580",
+        "name": "Ziad Raafat Mohamed Mohamed Elkhayal",
+        "title": "Offline Data Collector (Part)",
+        "email": "zrafat127@gmail.com",
+        "supCode": "#N/A",
+        "supName": "",
+        "supTitle": "",
+        "supEmail": ""
+      },
+      {
+        "code": "A-2581",
+        "name": "Mohamed Osama Rabie Ahmed Mahmoud",
+        "title": "Offline Data Collector (Part)",
+        "email": "modyo9946@gmail.com",
+        "supCode": "#N/A",
+        "supName": "",
+        "supTitle": "",
+        "supEmail": ""
+      },
+      {
+        "code": "A-2582",
+        "name": "Youssef Fouad Elsayed Abdellatif Shouk",
+        "title": "Offline Data Collector (Part)",
+        "email": "yf5111394@gmail.com",
+        "supCode": "#N/A",
+        "supName": "",
+        "supTitle": "",
+        "supEmail": ""
+      },
+      {
+        "code": "A-2583",
+        "name": "Abdelrahman Mahmoud Sabry Ali Ahmed",
+        "title": "Offline Data Collector (Part)",
+        "email": "badbod85263@gmail.com",
+        "supCode": "#N/A",
+        "supName": "",
+        "supTitle": "",
+        "supEmail": ""
+      },
+      {
+        "code": "A-2584",
+        "name": "Martin Shaher Kamal Mikhail",
+        "title": "Offline Data Collector (Part)",
+        "email": "martinshaher77@gmail.com",
+        "supCode": "#N/A",
+        "supName": "",
+        "supTitle": "",
+        "supEmail": ""
+      },
+      {
+        "code": "A-2585",
+        "name": "Ahmed Hany Ahmed Abdelmawgoud Ahmed",
+        "title": "Offline Data Collector (Part)",
+        "email": "ahmedhanya513@gmail.com",
+        "supCode": "#N/A",
+        "supName": "",
+        "supTitle": "",
+        "supEmail": ""
+      },
+      {
+        "code": "A-2586",
+        "name": "Youssef Emadeldin Mahmoud Abdelrahman Elshehhat",
+        "title": "Offline Data Collector (Part)",
+        "email": "yusefemadeldin@gmail.com",
+        "supCode": "#N/A",
+        "supName": "",
+        "supTitle": "",
+        "supEmail": ""
+      },
+      {
+        "code": "A-2587",
+        "name": "Saleh Emad Abdelbaqy Mohamed",
+        "title": "Offline Data Collector (Part)",
+        "email": "salehemad978@gmail.com",
+        "supCode": "#N/A",
+        "supName": "",
+        "supTitle": "",
+        "supEmail": ""
+      },
+      {
+        "code": "A-2588",
+        "name": "Omar Alaa Abdelfattah Abdelhamid Elsayed",
+        "title": "Offline Data Collector (Part)",
+        "email": "omar7waa196006@gmail.com",
+        "supCode": "#N/A",
+        "supName": "",
+        "supTitle": "",
+        "supEmail": ""
+      },
+      {
+        "code": "A-2589",
+        "name": "Basel Hazem Mohamed Hassan Elbadawy",
+        "title": "Offline Data Collector (Part)",
+        "email": "baselhazem194@gmail.com",
+        "supCode": "#N/A",
+        "supName": "",
+        "supTitle": "",
+        "supEmail": ""
+      },
+      {
+        "code": "A-2590",
+        "name": "Hamed Ashraf Ahmed Abdelhady Mohamed",
+        "title": "Offline Data Collector (Part)",
+        "email": "hamidamara117@gmail.com",
+        "supCode": "#N/A",
+        "supName": "",
+        "supTitle": "",
+        "supEmail": ""
+      },
+      {
+        "code": "A-2591",
+        "name": "Ziad Ahmed Mostafa Madeh Mostafa",
+        "title": "Offline Data Collector (Part)",
+        "email": "ziad25zezo@gmail.com",
+        "supCode": "#N/A",
+        "supName": "",
+        "supTitle": "",
+        "supEmail": ""
+      },
+      {
+        "code": "A-2592",
+        "name": "Mohaimen Mohamed Saad Mahmoud",
+        "title": "Offline Data Collector (Part)",
+        "email": "mohaimnmohamedmody2004@gmail.com",
+        "supCode": "#N/A",
+        "supName": "",
+        "supTitle": "",
+        "supEmail": ""
+      },
+      {
+        "code": "A-2593",
+        "name": "Youssef Badawy Sayed Mohamed Badr",
+        "title": "Offline Data Collector (Part)",
+        "email": "youssifbadawy35@gmail.com",
+        "supCode": "#N/A",
+        "supName": "",
+        "supTitle": "",
+        "supEmail": ""
+      },
+      {
+        "code": "A-2594",
+        "name": "Abdelrahman Mohamed Kotb Mohamed Saleh",
+        "title": "Offline Data Collector (Part)",
+        "email": "akotb797@gmail.com",
+        "supCode": "#N/A",
+        "supName": "",
+        "supTitle": "",
+        "supEmail": ""
+      },
+      {
+        "code": "A-2595",
+        "name": "Marwan Mostafa Ramadan Mostafa Hamed",
+        "title": "Offline Data Collector (Part)",
+        "email": "marwanmustafa875@gmail.com",
+        "supCode": "#N/A",
+        "supName": "",
+        "supTitle": "",
+        "supEmail": ""
+      },
+      {
+        "code": "A-2596",
+        "name": "Mohamed Wagih Taha Mohamed",
+        "title": "Offline Data Collector (Part)",
+        "email": "mohamedwageh8002@gmail.com",
+        "supCode": "#N/A",
+        "supName": "",
+        "supTitle": "",
+        "supEmail": ""
+      },
+      {
+        "code": "A-2597",
+        "name": "Omar Ahmed Mohamed Ahmed Elgendy",
+        "title": "Offline Data Collector (Part)",
+        "email": "oa643037@gmail.com",
+        "supCode": "#N/A",
+        "supName": "",
+        "supTitle": "",
+        "supEmail": ""
+      },
+      {
+        "code": "A-2598",
+        "name": "Youssef Mohamed Hassan Mohamed Shehata",
+        "title": "Offline Data Collector (Part)",
+        "email": "youssefkillua55@gmail.com",
+        "supCode": "#N/A",
+        "supName": "",
+        "supTitle": "",
+        "supEmail": ""
+      },
+      {
+        "code": "A-2599",
+        "name": "Omar Khaled Arafa Abdelhady",
+        "title": "Offline Data Collector (Part)",
+        "email": "usersalma987@gmail.com",
+        "supCode": "#N/A",
+        "supName": "",
+        "supTitle": "",
+        "supEmail": ""
+      },
+      {
+        "code": "A-2600",
+        "name": "Alhassan Hany Hassan Khalifa Mohamed",
+        "title": "Offline Data Collector (Part)",
+        "email": "alhassan62005@gmail.com",
+        "supCode": "#N/A",
+        "supName": "",
+        "supTitle": "",
+        "supEmail": ""
+      },
+      {
+        "code": "A-2601",
+        "name": "Mohamed Mahmoud Mohamed Soliman Abdelgawad",
+        "title": "Offline Data Collector (Part)",
+        "email": "mosoliman2542885@gmail.com",
+        "supCode": "#N/A",
+        "supName": "",
+        "supTitle": "",
+        "supEmail": ""
+      },
+      {
+        "code": "A-2602",
+        "name": "Marwan Ayman Abdelrahim Mahmoud Mohamed",
+        "title": "Offline Data Collector (Part)",
+        "email": "ma0862107@gmail.com",
+        "supCode": "#N/A",
+        "supName": "",
+        "supTitle": "",
+        "supEmail": ""
+      },
+      {
+        "code": "A-2603",
+        "name": "Ibrahim Massaad Ibrahim Abdullah Elabbady",
+        "title": "Offline Data Collector (Part)",
+        "email": "hemagaming2021@gmail.com",
+        "supCode": "#N/A",
+        "supName": "",
+        "supTitle": "",
+        "supEmail": ""
+      },
+      {
+        "code": "A-2604",
+        "name": "Abdullah Mohammed Abdullah Shehata",
+        "title": "Offline Data Collector (Part)",
+        "email": "khaz3lft@gmail.com",
+        "supCode": "#N/A",
+        "supName": "",
+        "supTitle": "",
+        "supEmail": ""
+      },
+      {
+        "code": "A-2605",
+        "name": "Mohamed Ibrahim Ali Mohamed Aboulatta",
+        "title": "Offline Data Collector (Part)",
+        "email": "modymessi986@gmail.com",
+        "supCode": "#N/A",
+        "supName": "",
+        "supTitle": "",
+        "supEmail": ""
+      },
+      {
+        "code": "A-2606",
+        "name": "Abdelrahman Mohamed Elhusseiny Ahmed",
+        "title": "Offline Data Collector (Part)",
+        "email": "mota349845@gmail.com",
+        "supCode": "#N/A",
+        "supName": "",
+        "supTitle": "",
+        "supEmail": ""
+      },
+      {
+        "code": "A-2607",
+        "name": "Youssef Abdelfattah Mohamed Hassan",
+        "title": "Offline Data Collector (Part)",
+        "email": "youssefabdelfattah852@gmail.com",
+        "supCode": "#N/A",
+        "supName": "",
+        "supTitle": "",
+        "supEmail": ""
+      },
+      {
+        "code": "A-2575",
+        "name": "Mostafa Hamdy Abdelglil Mohamed Ali",
+        "title": "Offline Data Collector (Part)",
+        "email": "mostafhamdycom48@gmail.com",
+        "supCode": "#N/A",
+        "supName": "",
+        "supTitle": "",
+        "supEmail": ""
+      },
+      {
+        "code": "A-2566",
+        "name": "Muhammed Ahmed Sobhi Hashem Ahmed",
+        "title": "Offline Data Collector (Part)",
+        "email": "mo7amedsob7y1110@gmail.com",
+        "supCode": "#N/A",
+        "supName": "",
+        "supTitle": "",
+        "supEmail": ""
       }
     ]
   },
