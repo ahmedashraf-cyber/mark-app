@@ -381,9 +381,8 @@ function QuickSummary({ results, score, abcScores, onFullReport }) {
   const getErrors = (key) => rg ? (rg[key]?.errors  ?? 0)    : (abcScores?.[key]?.edited   ?? 0)
   const overallScore  = rg ? (rg.overall?.score  ?? score) : score
   const overallViewed = rg ? (rg.overall?.viewed ?? results.baseEvents.length) : results.baseEvents.length
-  // Use total computed errors count (non-FF + FF) when available
-  const totalComputedErrors = (results.computedErrors?.length || 0) + (results.computedFFErrors?.length || 0)
-  const overallErrors = totalComputedErrors > 0 ? totalComputedErrors : (rg ? (rg.overall?.errors ?? uniqueEdited) : uniqueEdited)
+  // Use bridge reviewGroupScores overall.errors (accurate 5-rule unique error keys)
+  const overallErrors = rg ? (rg.overall?.errors ?? uniqueEdited) : uniqueEdited
 
   return (
     <div className="scale-in" style={{

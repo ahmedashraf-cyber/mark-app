@@ -1267,18 +1267,26 @@
           computedFFErrors = ffErrorsE;
 
           // ── Recalculate reviewGroupScores using accurate error keys ──────────
-          if (reviewGroupScores) {
-            // Build accurate error key set (non-FF only — FF errors are separate)
+          // Always recalculate — independent of whether tracker button was found.
+          // Uses 5-rule error keys as numerator, telemetry viewed keys as denominator.
+          // A/B/C grouping uses capturedCats if available, otherwise Overall only.
+          try {
             const accurateErrorKeys = new Set([...errorsE, ...ffErrorsE].map(e => e.key));
 
-            // Viewed keys from telemetry
+            // Viewed keys from deduplicated telemetry
             const viewedKeysNew = new Set();
             dedupedEvents.forEach(v => {
               if (v.category === 'telemetry' && v.type === 'event-activation' && reviewerSetE.has(Number(v.author)))
                 viewedKeysNew.add(v.key);
             });
 
-            const capturedCatsNew = reviewGroupScores._capturedCats ||
+            const ov = viewedKeysNew.size;
+            const oe = accurateErrorKeys.size;
+            const overallScore = ov > 0 ? Math.round(((ov - oe) / ov) * 100) : null;
+
+            // Try A/B/C grouping from captured cats
+            const capturedCatsNew =
+              (reviewGroupScores && reviewGroupScores._capturedCats) ||
               (window.__MARK_QRT__ && window.__MARK_QRT__.qualityCategorizationContext && window.__MARK_QRT__.qualityCategorizationContext.categorizedEvents);
 
             if (capturedCatsNew && Object.keys(capturedCatsNew).length > 0) {
@@ -1305,17 +1313,30 @@
               });
 
               const mkN = b => ({ viewed: b.viewed, errors: b.errors, score: b.viewed > 0 ? Math.round(((b.viewed - b.errors) / b.viewed) * 100) : null });
-              const ov = viewedKeysNew.size, oe = accurateErrorKeys.size;
 
               newReviewGroupScores = {
-                overall: { viewed: ov, errors: oe, score: ov > 0 ? Math.round(((ov - oe) / ov) * 100) : null },
+                overall: { viewed: ov, errors: oe, score: overallScore },
                 A: mkN(bucketsN.A), B: mkN(bucketsN.B), C: mkN(bucketsN.C), Others: mkN(bucketsN.Others),
-                captureMs: reviewGroupScores.captureMs,
+                captureMs: reviewGroupScores ? reviewGroupScores.captureMs : 0,
                 recalculated: true,
               };
             } else {
-              newReviewGroupScores = reviewGroupScores;
+              // No A/B/C cats available — overall only, A/B/C/Others null
+              newReviewGroupScores = {
+                overall: { viewed: ov, errors: oe, score: overallScore },
+                A: { viewed: 0, errors: 0, score: null },
+                B: { viewed: 0, errors: 0, score: null },
+                C: { viewed: 0, errors: 0, score: null },
+                Others: { viewed: 0, errors: 0, score: null },
+                captureMs: 0,
+                recalculated: true,
+                noCats: true,
+              };
             }
+            console.log('[MARK] newReviewGroupScores:', JSON.stringify(newReviewGroupScores));
+          } catch(rgRecalcErr) {
+            console.warn('[MARK] reviewGroupScores recalc failed:', rgRecalcErr && rgRecalcErr.message);
+            newReviewGroupScores = reviewGroupScores;
           }
 
           console.log('[MARK] computedErrors:', errorsE.length, '| computedFFErrors:', ffErrorsE.length);
