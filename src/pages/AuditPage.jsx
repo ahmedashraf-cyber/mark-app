@@ -1482,14 +1482,30 @@ export default function AuditPage({ session, onBack, onFullReport, initialResult
       let trueReviewerIds = []
 
       if (workProfiles.length > 0) {
-        workProfiles.forEach(w => {
-          const isCollector = (w.base || 0) > COLLECTOR_WORK_MIN
-          const isSpecialist = (w.refinement || 0) > COLLECTOR_WORK_MIN && (w.base || 0) === 0
-          const isReviewer = (w.amendment || 0) > 0 && (w.base || 0) === 0 && (w.refinement || 0) === 0
-          if (isReviewer && !isCollector && !isSpecialist) {
-            trueReviewerIds.push(Number(w.author))
-          }
-        })
+        // Reviewer = highest views count (they watched events = telemetry)
+        // A reviewer may also have some base events (dual-role) — don't exclude on base > 0
+        // Primary signal: views > 0. Secondary: not the top base collector.
+        const topBaseAuthor = workProfiles.reduce((top, w) => (w.base || 0) > (top.base || 0) ? w : top, workProfiles[0])
+        const viewers = workProfiles.filter(w => (w.views || 0) > 0)
+        if (viewers.length > 0) {
+          // Sort by views descending — highest viewer is the reviewer
+          viewers.sort((a, b) => (b.views || 0) - (a.views || 0))
+          viewers.forEach(w => {
+            // Exclude if they are the primary base collector (most base events)
+            const isPrimaryCollector = w.author === topBaseAuthor.author && (w.base || 0) > 100
+            if (!isPrimaryCollector) trueReviewerIds.push(Number(w.author))
+          })
+        } else {
+          // No views at all — fall back to amendment-only detection
+          workProfiles.forEach(w => {
+            const isCollector = (w.base || 0) > COLLECTOR_WORK_MIN
+            const isSpecialist = (w.refinement || 0) > COLLECTOR_WORK_MIN && (w.base || 0) === 0
+            const isReviewer = (w.amendment || 0) > 0 && (w.base || 0) === 0 && (w.refinement || 0) === 0
+            if (isReviewer && !isCollector && !isSpecialist) {
+              trueReviewerIds.push(Number(w.author))
+            }
+          })
+        }
       }
 
       // Fallback: derive from base event authorship if diagnostics.work unavailable
