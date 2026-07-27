@@ -1104,11 +1104,18 @@
             }
             if (pair.pairType === 'deleted+edited') {
               const DE_MODULES = ['players','extras','location','goal-location','impact','base'];
+              // Pre-build new ref map for paired key to avoid O(n) scan per module
+              const pairedRefMap = {};
+              Object.values(cache).forEach(v => {
+                if (v.key === pair.paired.key && inMatch(v) &&
+                    (v.category === 'refinement' || (v.category === 'amendment' && reviewerSetE.has(Number(v.author))))) {
+                  if (!pairedRefMap[v.type]) pairedRefMap[v.type] = [];
+                  pairedRefMap[v.type].push(v);
+                }
+              });
               DE_MODULES.forEach(module => {
                 const oldRef = latestCollectorRef(pair.del.key, module);
-                const newRef = Object.values(cache)
-                  .filter(v => v.key === pair.paired.key && (v.category === 'refinement' || (v.category === 'amendment' && reviewerSetE.has(Number(v.author)))) && v.type === module && inMatch(v))
-                  .sort((a,b) => (b.capturedTime||'').localeCompare(a.capturedTime||''))[0];
+                const newRef = (pairedRefMap[module] || []).sort((a,b) => (b.capturedTime||'').localeCompare(a.capturedTime||''))[0];
                 if (!oldRef && !newRef) return;
                 const oldVal = JSON.stringify(oldRef?.payload || {});
                 const newVal = JSON.stringify(newRef?.payload || {});
