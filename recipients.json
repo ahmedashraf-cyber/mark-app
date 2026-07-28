@@ -1,5 +1,5 @@
 {
-  "updatedAt": "2026-07-28T11:25:14.745Z",
+  "updatedAt": "2026-07-28T12:25:14.302Z",
   "production": {
     "count": 1383,
     "people": [
@@ -1476,7 +1476,7 @@
       {
         "code": "A-395",
         "name": "Ahmed Tarek Gad Siam",
-        "title": "Offline Quality Reviewer",
+        "title": "Offline Data Collector",
         "email": "ahmedtarekseyam@gmail.com",
         "supCode": "A-101",
         "supName": "Mohamed Mahmoud Abdelmohsen Radwan",
