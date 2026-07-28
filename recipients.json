@@ -1,5 +1,5 @@
 {
-  "updatedAt": "2026-07-28T07:25:23.855Z",
+  "updatedAt": "2026-07-28T08:25:16.082Z",
   "production": {
     "count": 1383,
     "people": [
@@ -580,7 +580,7 @@
         "email": "ahmed.ehab@hudl.com",
         "supCode": "A-146",
         "supName": "Abdelfattah Gamal Abdelfattah Gomaa",
-        "supTitle": "Resolution Team Leader",
+        "supTitle": "Resolution Supervisor",
         "supEmail": "abdelfattah.gamal@hudl.com"
       },
       {
@@ -686,7 +686,7 @@
       {
         "code": "A-146",
         "name": "Abdelfattah Gamal Abdelfattah Gomaa",
-        "title": "Resolution Team Leader",
+        "title": "Resolution Supervisor",
         "email": "abdelfattah.gamal@hudl.com",
         "supCode": "B-239",
         "supName": "Sherif Ali Abdelazim Abdelkader Ahmed",
@@ -810,7 +810,7 @@
         "email": "mostafa.mahmoud@hudl.com",
         "supCode": "A-146",
         "supName": "Abdelfattah Gamal Abdelfattah Gomaa",
-        "supTitle": "Resolution Team Leader",
+        "supTitle": "Resolution Supervisor",
         "supEmail": "abdelfattah.gamal@hudl.com"
       },
       {
