@@ -1,5 +1,5 @@
 {
-  "updatedAt": "2026-07-28T12:25:14.302Z",
+  "updatedAt": "2026-07-28T13:25:15.391Z",
   "production": {
     "count": 1383,
     "people": [
@@ -1228,7 +1228,7 @@
         "name": "Alamir Tarek Mohamed Al-Huseiny",
         "title": "Offline Data Collector",
         "email": "amerarqam72@gmail.com",
-        "supCode": "",
+        "supCode": "#N/A",
         "supName": "",
         "supTitle": "",
         "supEmail": ""
