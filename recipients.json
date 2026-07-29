@@ -1,5 +1,5 @@
 {
-  "updatedAt": "2026-07-29T09:25:15.800Z",
+  "updatedAt": "2026-07-29T10:25:16.887Z",
   "production": {
     "count": 1372,
     "people": [
@@ -2626,7 +2626,7 @@
       {
         "code": "A-766",
         "name": "Ahmed Gamal Abdelnasser Abdelmohsen",
-        "title": "Offline Data Collector",
+        "title": "Info Coordinator",
         "email": "ahmed.gamal@hud.com",
         "supCode": "A-582",
         "supName": "Ahmed Reda Salah Elsafty",
@@ -3726,7 +3726,7 @@
       {
         "code": "A-1060",
         "name": "Abdelrahman Mahmoud Mansour Mohamed Rady",
-        "title": "Offline Data Collector",
+        "title": "Info Coordinator",
         "email": "abdelrahman.mansour@hudl.com",
         "supCode": "A-200",
         "supName": "Mohamed Tarek Mohamed Abdelsalam",
@@ -5486,7 +5486,7 @@
       {
         "code": "A-1405",
         "name": "Abdelrahman Mohamed Ibrahim Hassanein",
-        "title": "Offline Data Collector",
+        "title": "Info Coordinator",
         "email": "abdelrahman.hassanein@hudl.com",
         "supCode": "A-064",
         "supName": "Mina Talaat Fanous Gadoun",
@@ -6506,7 +6506,7 @@
       {
         "code": "A-1586",
         "name": "Ahmed Hagag Sayed Mohamed Hagag",
-        "title": "Offline Data Collector",
+        "title": "Info Coordinator",
         "email": "ahmed.hagag@hudl.com",
         "supCode": "A-125",
         "supName": "Mahmoud Hosny Mohamed Hassan",
@@ -6726,12 +6726,12 @@
       {
         "code": "A-1620",
         "name": "Moataz Gamal Ibrahim Ibrahim Hassan",
-        "title": "Offline Data Collector (Part)",
+        "title": "Info Coordinator",
         "email": "moataz.gamal@hudl.com",
-        "supCode": "A-100",
-        "supName": "Mohamed Reda Abdelgawad Abdelmageed",
-        "supTitle": "Offline Collection Team Leader",
-        "supEmail": "mohamed.reda@hudl.com"
+        "supCode": "A-904",
+        "supName": "Hanaa Anwar Ali Hussein",
+        "supTitle": "Info Operations Team Leader",
+        "supEmail": "hanaa.anwar@hudl.com"
       },
       {
         "code": "A-1623",
@@ -7456,7 +7456,7 @@
       {
         "code": "A-1750",
         "name": "Youssef Mohamed Maher AbdelMoneim Abdelaal",
-        "title": "Offline Data Collector",
+        "title": "Info Coordinator",
         "email": "youssef.maher@hudl.com",
         "supCode": "A-379",
         "supName": "Tarek Adel Elsayed Mohamed",
@@ -8536,7 +8536,7 @@
       {
         "code": "A-1942",
         "name": "Amr Ayman Mohamed Mohamed",
-        "title": "Video Coordinator",
+        "title": "Info Coordinator",
         "email": "amr.ayman@hudl.com",
         "supCode": "A-018",
         "supName": "Ahmed Ramadan Badr Ramadan",
