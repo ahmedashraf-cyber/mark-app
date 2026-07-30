@@ -1,5 +1,5 @@
 (async function(){
-  const BRIDGE_VERSION = '7.8.1';
+  const BRIDGE_VERSION = '7.8.2';
   if(window.__MARK_BRIDGE_VERSION__ === BRIDGE_VERSION){console.log('[MARK] bridge already running (v' + BRIDGE_VERSION + ')');return;}
   if(window.__MARK_BRIDGE_STOP__) window.__MARK_BRIDGE_STOP__();
   window.__MARK_BRIDGE__ = true;
@@ -1027,6 +1027,31 @@
             v.category === 'base' && reviewerSetE.has(Number(v.author))
           );
 
+          // Pre-build lookup maps BEFORE deletion pairing (needed by getBase)
+          const baseMapE = {};
+          const refMapE  = {};
+          const ffCollMapE = {};
+          const ffRevMapE  = {};
+
+          dedupedEvents.forEach(v => {
+            if (!v) return;
+            if (v.category === 'base') {
+              if (!baseMapE[v.key]) baseMapE[v.key] = v;
+            } else if (v.category === 'refinement') {
+              const k = v.key + '_' + v.type;
+              if (!refMapE[k]) refMapE[k] = [];
+              refMapE[k].push(v);
+            } else if (v.type === 'freeze-frame') {
+              if (reviewerSetE.has(Number(v.author))) {
+                if (!ffRevMapE[v.key]) ffRevMapE[v.key] = [];
+                ffRevMapE[v.key].push(v);
+              } else {
+                if (!ffCollMapE[v.key]) ffCollMapE[v.key] = [];
+                ffCollMapE[v.key].push(v);
+              }
+            }
+          });
+
           // Deletions
           const deletionsE = allReviewerAmends.filter(v => v.type === 'deletion');
 
@@ -1059,30 +1084,7 @@
             amendsByKeyE[a.key].push(a);
           });
 
-          // Pre-build lookup maps for O(1) access — avoids O(n²) cache scans
-          const baseMapE = {};           // key → base event
-          const refMapE  = {};           // key_type → [refinement events]
-          const ffCollMapE = {};         // key → [collector FF events]
-          const ffRevMapE  = {};         // key → [reviewer FF events]
-
-          dedupedEvents.forEach(v => {
-            if (!v) return;
-            if (v.category === 'base') {
-              if (!baseMapE[v.key]) baseMapE[v.key] = v;
-            } else if (v.category === 'refinement') {
-              const k = v.key + '_' + v.type;
-              if (!refMapE[k]) refMapE[k] = [];
-              refMapE[k].push(v);
-            } else if (v.type === 'freeze-frame') {
-              if (reviewerSetE.has(Number(v.author))) {
-                if (!ffRevMapE[v.key]) ffRevMapE[v.key] = [];
-                ffRevMapE[v.key].push(v);
-              } else {
-                if (!ffCollMapE[v.key]) ffCollMapE[v.key] = [];
-                ffCollMapE[v.key].push(v);
-              }
-            }
-          });
+          // Lookup maps already built above (before deletion pairing)
 
           // Helper: latest collector refinement for key+type
           const latestCollectorRef = (key, type) => {
