@@ -977,9 +977,29 @@
             return String(min).padStart(2,'0') + ':' + String(sec).padStart(2,'0') + '.' + String(millis).padStart(3,'0');
           };
 
-          // Build dedupedEvents from inMatch events — used by error engine.
-          // Since all events have unique IDs, we just filter by match/part.
-          const dedupedEvents = Object.values(cache).filter(v => inMatch(v));
+          // Build dedupedEvents — deduplicated to handle Apollo cache inflation
+          // when Tag Once loads the same match multiple times in a session.
+          // Strategy:
+          //   base: one record per key (first seen)
+          //   telemetry: one record per key+author (latest capturedTime)
+          //   amendment/refinement: one record per key+type+author (latest capturedTime)
+          const dedupeMapE = {};
+          Object.values(cache).forEach(v => {
+            if (!inMatch(v)) return;
+            let dk;
+            if (v.category === 'base') {
+              dk = 'base|' + v.key;
+            } else if (v.category === 'telemetry') {
+              dk = 'tel|' + v.key + '|' + v.author;
+            } else {
+              dk = v.category + '|' + v.key + '|' + (v.type||'') + '|' + v.author;
+            }
+            const existing = dedupeMapE[dk];
+            if (!existing || (v.capturedTime||'') > (existing.capturedTime||''))
+              dedupeMapE[dk] = v;
+          });
+          const dedupedEvents = Object.values(dedupeMapE);
+          console.log('[MARK] error engine: cache=', Object.values(cache).filter(v=>inMatch(v)).length, '→ deduped=', dedupedEvents.length);
 
           // Shot keys (for FF — shots only)
           const shotKeysE = new Set();
@@ -1348,7 +1368,7 @@
 
           console.log('[MARK] computedErrors:', errorsE.length, '| computedFFErrors:', ffErrorsE.length);
         } catch (errEngineErr) {
-          console.warn('[MARK] error engine failed:', errEngineErr && errEngineErr.message);
+          console.warn('[MARK] error engine failed:', errEngineErr && errEngineErr.message, errEngineErr && errEngineErr.stack && errEngineErr.stack.slice(0,300));
           computedErrors   = null;
           computedFFErrors = null;
           newReviewGroupScores = null;
