@@ -1,5 +1,5 @@
 {
-  "updatedAt": "2026-08-02T13:25:14.707Z",
+  "updatedAt": "2026-08-02T14:25:15.833Z",
   "production": {
     "count": 1372,
     "people": [
@@ -3336,7 +3336,7 @@
       {
         "code": "A-957",
         "name": "Omar Farag Allah Elmetwally Ali Yousef",
-        "title": "Offline Data Collector (Part)",
+        "title": "Live Data Collector",
         "email": "wamarqam@gmail.com",
         "supCode": "A-379",
         "supName": "Tarek Adel Elsayed Mohamed",
@@ -8536,7 +8536,7 @@
       {
         "code": "A-1942",
         "name": "Amr Ayman Mohamed Mohamed",
-        "title": "Info Coordinator",
+        "title": "Video Coordinator",
         "email": "amr.ayman@hudl.com",
         "supCode": "A-018",
         "supName": "Ahmed Ramadan Badr Ramadan",
