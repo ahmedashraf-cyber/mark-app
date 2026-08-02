@@ -1,5 +1,5 @@
 (async function(){
-  const BRIDGE_VERSION = '7.8.2';
+  const BRIDGE_VERSION = '7.8.3';
   if(window.__MARK_BRIDGE_VERSION__ === BRIDGE_VERSION){console.log('[MARK] bridge already running (v' + BRIDGE_VERSION + ')');return;}
   if(window.__MARK_BRIDGE_STOP__) window.__MARK_BRIDGE_STOP__();
   window.__MARK_BRIDGE__ = true;
@@ -1086,22 +1086,51 @@
 
           // Lookup maps already built above (before deletion pairing)
 
-          // Helper: latest collector refinement for key+type
+          // Helper: latest collector state for key+type
+          // FIX: includes collector amendments (not just refinements) — collector self-corrections
+          // are amendments, so the latest record may be an amendment not a refinement.
+          // Sort ascending by capturedTime, take last = latest.
           const latestCollectorRef = (key, type) => {
-            const arr = (refMapE[key + '_' + type] || []).filter(v => !reviewerSetE.has(Number(v.author)));
-            return arr.sort((a,b) => (b.capturedTime||'').localeCompare(a.capturedTime||''))[0];
+            const arr = dedupedEvents.filter(v =>
+              v.key === key && v.type === type &&
+              !reviewerSetE.has(Number(v.author)) &&
+              (v.category === 'refinement' || v.category === 'amendment')
+            ).sort((a,b) => (a.capturedTime||'').localeCompare(b.capturedTime||''));
+            return arr[arr.length - 1];
           };
 
-          // Helper: latest FF by collector (any category)
+          // Helper: latest reviewer amendment for key+type AFTER collector's last save
+          // FIX: only reviewer amendments that came AFTER the collector's last save are real errors.
+          // Reviewer amendments on stale versions (before collector's last save) are ignored.
+          const latestReviewerAmend = (key, type, amends) => {
+            const latestColl = latestCollectorRef(key, type);
+            const sorted = amends
+              .filter(a => a.type === type)
+              .sort((a,b) => (a.capturedTime||'').localeCompare(b.capturedTime||''));
+            const after = latestColl
+              ? sorted.filter(v => (v.capturedTime||'') > (latestColl.capturedTime||''))
+              : sorted;
+            return after[after.length - 1];
+          };
+
+          // Helper: latest FF by collector (refinement OR amendment, sort ascending, take last)
+          // FIX: collector FF self-corrections are amendments — must include them.
           const latestCollectorFF = (key) => {
-            const arr = ffCollMapE[key] || [];
-            return arr.sort((a,b) => (b.capturedTime||'').localeCompare(a.capturedTime||''))[0];
+            const arr = (ffCollMapE[key] || [])
+              .sort((a,b) => (a.capturedTime||'').localeCompare(b.capturedTime||''));
+            return arr[arr.length - 1];
           };
 
-          // Helper: latest FF by reviewer
+          // Helper: latest FF by reviewer AFTER collector's last FF save
+          // FIX: reviewer FF only counts as error if it came after collector's final FF version.
           const latestReviewerFF = (key) => {
-            const arr = ffRevMapE[key] || [];
-            return arr.sort((a,b) => (b.capturedTime||'').localeCompare(a.capturedTime||''))[0];
+            const latestColl = latestCollectorFF(key);
+            const arr = (ffRevMapE[key] || [])
+              .sort((a,b) => (a.capturedTime||'').localeCompare(b.capturedTime||''));
+            const after = latestColl
+              ? arr.filter(v => (v.capturedTime||'') > (latestColl.capturedTime||''))
+              : arr;
+            return after[after.length - 1];
           };
 
           // Helper: base event for key
@@ -1181,7 +1210,8 @@
             types.forEach(type => {
               if (type === 'freeze-frame') return;
               const oldRef = latestCollectorRef(key, type);
-              const latestAmend = amends.filter(a => a.type === type).sort((a,b) => (b.capturedTime||'').localeCompare(a.capturedTime||''))[0];
+              const latestAmend = latestReviewerAmend(key, type, amends); // FIX: only after collector's last save
+              if (!latestAmend) return; // no reviewer amendment after collector's last save
               const oldVal = JSON.stringify(oldRef?.payload || {});
               const newVal = JSON.stringify(latestAmend?.payload || {});
               if (oldVal === newVal) return; // rule #2 — same value excluded
