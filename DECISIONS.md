@@ -7,431 +7,241 @@ alternatives rejected, and the investigations behind them. Read alongside
 
 ---
 
-## 1. Audit redesign — SPEC FROZEN, BUILD ON HOLD
-
-> **Status:** approved spec, intentionally **not built yet** (owner said "hold").
-> This section is the source of truth for when we build it.
-
-### The problem we uncovered
-Auditing **Bristol City vs Watford, 1H** (matchId `1377503`), the Audit page
-reported nonsense: *101 reviewed / 101 edited, ~0.1% quality*. A long forensic
-pass through the collection app's Apollo cache explained why, and reshaped the
-whole feature.
-
-### What the data actually showed
-Per-author roles on the half (1,632 base events total), verified by base counts,
-amendment types, telemetry, timing, and build version:
-
-| Author | Role | Evidence |
-|---|---|---|
-| 5436 | **Collector** | 1,582 base events, worked first |
-| **223** | **Real reviewer (corrector)** | 52 added + 243 real fixes; edits span 42/45 minutes |
-| 8775 | **Watcher only** | 0 fixes, telemetry covering ~96% of the half, worked *last* |
-| 1006 / 3318 / 979 | Enrichment / micro-touches | freeze-frame pipelines, negligible |
-
-Two root-cause bugs in the old logic:
-1. **Wrong reviewer signal.** It picked the reviewer as `telemetryAll[0].author`
-   and counted *telemetry only* → 101. But telemetry is incomplete and can be
-   overwritten by a later pass (8775's). The reviewer's **edits** are immune to
-   override (you can't edit an event you didn't review) and showed 223 worked
-   across the whole half.
-2. **Freeze-frame counted as errors** → fake ~0.1% quality.
-
-**The real numbers for 223:** total 1,632 · 243 real corrections · 52 added ·
-**real quality ≈ 85% accuracy (≈ 82% counting omissions)** — *not* 101 / 0.1%.
-
-### The agreed design (frozen)
-1. **Reviewer auto-detected** by combined signals, **weighted to real fixes,
-   telemetry as tie-break**. A pure watcher with **0 fixes is never** the
-   reviewer (the safeguard that fixes the original bug).
-2. **Reviewed = the reviewer's own viewed-by** (base events ≤ 500 ms of *their*
-   `event-activation` telemetry). **Never assume the whole half** — reviewers
-   don't always review all of it.
-3. **Errors = real corrections (edits + deletions, freeze-frame EXCLUDED) +
-   added events** (collector omissions count as errors — owner confirmed).
-4. **Quality = (reviewed − errors) / reviewed**, reviewer-attributed (collector
-   self-fixes don't count).
-5. **Persist & lock (ideal workflow).** First audit run for a
-   `(match, half, reviewer)` → compute → **save to the database (Firebase)** →
-   **lock**. Re-opening loads the saved snapshot; a later reviewer entering the
-   half can never alter it. This is what defeats the override in practice:
-   capture early, freeze.
-6. **Outlier mode** (auto-triggers when edits exceed surviving viewed-by — proof
-   telemetry was overwritten): reconstruct an **approximate** reviewed set from
-   *all* signals (telemetry ∪ edits ∪ edit-span coverage, later reviewer's
-   telemetry as a proxy over that span), clearly labelled "approximate."
-
-### Caveat
-Touches `bridge_script.js` (counting), the audit page (display + formula), and
-the Firebase save. Will not ship until reconfirmed by the owner.
+## 1–19. Previous decisions (unchanged)
+See git history for decisions 1–19 covering: audit redesign, keyboard shortcuts,
+file ops, versioning, identity detection, module scores, bridge disconnect fix,
+refinements from bridge, A/B/C deferral, semantic versioning.
 
 ---
 
-## 2. Keyboard shortcuts (v7.3.3)
+## 20. Error Engine — 5-Rule System (v7.8.x, confirmed 2026-07-28)
 
-The owner reissued the authoritative key map. Each change was id-anchored to
-avoid transient collisions, applied to **both** `shortcuts.js` (behaviour) and
-`EventsSidebar.jsx` (labels). Decision: keep existing keys for unchanged events
-to preserve muscle memory; only remap the seven below.
+**Match tested:** Saint-Étienne vs. Angers, 1st Half (matchId 1294780)
+**Authors confirmed:**
+- 3416 = Main Collector (1416 base events, views=0)
+- 1935 = Secondary Collector (949 base events, views=150 on 2025-12-31)
+- 2119 = Reviewer (views=1005 on 2026-07-24)
+- 2909 = Playthrough viewer (views=23 on 2026-07-27, no amendments → excluded)
 
-`A` and `J` were unused; `M`, `N`, `L` freed up. Verified zero duplicate keys.
+### Rule 1 — Self-edits excluded
+If the reviewer tagged a base event themselves (missed event), any amendments
+they make on that same event are excluded. Not collector errors.
 
----
+**Implementation:** Build `reviewerAddedKeys` set from base events authored by
+reviewer. Filter out from `allReviewerAmends`.
 
-## 3. Removing Missing Event (v7.3.3)
+### Rule 2 — Same value excluded
+If reviewer's amendment payload === collector's original refinement payload
+(old == new), it is NOT counted as an error. No noise from cosmetic saves.
 
-`Q` was needed for Pass (First time), but `Q` was the Missing Event key.
-Options presented: move Missing Event to a freed key, make it mouse-click only,
-or remove it. **Owner chose to remove it entirely.** Important detail surfaced
-first: Missing Event had **no mouse path** — `Q` was its only trigger — so a
-naive key removal would have silently orphaned it. Removal was therefore done
-properly (card + handler + constant + dead `ErrorTagModal.jsx`), and historical
-tags preserved via the stored `tag.isMissing` flag.
+**Implementation:** `JSON.stringify(oldRef?.payload) === JSON.stringify(latestAmend?.payload)` → skip.
 
----
+### Rule 3 — Deleted+Added / Deleted+Edited
+When reviewer deletes an event AND adds a new event within ±1000ms:
+- Different event name → `Deleted+Added` (collector tagged wrong event type)
+- Same event name → `Deleted+Edited` (collector tagged same event with wrong values)
 
-## 4. Conditional extra additions (v7.3.5)
+**Tolerance:** 1000ms (PAIR_TOLERANCE_MS). Pair by closest timestamp match.
 
-The sheet taxonomy was missing options under specific event+error-type
-conditions. Rather than edit the auto-generated `tagging_scenarios.js`, we added
-a **MARK override layer** (`MARK_EXTRA_ADDITIONS`). Decisions confirmed with the
-owner via pop-ups:
-- Additions are **single-pick** (flag → team), not the sheet's two-step
-  pick-then-correct flow.
-- Pass keeps its existing Left↔Right "Wrong side"; a **plain "Wrong Side"**
-  option is *added alongside*.
-- Tackle's "Wrong extra" is a **generic single-pick flag** (it had no
-  wrong-extra data, so this is what makes the error type appear at all).
+### Rule 4 — Location threshold (euclidean distance > 5)
+For `location` module: `payload.location.actual.x/y`
+For `goal-location` module: `payload['goal-location'].x/y`
+Only counts as error if euclidean distance between collector and reviewer coordinates > 5 units.
 
----
+### Rule 5 — Freeze Frame (shots only)
+- Only applied to events with `base.payload.name === 'shot'`
+- Latest collector FF = latest `refinement/freeze-frame` by non-reviewer (any category)
+- Latest reviewer FF = latest `amendment/freeze-frame` by reviewer
+- Join players by `playerId` (NOT index `id` field)
+- Roles (keeper/shooter/opponent): values in `roles.keeper` etc. are INDEXES into players array → resolve to `playerId` via `players[index].playerId`
+- Player position: `pitchPosition.default.x/y`
+- Group/team: `groupIndicator` field (`TEAM_A`, `TEAM_B`, `REF`, `KEEPER`)
+- Error types: Wrong Keeper, Wrong Shooter, Wrong Opponent, Added Player, Deleted Player, Wrong Team, Wrong Location (euclidean > 5 on matched players only)
 
-## 5. Native file ops over scoped JS plugins (v7.3.6)
-
-The export download wrote silently through the scoped `@tauri-apps/plugin-fs`
-with a browser fallback that is a no-op in a desktop webview → clicks looked
-dead. **Decision:** do native file ops in **Rust via `rfd`** (matching the
-existing `pick_video_file`). New `save_xlsx_file` shows a real save dialog and
-writes with full fs access. General principle going forward: prefer Rust+`rfd`
-for file open/save so dialogs are visible and capabilities never silently block.
-
----
-
-## 6. Auto-updater version hygiene (v7.3.1)
-
-A drifted `CURRENT_VERSION` (7.3.0) above the published release (7.2.1) froze the
-updater for everyone. **Decision/rule:** the version must be bumped in lockstep
-across all files, and every new release must be strictly greater than any value
-shipped in a prior build. Codified at the top of [CHANGELOG.md](./CHANGELOG.md).
+### Confirmed numbers for match 1294780:
+- computedErrors: 41–43 (non-FF)
+- computedFFErrors: 1
+- Overall score: 96% (1005 viewed, ~43 errors)
 
 ---
 
-## 7. Version numbering & on-screen version (owner rules)
+## 21. Apollo Cache Deduplication (v7.8.1+, confirmed 2026-07-28)
 
-Two operational rules set by the owner:
+**Problem:** Tag Once accumulates duplicate events in Apollo cache when the same
+match is loaded multiple times in a session. Match 1294780 showed 10,051 events
+in cache when the true count is ~2,500.
 
-1. **Number sequence.** The patch digit runs `0→9` only, then rolls to the next
-   minor with patch reset to `0`: `…7.3.9 → 7.4.0 → 7.4.1 …`. Two-digit patches
-   like `7.3.10` are not used. (7.3.10 / 7.3.11 during the Google-Sheets work are
-   a pre-rule exception; the next clean bump rolls to **7.4.0**.)
-2. **On-screen version must always match the release**, in BOTH places it shows:
-   the OS **window title bar** (synced from `package.json` by
-   `scripts/sync-version.js`) and the in-app **top-left logo** (`CURRENT_VERSION`
-   in `useUpdateCheck.js`, rendered by `SessionSetupPage.jsx`). The standard
-   version bump updates both — confirm before shipping.
-
-Both are codified in the Conventions section of [CHANGELOG.md](./CHANGELOG.md).
-
----
-
-## 8. Collector / reviewer identity from the collection app (v7.5.1)
-
-**Problem.** MARK only had numeric author IDs (e.g. #2909). We needed real
-people: HR code (`A-####`), name, email.
-
-**Breakthrough (proven live).** Identity flows through the collection app's
-Apollo GraphQL operation `EventHistory($eventKey:String!)` → field `authorInfo`
-is a JSON blob `{id, email, firstName, middleName, lastName, hrcode (LOWERCASE!),
-legacyId}`. `legacyId` === MARK's numeric author. The bridge taps
-`client.queryManager.link` (NOT `client.link`, which carries no traffic), and
-auto-sweeps all distinct authors of a match by re-issuing `EventHistory`, with
-socket-aware retry (the graphql-ws WebSocket drops when idle → "Socket closed";
-retry on reconnect).
-
-**Roster backbone.** `users_finalized_*.csv` (columns
-`legacy_id, hr_code, full_name, email, job`; ~1912 rows) seeds a persistent
-Firestore roster, merged with live-harvested identities. Some IDs are missing
-from the CSV (e.g. 2909, 1935); some collectors show only a numeric legacyId with
-no `A-` code (e.g. Karim Ahmed 1006245) — MARK then displays the number, which is
-expected, not a bug.
-
-**Recommendation (not yet done):** get the roster as a scheduled API pull from
-the Hudl/StatsBomb data team instead of a static CSV, to fix staleness/coverage.
-
----
-
-## 9. Collector / reviewer detection rules (corrected, v7.5.1)
-
-- **COLLECTOR** (can be MULTIPLE per half): `views == 0` AND
-  `(base + refinement) > 600`. Fallback: top base-author if none clears the bar.
-- **REVIEWER** (can be MULTIPLE): telemetry/`event-activation` authors MINUS
-  collectors, who made ≥1 change. **Key fix:** the reviewer signal is **views**,
-  not amendments. A viewer with 0 changes is a *playthrough*, dropped.
-- Validated example (a 2-collector half): Alaa (1319 base, 0 views) + Mohamed
-  (2305 refinement, 0 views) = 2 COLLECTORS; Omar (2611 views) = REVIEWER; Eslam
-  (172 views, 0 changes) = playthrough, dropped.
-
----
-
-## 10. Per-module quality scores — method chosen, denominator unresolved (v7.5.4)
-
-Full detail in [MODULE_SCORES.md](./MODULE_SCORES.md). Summary of decisions:
-- Score = **% clean** per module; error unit = the **event**; **no unique events**
-  (one event can hit several modules).
-- Denominator = **events the reviewer VIEWED** that have the module; pressure is
-  carved out of base (scored on `pressure-start`/`-end` events).
-- **Added/missed events count as BASE only** (NOT the partials) — the analysis
-  team's reference (location 0 / players 0) proved the "added hits all partials"
-  variant wrong.
-- **Deletions kept**, **added counted** (user's explicit choice → base ~375).
-- **OPEN:** MARK's denominators run ~3–7% higher than the analysis team's
-  reference (base 375 vs 350). User chose to keep MARK's method until they
-  confirm the team's exact "reviewed events" rule; scores may be tuned then.
-  Claude did NOT certify MARK's method as more correct than the team's.
-
----
-
-## 11. The bridge-disconnect fix took two tries (v7.5.2 wrong, v7.5.5 right)
-
-**Symptom.** After moving between modes/halves/matches several times, MARK showed
-"Bridge disconnected" and the only recovery was a full MARK logout + login AND
-Ctrl-R on the collection app.
-
-**Wrong fix (v7.5.2).** Assumed the *bridge's* localhost socket was the problem
-and decoupled it from video attachment. Shipped without a live test. It did NOT
-resolve the issue (a good lesson: do not claim a connection fix works without
-running it).
-
-**Right fix (v7.5.5).** The breakage was on the **MARK side**: `useSync.getWs()`
-returned early when the singleton socket was already open, **without re-wiring the
-freshly-mounted page's `onStatusChange`** — so a remounted AuditPage stayed stuck
-on `disconnected`. Fixed by re-reporting the real socket state on every mount and
-adding a 2 s self-healing reconnect (Audit sends no sync signals, so it never
-reconnected on its own).
-
-**Lesson:** reasoning a fix from code is fine, but a fix to a *runtime
-connection* behaviour is not "done" until the live acceptance test passes. State
-that honestly rather than declaring victory on inference.
-
----
-
-## 12. Scout vs Audit are independent activities (v7.5.5)
-
-The lock + completed-session machinery was Scout-only and ignored mode, so a
-Scout session blocked Audit on the same match/half. Decision: make locks and
-sessions **mode-aware** (`matchId_half_mode`, `mode` stored on the session doc).
-Scout and Audit can now both use any match/half independently. This also gives
-Session History the `mode` field needed to list Audit sessions.
-
----
-
-## 13. The correct error rule — reviewer-only (v7.5.20, confirmed 2026-07-11)
-
-**Problem.** MARK was reporting 77% quality on a test half. The correct score is 92%.
-The 15-point gap was caused by misidentifying the specialist collector as a reviewer.
-
-**Console investigation (live data, Moss vs Sandnes 1st half, matchId 1436691):**
-
-Three people on this half:
-| Person | Role | Evidence |
-|---|---|---|
-| A-088 Alaa Wagih (id:194) | Base collector | 79+ base events |
-| A-2454 Mohamed Adel (id:9468) | Specialist (players + location) | 0 base, heavy players/location/impact refinements |
-| A-1437 Omar Salama (id:5425) | Reviewer | 0 base, 0 refinements, amendments only |
-
-**Old MARK logic:** Used telemetry to detect the reviewer. Mohamed (no base events) appeared
-in telemetry so MARK included both Omar AND Mohamed as reviewers. Mohamed's 203 cross-collector
-corrections all counted as errors → inflated error count → deflated score.
-
-**Correct rule (confirmed from data):**
-```
-Error = amendment authored by the reviewer ONLY
-Reviewer = diagnostics.work entry where:
-  amendment > 0 AND base === 0 AND refinement === 0
-```
-
-Cross-collector corrections (Mohamed correcting Alaa's events) = NOT errors.
-Self-corrections = NOT errors.
-System amendments (pairKey + no author, location desired:null + no author) = NOT errors.
-
-**Score impact:**
-- Old: 313 error keys / 1384 events = 77%
-- Correct: 110 error keys / 1384 events = 92%
-
-**Multiple reviewers:** A single half can have multiple reviewers (confirmed by Ahmed).
-All people meeting the reviewer rule qualify; `reviewerIds` is a Set, not a single value.
-
-**Error attribution:** Errors count against whoever did that module's work.
-If the specialist did the players refinement and the reviewer corrected it,
-the error is attributed to the specialist — the Collector column shows the specialist's HR code.
-
----
-
-## 14. BRIDGE_VERSION and ASAR_MARKER must always match the app version (v7.5.25)
-
-**Problem discovered 2026-07-11:**
-Both `ASAR_MARKER` (`main.rs`) and `BRIDGE_VERSION` (`bridge_script.js`) were hardcoded to `'7.5.4'`
-and never updated from v7.5.5 through v7.5.24 — **20 builds** worth of bridge improvements
-never actually reached users.
-
-**How the failure worked:**
-1. User clicks "Embed Bridge" in MARK
-2. `inject_bridge_script` reads Tag Once's `app.html`
-3. Checks `if html_str.contains("<!-- MARK_BRIDGE_INJECTED v7.5.4 -->")` → TRUE (from previous embed)
-4. Returns `"already patched"` — silently skips injection entirely
-5. Tag Once still runs the old bridge from the last actual embed (v7.5.4 code)
-6. New bridge features (refinements, lineupPlayers, correct role detection) never arrive
-
-**How the guard failure worked:**
-Even if the asar patch somehow ran, the bridge script itself has:
+**Deduplication strategy (confirmed working):**
 ```js
-if(window.__MARK_BRIDGE_VERSION__ === '7.5.4') { return; }
+// base: one per key (first seen)
+dk = 'base|' + v.key
+// telemetry: one per key+author (latest capturedTime)
+dk = 'tel|' + v.key + '|' + v.author
+// amendment/refinement: one per key+type+author (latest capturedTime)
+dk = category + '|' + key + '|' + type + '|' + author
 ```
-The old bridge already set `window.__MARK_BRIDGE_VERSION__ = '7.5.4'`.
-The new bridge sees it's "already running" and exits without doing anything.
 
-**Rule established:** Every version bump must update both:
-- `BRIDGE_VERSION` in `src-tauri/src/bridge_script.js` → matches app version
-- `ASAR_MARKER` in `src-tauri/src/main.rs` → `"<!-- MARK_BRIDGE_INJECTED vX.Y.Z -->"`
+After dedup: ~9116 events (still not ~2500 — being investigated).
 
-This is now part of the version bump checklist.
-
----
-
-## 15. Refinements must come from the bridge, not from MARK's Apollo cache (v7.5.23)
-
-**Problem:** Before fields for extras, location, goal-location, replacement were empty.
-
-**Wrong assumption:** MARK's `AmendmentsTable` was reading Before values from the
-Apollo GraphQL cache in the MARK webview (`window.apollo.client.cache.extract()`).
-
-**Why it fails:** The Apollo cache in MARK's webview only contains whatever match
-is currently open in Tag Once at render time. If the user:
-- Audits a match, saves the session, closes Tag Once
-- Later opens the session history in MARK to review errors
-- Tag Once is either closed or has a different match open
-
-→ The Apollo cache is empty or has wrong data → Before values are all `—`.
-
-**Correct approach:** The bridge has direct Apollo cache access at the moment of the audit
-and always has the right match open. Bridge now sends:
+**telemetryAll dedup** (separate from error engine dedup):
 ```js
-refinements: { "eventKey_type": { ...payload }, ... }
+dk = v.key + '|' + v.author  // keeps one telemetry record per event per viewer
 ```
-for all refinements of reviewed event keys. This data travels through the WebSocket message,
-is stored on `data.refinementData`, and is available regardless of what Tag Once has open later.
-
-**Implementation:** MARK reads `results.refinementData` first, then overlays live Apollo cache
-as a supplement (for any keys that might be missing from the bridge payload).
+This gives correct `openedKeys` count (1005 for reviewer 2119).
 
 ---
 
-## 16. Tag Once A/B/C review groups cannot be reproduced in MARK (decision to defer)
+## 22. Reviewer Detection — Top Viewer Only (v7.8.x)
 
-**Investigation 2026-07-11:**
+**Problem:** 1935 (secondary collector, views=150) and 2909 (playthrough, views=23)
+were being included as reviewers alongside 2119 (views=1005).
 
-Tag Once shows per-category event counts (A-Review 80/80, B-Review 0/160, C-Review 11/184).
-Total reviewed: 424 of 1,384 base events. 960 events are NOT in any review category.
+**Rule confirmed:**
+- Reviewer = author with HIGHEST views count who is NOT the primary collector AND has amendments
+- Only ONE reviewer (the top viewer) — not all viewers
+- 1935 is secondary collector (949 base events despite having views=150)
+- 2909 is playthrough viewer (no amendments → excluded)
 
-**What we tried:**
-1. Count-matching cache event names to Tag Once subcategory counts → no matches
-2. Searching Apollo cache for review group config → not stored in cache
-3. Searching window objects for config → not exposed
-4. Searching Tag Once's JS bundle → not accessible from DevTools
-
-**Why the mapping can't be derived:**
-Tag Once's review categories are NOT based on event type names alone.
-"Pressures Before Shots" (10 events) = subset of all pressures that precede a shot.
-"Free Kick Pass" (11 events) = subset of all passes that are free kicks.
-"Freeze Frame" (17 events) = subset of shots that have a freeze-frame refinement.
-The internal filtering logic is in Tag Once's bundled JS — inaccessible.
-
-**Decision:** Defer A/B/C module scores. Keep MARK's existing Base/Pressure/Extras/Players/
-Location/FreezeFrame breakdown which we know how to compute correctly.
-Revisit if StatsBomb provides the event grouping specification.
-
----
-
-## 17. "Open in Drive" requires rundll32, not an anchor tag (v7.5.27)
-
-**Problem:** The "Open in Drive" button used `<a href={url} target="_blank">`.
-In a Tauri desktop WebView, there is no browser context — `target="_blank"` opens nothing.
-
-**Fix:** `invoke('open_file', { path: url })` → Rust calls:
-```rust
-std::process::Command::new("rundll32")
-    .args(["url.dll,FileProtocolHandler", &path])
-    .spawn()
+**Bridge implementation:**
+```js
+candidates.sort((a,b) => viewCounts[b] - viewCounts[a])
+reviewerIds = [candidates[0]]  // top viewer only
 ```
-`open_file` already existed and already handled both file paths and `https://` URLs.
-No new command needed — just change the JS call.
 
-**General principle:** Any link that should open in the user's default browser must use
-`open_file` (or equivalent OS shell opener), never an HTML anchor tag.
+**AuditPage implementation:**
+```js
+viewers.sort((a,b) => (b.views||0) - (a.views||0))
+const topViewer = viewers[0]
+if (!isPrimaryCollector) trueReviewerIds.push(Number(topViewer.author))
+```
 
 ---
 
-## 18. Sheet visual identity via Sheets API — under investigation (v7.5.27–v7.5.28)
+## 23. Reviewed Count = Telemetry Viewed Keys (v7.8.x, confirmed 2026-07-28)
 
-**What was tried:**
-- `upload_csv_as_sheet` Rust command uploads CSV with `mimeType: application/vnd.google-apps.spreadsheet`
-  (converts to native Google Sheet on upload)
-- Then calls `https://sheets.googleapis.com/v4/spreadsheets/{id}/batchUpdate` with:
-  - Orange header row (#E8590C bg, white bold)
-  - Dark summary rows (#1A1A1A bg, grey text)
-  - Orange bold column headers
-  - Dark data rows (#141414 bg, light grey text)
-  - `autoResizeDimensions` for all columns
+**Confirmed correct number for match 1294780:** 1005 unique events viewed by reviewer 2119.
 
-**Result:** Sheet is created as a native Google Sheet (not CSV). But formatting is not applied.
-The batchUpdate call returns without error (200 OK) but produces no visible effect.
+**Why NOT 736:** Earlier test was on a partially loaded cache. Full cache has 2375 base events.
+**Why NOT 1122:** telemetryAll was not deduplicated, including 1935 (150 views) in openedKeys.
+**Why 1005 is correct:** All 1005 activations are on 2026-07-24 by author 2119 only.
+Coverage: 42% of 2375 base events — reviewer only checks events in their assigned categories.
 
-**Suspected causes:**
-1. Service account token may not include `https://www.googleapis.com/auth/spreadsheets` scope
-2. Shared Drive may restrict programmatic formatting
-3. batchUpdate request structure may have a subtle error being silently accepted
+**Error rate validation:**
+- Phase 1 (2:47–3:25 PM): 358 events, 17 errors, 4.7% error rate, 3.1s avg watch
+- Phase 2 (3:41–4:03 PM): 647 events, 30 errors, 4.6% error rate, 1.3s avg watch
+- Combined: 1005 events, 47 errors, 4.7% error rate, 1.9s avg watch
+- 16-minute gap between phases = break
 
-**What to check next session:**
-- Log the full batchUpdate response body (currently only logging on network error)
-- Verify the service account's OAuth scopes include Sheets API
-- Test batchUpdate on a personal Drive file (not Shared Drive) to isolate the issue
-- Consider alternative: use XLSX library to apply styling before upload, then upload as `.xlsx`
 ---
 
-## 19. Semantic Versioning — MAJOR.MINOR.PATCH rules (from v7.6.0)
+## 24. Speed Metric Definitions (confirmed 2026-07-28)
 
-**Format:** `MAJOR.MINOR.PATCH` — each number has a strict meaning.
+**Gap threshold:** 5 minutes (GAP_MS = 5 * 60 * 1000)
+If any role abandons work for >5 minutes, that gap is excluded from active time.
 
-| Part | When to bump | Examples |
-|---|---|---|
-| **MAJOR** | Breaking change — incompatible with all previous sessions/data | Complete rewrite, auth system change |
-| **MINOR** | New feature or capability added | Email engine, new dashboard role, new Tauri command |
-| **PATCH** | Bug fix only — no new functionality | Crash fix, wrong variable, UI text correction |
+**Collector tagging speed:**
+- Use `capturedTime` of base events (first→last, excluding gaps >5min)
+- Report per author separately (main collector vs secondary collector)
+- Option A (base only) = pure tagging speed
+- Option B (base + refinements) = collection work total
+- Option C (all work) = full session including self-corrections
+- **Recommended default: Option B** for total collection time
 
-**Rules:**
-- Adding a new Tauri command → **MINOR**
-- Adding a new screen or dashboard → **MINOR**  
-- Fixing a crash or wrong behavior → **PATCH**
-- Fixing a typo or UI text → **PATCH**
-- When in doubt: if a reviewer gains new functionality → **MINOR**, if just fixed → **PATCH**
+**Confirmed numbers for match 1294780 (Option B):**
+| Author | Role | Active time | Events | Speed |
+|--------|------|-------------|--------|-------|
+| 3416 | Main Collector | 5:49:42 | 3711 | 637 ev/hr |
+| 1935 | Secondary Collector | 3:53:20 | 2316 | 596 ev/hr |
+| 2119 | Reviewer | 0:32:31 | 1005 | 1854 ev/hr |
 
-**MINOR bump resets PATCH to 0:** `7.5.41` → new feature → `7.6.0` (not `7.5.42`)
+**Reviewer speed:**
+- Use `activatedAt` → `deactivatedAt` from telemetry payload
+- Cap each event watch at 5 minutes (one event had 15.9min → capped to 5min)
+- 1005 events deduped, 32:31 active, 1854 ev/hr
+- Avg watch: 1.9s overall (4.8s for amended events, 2.5s for approved)
 
-**All 5 places must always match — no exceptions:**
-1. `package.json` → `"version": "X.Y.Z"`
-2. `src-tauri/Cargo.toml` → `version = "X.Y.Z"`
-3. `src-tauri/tauri.conf.json` → `"version": "X.Y.Z"`
-4. `src-tauri/src/bridge_script.js` → `const BRIDGE_VERSION = 'X.Y.Z'`
-5. `src-tauri/src/main.rs` → `const ASAR_MARKER: &str = "<!-- MARK_BRIDGE_INJECTED vX.Y.Z -->"`
+**Per-module speed (Option A, 5min gap, confirmed):**
+| Module | Author | Records | Active | Speed |
+|--------|--------|---------|--------|-------|
+| players | 1935 | 816 | 1:13:57 | 662 ev/hr |
+| location | 3416 | 761 | 1:05:46 | 694 ev/hr |
+| extras | 1935 | 520 | 0:36:42 | 850 ev/hr |
+| players | 3416 | 747 | 1:39:08 | 452 ev/hr |
+| extras | 3416 | 759 | 2:56:42 | 258 ev/hr |
+| freeze-frame | 1935 | 13 | 0:08:33 | 91 ev/hr · 39.5s/record |
+| freeze-frame | 3416 | 14 | 0:19:43 | 43 ev/hr · 84.6s/record |
 
-**History note:** Versions `7.5.29` through `7.5.41` used patch bumps for both features
-and fixes. From `7.6.0` onward, SemVer is applied correctly.
+**Freeze-frame note:** gaps are inherently large (tied to shot events).
+3416: median gap 285.5s between FF records.
+1935: median gap 437.4s between FF records.
+Speed metric is valid (Option A, 5min gap) but context matters.
+
+**Reviewer amendment speed per module:**
+| Module | Amendments | Active | Speed | Avg/rec |
+|--------|-----------|--------|-------|---------|
+| players | 18 | 20:57 | 52/hr | 69.9s |
+| location | 9 | 5:09 | 105/hr | 34.4s |
+| extras | 3 | 2:27 | 73/hr | 49.0s |
+| freeze-frame | 4 | 2:12 | 109/hr | 33.2s |
+| impact | 4 | 1:24 | 170/hr | 21.2s |
+| goal-location | 2 | 2:32 | 47/hr | 76.1s |
+
+---
+
+## 25. Collector Self-Corrections Are NOT Reviewer Errors (confirmed 2026-07-28)
+
+**Match 1294780 self-correction counts:**
+- 3416: 1007 `amendment/deletion` + 198 `amendment/base` + 124 `amendment/players` + 117 `amendment/location` = 1528 total self-amendments
+- 1935: 63 `amendment/deletion` + 82 `amendment/base` + 145 `amendment/players` = 310 total self-amendments
+
+These are collectors fixing their own work during collection — NOT reviewer errors.
+Only amendments authored by the reviewer (2119) count as errors in MARK's scoring.
+
+---
+
+## 26. Freeze Frame Payload Structure (confirmed 2026-07-28)
+
+```js
+payload.freezeFrame.players = [
+  { id: 0,  // position INDEX (not player identity)
+    playerId: 1049,  // actual player identity
+    groupIndicator: 'TEAM_A',  // 'TEAM_A', 'TEAM_B', 'REF', 'KEEPER'
+    pitchPosition: { default: { x: 45.2, y: 30.1 } }
+  }, ...
+]
+payload.freezeFrame.roles = {
+  keeper:   [3],  // array of INDEX values into players array
+  shooter:  [7],
+  opponent: [13]
+}
+```
+
+**Critical:** roles values are player array INDEXES, not playerIds.
+Must resolve: `players[roles.keeper[0]].playerId` to get actual player identity.
+
+---
+
+## 27. Reviewer Behaviour Analysis (confirmed 2026-07-28)
+
+**Match 1294780 reviewer (2119) behaviour:**
+- Total events reviewed: 1005
+- Events with amendments (errors): 47 (4.7%)
+- Events approved without amendment: 958 (95.3%)
+- Events watched <2s: 905 (867 clean approvals, 38 errors caught despite fast view)
+- Events with deactivation timestamp: 1005 (100% complete)
+- One event had 15.9 min watch time (reviewer was distracted/paused)
+
+**Two-phase review pattern:**
+- Phase 1 (careful): 358 events, 3:25 PM cutoff, 4.7% error rate, 3.1s avg watch
+- Phase 2 (fast): 647 events, starts 3:41 PM, 4.6% error rate, 1.3s avg watch
+- Quality is consistent across both phases — reviewer not cutting corners in Phase 2
+
+---
+
+## 28. Metadata Events in Apollo Cache (observed 2026-07-28)
+
+Author 2119 has `metadata/metadata: 50` events in the cache.
+These are NOT amendments or refinements. They appear to be Tag Once's internal
+review completion markers (e.g. `qaIsReviewed = true`).
+MARK currently ignores these — they should NOT be counted in any error or speed metric.
+

@@ -1,7 +1,7 @@
 # MARK — Full Context
-**Version:** 4.2.0  
-**Last updated:** 2026-06-11 (v4.2.0)  
-**Status:** Active, in use by Hudl Egypt reviewers
+**Version:** 7.8.2
+**Last updated:** 2026-07-28
+**Status:** Active — in use by Hudl Egypt reviewers. Error engine v7.8.x deployed.
 
 ---
 
@@ -28,13 +28,19 @@ git clone https://ahmedashraf-cyber:TOKEN@github.com/ahmedashraf-cyber/mark-app.
 cd mark_push
 git config user.email "ahmed.ashraf@hudl.com"
 git config user.name "Ahmed Ashraf"
-# working file: /home/claude/mark_push/src/...
-# push dir: /home/claude/mark_push/
 ```
 
-**Version bump rule:** Always bump in `package.json` ONLY — `scripts/sync-version.js` auto-patches `tauri.conf.json` (version + window title) during `npm run build`.
+**Version bump rule — ALL 5 files must match:**
+1. `package.json` → `"version": "X.Y.Z"`
+2. `src-tauri/Cargo.toml` → `version = "X.Y.Z"`
+3. `src-tauri/tauri.conf.json` → `"version": "X.Y.Z"` + `"title": "MARK X.Y.Z — Review App"`
+4. `src-tauri/src/bridge_script.js` → `const BRIDGE_VERSION = 'X.Y.Z'`
+5. `src-tauri/src/main.rs` → `const ASAR_MARKER: &str = "<!-- MARK_BRIDGE_INJECTED vX.Y.Z -->"`
 
-**Push rule:** After every push, wait for GitHub Actions green, then install the new `.msi` from the `v{VERSION}` release.
+**CRITICAL:** ASAR_MARKER must ALWAYS be bumped with every version. If Tag Once
+already has the old marker in app.html, the new bridge will never be injected.
+
+**After pushing:** wait for GitHub Actions green → install new `.exe` from Releases.
 
 ---
 
@@ -47,337 +53,195 @@ git config user.name "Ahmed Ashraf"
 | Design | Dark theme, `#E8590C` orange, Inter + DM Sans + JetBrains Mono |
 | Auth | Firebase Auth — same trainer accounts as FIELD |
 | Database | Firebase Firestore — same project as FIELD |
-| Video sync | Bridge script injected into collection app via DevTools → Firestore |
+| Bridge | JS injected into Tag Once via ASAR patch → localhost WebSocket :9001 |
 | Match data | Google Sheets API (live fetch on load) |
 | Build CI | GitHub Actions → Windows runner → Tauri build → GitHub Release |
 
 ---
 
-## File Structure
+## Architecture: Bridge → MARK
 
 ```
-mark-app/
-├── scripts/
-│   └── sync-version.js        # Auto-patches tauri.conf.json title + version from package.json
-├── src/
-│   ├── firebase/config.js     # Firebase init (same project as FIELD)
-│   ├── hooks/
-│   │   ├── useAuth.jsx        # Auth — reads trainer profile from Firestore
-│   │   ├── useSync.js         # Writes navCommand to Firestore (video sync)
-│   │   └── useUpdateCheck.js  # Checks GitHub Releases for newer version; exports CURRENT_VERSION
-│   ├── data/
-│   │   ├── shortcuts.js       # TORNADO_EVENTS array + KEY_TO_EVENT map + MISSING_EVENT_KEY
-│   │   └── matches.js         # Legacy static 127-match fallback (replaced by live Sheets fetch)
-│   ├── pages/
-│   │   ├── LoginPage.jsx      # Sign in with FIELD credentials
-│   │   ├── SessionSetupPage.jsx # Match/half selection + lock + live matches from Sheets API
-│   │   ├── ReviewPage.jsx     # Core review UI — video, tagging, timeline, quality score
-│   │   └── SessionHistoryPage.jsx # Past sessions list
-│   ├── components/
-│   │   ├── TagPanel.jsx       # Bottom slide-up overlay — full error tagging workflow
-│   │   └── TaggedEventsList.jsx # Timeline + cards of tagged errors
-│   ├── utils/
-│   │   └── exportSession.js   # Exports session to .xlsx
-│   ├── App.jsx
-│   ├── main.jsx
-│   └── index.css              # FIELD design tokens (CSS vars)
-├── src-tauri/
-│   ├── src/
-│   │   ├── main.rs            # Tauri commands: inject_bridge_script, open_file, etc.
-│   │   └── bridge_script.js   # Injected into collection app — Firebase listener + video control
-│   ├── Cargo.toml
-│   ├── tauri.conf.json        # productName, version, window title (auto-synced)
-│   └── build.rs
-├── .github/workflows/build.yml # CI: read version → delete old release → Tauri build → GitHub Release
-├── package.json               # version is the single source of truth
-├── scripts/sync-version.js    # Pre-build: patches tauri.conf.json from package.json
-└── MARK_CONTEXT.md
+Tag Once (Electron app)                    MARK (Tauri app)
+┌─────────────────────────────────┐       ┌──────────────────────────┐
+│  app.html (patched by MARK)     │       │  AuditPage.jsx           │
+│  bridge_script.js injected      │ WS    │  useSync.js              │
+│                                 │◄─────►│  localhost:9001          │
+│  Apollo cache → extract()       │       │                          │
+│  Error engine (5 rules)         │       │  QuickSummary (scores)   │
+│  Reviewer/collector detection   │       │  AmendmentsTable         │
+│  Telemetry dedup                │       │  FF errors table         │
+│  Score recalculation            │       │  CSV export              │
+└─────────────────────────────────┘       └──────────────────────────┘
 ```
+
+**Bridge sends to MARK (qaResultsResponse):**
+- `baseEvents[]` — viewed base events (reviewer's openedKeys)
+- `amendments[]` — all amendments (all authors)
+- `refinements` — map of key_type → payload
+- `collectorId`, `collectorIds`, `reviewerId`, `reviewerIds`
+- `identities[]` — HR codes + names from EventHistory sweep
+- `lineupPlayers[]` — home + away players with jersey numbers
+- `moduleScores` — legacy module score breakdown
+- `reviewGroupScores` — recalculated A/B/C/Others scores (uses 5-rule errors)
+- `computedErrors[]` — non-FF errors from 5-rule engine
+- `computedFFErrors[]` — freeze frame errors (shots only)
+- `diagnostics` — debug info
 
 ---
 
-## Firestore Collections
+## Error Engine — 5 Rules (v7.8.x)
 
-| Collection | Purpose |
-|-----------|---------|
-| `mark_sessions` | One doc per review session |
-| `mark_error_tags` | One doc per error tagged |
-| `mark_locks` | Half-level lock: `{matchId}_{half}` → reviewer |
+Computed in bridge, pre-sent to MARK. All 5 rules confirmed via console testing
+on match 1294780 (Saint-Étienne vs. Angers, 1st Half).
 
-### mark_sessions schema
-```
-sessionId, matchId, half, matchName, homeTeam, awayTeam, matchDate,
-reviewerId, reviewerEmail, reviewerName,
-collectorId, collectorCode,
-status: 'in_progress' | 'completed',
-isFirstReview: boolean,
-totalTaggedErrors, totalReviewedEvents,
-qualityScore: 100 - ((errors/events) × 100)  ← higher = better
-startedAt, completedAt
-navCommand: { action, shift, ts }  ← written by MARK, read by bridge
-collectionAppTime: { currentTime: ms, ts }  ← written by bridge every second
-```
+**Rule 1:** Self-edits excluded — reviewer amending their own added events = not errors
+**Rule 2:** Same value excluded — old payload == new payload = not an error
+**Rule 3:** Deleted+Added / Deleted+Edited — pair deletions with added events within ±1s
+  - same event name = `Deleted+Edited`
+  - different event name = `Deleted+Added`
+**Rule 4:** Location threshold — euclidean distance > 5 units only
+  - `location`: `payload.location.actual.x/y`
+  - `goal-location`: `payload['goal-location'].x/y`
+**Rule 5:** Freeze frame (shots only) — join by `playerId`, resolve roles by index
 
-### mark_error_tags schema
-```
-sessionId, matchId, half,
-reviewerId, reviewerEmail,
-triggeredKey, triggeredEventId, triggeredEventLabel,
-extras: [errorTypeId, gkSubTypeId?, selectedExtra?, correction?],
-team: 'home' | 'away' | null,
-videoTimeSec,
-timestamp, isMissing
+**Key deduplication** (Apollo cache inflation fix):
+```js
+base:       dk = 'base|' + key              // one per key
+telemetry:  dk = 'tel|' + key + '|' + author // one per key+author
+amendments: dk = category+'|'+key+'|'+type+'|'+author
 ```
 
+**Confirmed numbers for match 1294780:**
+- computedErrors: 41–43 | computedFFErrors: 1 | overall: 96%
+- Reviewed: 1005 events | Errors: 43 | Score: 96%
+
 ---
 
-## Video Sync Architecture
+## Reviewer Detection
 
-```
-Reviewer presses arrow in MARK
-  → useSync.js writes navCommand to Firestore mark_sessions/{sid}
-  → bridge_script.js (running inside collection app) reads via onSnapshot
-  → bridge moves collection app video: video.currentTime += step
-  → collectionAppTime written every second for event count calculation
-```
+**Rule:** Reviewer = author with highest telemetry views who is NOT the primary
+collector AND has at least 1 amendment. Only the TOP viewer qualifies.
 
-**Auto event count formula:**
-```
-endTs = video.currentTime × 1000   (bridge writes this in ms)
-startTs = 0                         (always from match start)
-count = events where videoTimestamp between startTs and endTs
-exclude: starting-xi, half-start, squad
+**Bridge:**
+```js
+candidates.sort((a,b) => viewCounts[b] - viewCounts[a])
+reviewerIds = candidates.length > 0 ? [candidates[0]] : []
 ```
 
----
-
-## Matches Sheet Live Fetch
-
-`SessionSetupPage.jsx` fetches from Google Sheets API on every load:
-1. GET spreadsheet metadata → reads first tab name (auto-discovers, no hardcoding)
-2. GET values for that tab A1:Z
-3. Maps by header row — column aliases handle any capitalisation/spacing
-4. Correct sheet ID: `1zoh7CmoQKPMLGBEklHXznG1Y8xBS-iuu0phRWn8-wXc`
-5. Headers: `Production ID, Staging ID, Game Week, Competition, Country, Match Date, Match Name, Home Team, Away Team, Season, Trainer`
-
-**Known bad ID (DO NOT USE):** `1dPwnYhIOiLUy_aBuVijPH3xtU6kxnEu-8FF115kXjSc` — this was from the system prompt and is wrong.
-
----
-
-## Quality Score Formula
-
-```
-Quality Score = 100 - ((Tagged Errors / Total Reviewed Events) × 100)
-Higher = better. 100 = perfect.
+**AuditPage (client-side fallback):**
+```js
+viewers.sort((a,b) => (b.views||0) - (a.views||0))
+const topViewer = viewers[0]
+const isPrimaryCollector = topViewer.author === topBaseAuthor.author && topViewer.base > 100
+if (!isPrimaryCollector) trueReviewerIds.push(Number(topViewer.author))
 ```
 
+**Match 1294780 example:**
+- 3416: views=0, base=1416 → Main Collector
+- 1935: views=150, base=949 → Secondary Collector (NOT reviewer despite having views)
+- 2909: views=23, amendments=0 → Playthrough viewer (excluded)
+- 2119: views=1005 → **Reviewer** ✅
+
 ---
 
-## Version Bump Procedure — Semantic Versioning (SemVer)
+## Score Calculation
 
-**Format: MAJOR.MINOR.PATCH**
-- **MAJOR** — breaking change (rare, complete rewrite)
-- **MINOR** — new feature or capability → resets PATCH to 0 (e.g. `7.5.x` → `7.6.0`)
-- **PATCH** — bug fix only, no new functionality (e.g. `7.6.0` → `7.6.1`)
+**Overall:** `(viewed - errors) / viewed * 100`
+**A/B/C/Others:** requires `capturedCats` from tracker button click during live review
+**noCats:** when tracker button not found (completed match), only Overall is shown
 
-**Quick rule:** Did a reviewer gain something new? → MINOR. Was something broken fixed? → PATCH.
+**Viewed count:** unique event keys from reviewer's deduplicated telemetry
+- Dedup: one record per `key+author` (latest capturedTime)
+- Match 1294780: 1005 unique keys (confirmed correct)
 
-## Version Bump Procedure
+**Error keys:** unique event keys from computedErrors + computedFFErrors
+- Does NOT use raw amendment count (would include collector self-corrections)
+- Does NOT use all viewer telemetry (would include playthrough viewers)
 
-```bash
-# 1. Update ONLY package.json version
-# 2. Commit and push — sync-version.js handles tauri.conf.json automatically
-# 3. Wait for GitHub Actions green
-# 4. Install new .msi from Releases
+---
+
+## WebSocket Timeout
+
+`useSync.js` timeout for `qaResultsResponse`: **30 seconds**
+(increased from 8s to handle large matches with many events)
+
+---
+
+## Freeze Frame Payload Structure
+
+```js
+payload.freezeFrame = {
+  players: [
+    { id: 0,           // position INDEX (not player identity)
+      playerId: 1049,  // actual player identity — use this for comparison
+      groupIndicator: 'TEAM_A',  // TEAM_A, TEAM_B, REF, KEEPER
+      pitchPosition: { default: { x: 45.2, y: 30.1 } }
+    }
+  ],
+  roles: {
+    keeper:   [3],   // INDEX into players array (NOT playerId)
+    shooter:  [7],
+    opponent: [13]
+  }
+}
 ```
 
-**Never manually edit the version in `tauri.conf.json`** — it gets overwritten by `sync-version.js` on next build.
+**Resolve role:** `players[roles.keeper[0]].playerId`
+**Error types:** Wrong Keeper/Shooter/Opponent (role changed), Added/Deleted Player,
+Wrong Team (groupIndicator changed), Wrong Location (euclidean > 5, matched players only)
 
 ---
 
-## GitHub Actions Workflow
+## Speed Metrics (confirmed 2026-07-28)
 
-`.github/workflows/build.yml`:
-1. PowerShell reads version from `package.json`
-2. Deletes existing GitHub release for that version tag (if any) — prevents asset conflict
-3. Runs `npm run build` (which runs `sync-version.js` first)
-4. Tauri build → `MARK_{VERSION}_x64-setup.exe` + `.msi`
-5. Creates GitHub Release tagged `v{VERSION}`
+**Gap threshold:** 5 minutes — gaps >5min excluded from active time calculation
 
-**Tag format:** `v2.9.8` (not `latest`) — each version gets its own release.
+**Match 1294780 confirmed speeds:**
 
----
+| Role | Author | Active time | Speed |
+|------|--------|-------------|-------|
+| Main Collector | 3416 | 5:49:42 (base+refs) | 637 ev/hr |
+| Secondary Collector | 1935 | 3:53:20 (base+refs) | 596 ev/hr |
+| Reviewer | 2119 | 0:32:31 (watch time) | 1854 ev/hr |
 
-## Design System
+**Per-module speeds** — see DECISIONS.md #24 for full table.
 
-Identical to FIELD:
-- Background: `--bg: #0a0a12`, `--bg-2: #111120`, `--bg-3: #1a1a2e`
-- Text: `--t-1`, `--t-2`, `--t-3`
-- Borders: `--b-1`, `--b-2`
-- Accent: `--p2: #E8590C` (orange)
-- Fonts: Inter (headings/800), DM Sans (body), JetBrains Mono (mono/code)
-- Team colors: Home `#0A84FF`, Away `#FF453A`
+**Reviewer two-phase pattern:**
+- Phase 1 (2:47–3:25 PM): careful review, 358 events, 3.1s avg watch
+- Phase 2 (3:41–4:03 PM): fast approval, 647 events, 1.3s avg watch
+- Error rate consistent across both phases (~4.7%)
 
 ---
 
-## FIELD Integration
+## Pending Work (as of 2026-07-28)
 
-| FIELD Gate | What it shows |
-|------------|--------------|
-| Trainer gate → Review tab | "Open MARK" + own session history |
-| BSup gate → Review dashboard | All trainer sessions + real-time scores |
-| BM gate | Aggregate scores across all batches |
+1. **Apollo cache dedup** — deduped count is 9116 not ~2500. Root cause unclear.
+   The error engine still produces correct results (41-43 errors) because the
+   dedup strategy correctly handles amendments/refinements per key+type+author.
+   The 9116 vs 2500 discrepancy needs further investigation.
 
----
+2. **A/B/C scores** — show `—` for completed matches (tracker button not found).
+   Only works during live review when the tracker button is available.
+   Consider capturing `capturedCats` during the review session and storing in Firestore.
 
-## Pending / Future
+3. **Speed metrics in UI** — speed per role per module is confirmed from console
+   testing but not yet displayed in MARK's UI. Awaiting permission to build.
 
-- FIELD integration screens (Review tabs in Trainer/BSup/BM gates)
-- Attitude tracking (session behavior signals — store silently now, use later)
-- TagPanel — verify per-event extras are 100% correct with Wafaa
+4. **FIELD pending roles** — Training Supervisor and Trainee roles not yet built.
 
-
----
-
-<!-- ============================================================= -->
-<!-- SESSION 2026-06-11 — v4.1.0 RELEASE · FADY ARCHIVED · 5.0.0 CANCELLED -->
-<!-- ============================================================= -->
-
-## v4.1.0 Release (2026-06-11) — PARTIAL DELIVERY · Read this carefully
-
-### What shipped and IS active in production
-
-1. **Version bumps everywhere** (Cargo.toml was 2.9.8, useUpdateCheck.js was 2.9.10, both were lagging — now all four files are aligned at 4.1.0):
-   - `package.json` → 4.1.0
-   - `src-tauri/Cargo.toml` → 4.1.0
-   - `src-tauri/tauri.conf.json` → 4.1.0
-   - `src/hooks/useUpdateCheck.js` `CURRENT_VERSION` → 4.1.0 (this drives the header bar display)
-2. **Two new parent events in `src/data/shortcuts.js`:**
-   - **Pass Interception** — key `I` (was missing entirely)
-   - **Card** — mouse-only event (was missing entirely)
-3. **`sheetEvent` field** added to every `TORNADO_EVENTS` entry — maps each MARK event to its canonical name in the official taxonomy sheet, so any consumer can look up filtered error-type/correction lists.
-4. **New file: `src/data/tagging_scenarios.js`** (~103 KB) — the full official error-correction taxonomy:
-   - 465 scenarios across 23 events × 17 error types (sourced from the updated `Untitled_spreadsheet (1).xlsx` provided 2026-06-11)
-   - Three filter helpers exported: `getErrorTypesForEvent(event)`, `getCorrectionsForScenario(event, errorType)`, `getTypeQualifiersForCorrection(event, errorType, correction)`
-   - Plus `TAGGING_SCENARIOS` (raw array) and `ALL_ERROR_TYPES` (the 17 in canonical order)
-
-### What was attempted but DOES NOT take effect
-
-`src/components/ErrorTagModal.jsx` was rewritten to consume the new `tagging_scenarios.js`. **However, `ErrorTagModal.jsx` is dead code** — it is not imported by `App.jsx`, `ReviewPage.jsx`, or any other page. The actual error-tagging UI in production is **`src/components/TagPanel.jsx`** (~27 KB), which `ReviewPage.jsx` imports and renders.
-
-`TagPanel.jsx` carries its OWN hardcoded taxonomy (constants: `ERROR_TYPES`, `WRONG_EVENT_MAP`, `WRONG_EXTRAS`, `MISSING_EXTRAS`, `EXTRAS`, `GK_SUBTYPES`, `GK_EXTRAS`, `GK_WRONG_EXTRAS`, `GK_WRONG_EVENT_MAP`, `TEAM_BTNS`, `KEYS`). It has zero references to `tagging_scenarios` or `getCorrectionsForScenario`.
-
-So as of v4.1.0:
-- The `tagging_scenarios.js` infrastructure exists in the repo but no production component consumes it
-- TagPanel still drives the actual reviewer experience using its older hardcoded data
-- Reviewers WILL see the new events Pass Interception (I) and Card in the keyboard handler, since those land in `shortcuts.js` which TagPanel imports — but they may not have full taxonomy support inside the panel itself
-
-### Next step (queued for v4.2.0)
-
-Migrate `TagPanel.jsx` to consume `tagging_scenarios.js` instead of its own hardcoded maps. Compare TagPanel's current maps against the sheet rules first — anywhere they diverge, the sheet is canonical (per 2026-06-11 decision).
-
-### Sheet conflicts deliberately skipped (preserves reviewer muscle memory)
-
-Per the explicit instruction "we will not change the current structure":
-
-| Sheet rule | What MARK keeps |
-|---|---|
-| Tackle = A | Tackle stays K |
-| Separation duel = J | Stays L |
-| Leg stretch duel = U | Stays M |
-| Fifty fifty = By mouse | Stays key 0 |
-| Pass (First time) = Q | Q stays as MISSING_EVENT_KEY — Pass (First time) not added |
-| Pass recovery = P | P stays as Pressure — Pass recovery not added |
-| Pressure start = G | Shares G with Goal Keeper — looks like an attribute, not added |
-
-### Items removed from the OLD ErrorTagModal (not in taxonomy)
-
-- "Wrong Player" — not in the sheet's 17 error types
-- "Confused With" — was effectively a duplicate of "Wrong event"
-
-These were removed from `ErrorTagModal.jsx`, but since that file is dead code the visible effect is nil. When TagPanel gets migrated, the equivalent removals will need to happen there.
+5. **Score denominator alignment** — MARK's denominators run ~3–7% higher than
+   the Analysis Team's reference. Reconciliation pending direct collaboration
+   with the Analysis Team.
 
 ---
 
-## Versioning Cadence Rule (NEW, set 2026-06-11)
+## Known Issues
 
-**`4.1.0 → 4.2.0 → 4.3.0 → ... → 4.9.0 → 5.0.0 → 5.1.0 → ...`**
+| Issue | Status | Details |
+|-------|--------|---------|
+| deduped=9116 | Open | Should be ~2500. Error engine still correct. |
+| A/B/C empty on completed matches | By design | Need capturedCats from live session |
+| 1935 tagging dates (Dec 2025) | By design | Match was re-tagged months later |
+| blueprint-icons font 404s | Cosmetic | Tag Once fonts not in MARK's bundle |
 
-Every build increments the MIDDLE digit. After 4.9.0, the next is 5.0.0. After 5.9.0 → 6.0.0. Apply this consistently to all four version fields. The build script `scripts/sync-version.js` keeps tauri.conf.json in sync with package.json automatically; Cargo.toml and useUpdateCheck.js currently must be bumped manually (auto-sync gap noted on 2026-06-11 when Cargo.toml was discovered at 2.9.8 while package.json was at 4.0.0 — fixed in this release).
-
-The next 5.0.0 is simply the natural successor to 4.9.0. It is NOT a reservation for a major architecture rewrite.
-
----
-
-## Roadmap Changes (2026-06-11)
-
-### MARK 5.0.0 architecture migration — CANCELLED
-
-The local-WebSocket-bridge architecture proven in the 2026-06-09 session (see SYNC_PROBLEM_CONTEXT.md) is no longer being pursued. Production sync stays on MARK 4.x indefinitely. The Firebase-quota reduction strategy that was planned for MARK 5.0.0 is therefore also off — quota management for MARK + FIELD goes back to "stay on Firebase, watch usage, optimize FIELD reads if needed, consider Blaze upgrade when quotas force it."
-
-### Fady (PocketBase experiment) — ARCHIVED
-
-The `fady-app` repo (https://github.com/ahmedashraf-cyber/fady-app) was archived on 2026-06-11. Built up to v0.4.3 as a MARK 4.0.0 clone with PocketBase swapped in for Firebase. Key technical finding: PB's HTTP polling at 1500ms coalesces rapid arrow-key presses; only push-based realtime (Firestore's `onSnapshot`, or PB's SSE which we didn't get to) delivers every write. The architectural gap was the reason MARK has remained on Firebase.
-
-Result: no migration off Firebase. See SYNC_PROBLEM_CONTEXT.md for details.
-
-### Going forward, the team owns two repos
-
-- **mark-app** — desktop review app (Tauri 2, React 19), Firebase backend. Current version 4.1.0.
-- **flowops** — FIELD web app for training operations (HTML/JS, Firebase backend).
-
-No experiments. No third repos. No architecture migrations.
-
-### Hard scope rules (set 2026-06-11)
-
-- **Don't change the current MARK structure** — when in doubt, add new things rather than replace existing ones.
-- **The sheet is the source of truth** for the error-correction taxonomy. When TagPanel and the sheet disagree, follow the sheet. The current version of that sheet is the one provided on 2026-06-11 (`Untitled_spreadsheet (1).xlsx`, 465 rules); store any future updates in `src/data/tagging_scenarios.js` rather than hardcoding into components.
-- **Preserve the 3-step (sometimes 4-step) tagging workflow:** event → error type (filtered) → correction (filtered) → optional type qualifier.
-
-
----
-
-<!-- ============================================================= -->
-<!-- SESSION 2026-06-11 — v4.2.0 RELEASE · TAGPANEL MIGRATION COMPLETE -->
-<!-- ============================================================= -->
-
-## v4.2.0 Release (2026-06-11) — TagPanel Now Consumes Sheet Data
-
-### What shipped
-
-This is the follow-up to v4.1.0 that actually completes the user-facing migration. v4.1.0 added the data file but ErrorTagModal (the consumer it touched) turned out to be dead code. v4.2.0 fixes that by migrating **TagPanel.jsx** — the real production component — to consume `tagging_scenarios.js`.
-
-**Changes to `src/components/TagPanel.jsx`:**
-
-- Removed hardcoded `MISSING_EXTRAS`, `WRONG_EXTRAS`, `WRONG_EVENT_MAP` constants (~2.4 KB of stale data)
-- Added new import: `import { TAGGING_SCENARIOS } from '../data/tagging_scenarios'`
-- Added three computed (memoized) helpers at module load:
-  - `getWrongEventList(eventId)` — pulls from sheet's "Wrong event" rules, flattens Goal keeper + Type qualifier into "GK (Type)" so the display matches MARK's existing convention
-  - `getMissingExtrasList(eventId)` — combines sheet's "Missing extra" and "Not needed extra" rules (TagPanel uses one list for both UI steps)
-  - `getWrongExtrasMap(eventId)` — `{ tagged: [corrections] }` map built across 10 attribute-error sheet types (Wrong extra + Wrong outcome + Wrong direction + Wrong body part + Wrong technique + Wrong height + Wrong type + Wrong kind + Wrong side + Wrong GK body state), which MARK collapses into the single "Wrong extra" workflow step
-- `GK_WRONG_EVENT_MAP` stays HARDCODED — the sheet doesn't split Goal Keeper into MARK's 4 sub-types (gk_collected, gk_punch, gk_keeper_sweeper, gk_save) the same way, so we kept MARK's existing data here
-
-**Workflow, keys, breadcrumbs, autosave, team selection — all unchanged.** Only the data source changed.
-
-**Version bumps everywhere:**
-- `package.json` 4.1.0 → 4.2.0
-- `src-tauri/Cargo.toml` 4.1.0 → 4.2.0
-- `src-tauri/tauri.conf.json` 4.1.0 → 4.2.0
-- `src/hooks/useUpdateCheck.js` `CURRENT_VERSION` 4.1.0 → 4.2.0
-
-### What the reviewer will see in v4.2.0
-
-- Header bar reads "MARK · Review App · v4.2.0"
-- Pass Interception (key `I`) — was already wired into TagPanel's hardcoded data before v4.1.0; still works
-- All correction lists across all events now reflect the master spreadsheet (`Untitled_spreadsheet (1).xlsx`, 465 rules). Any divergence between the previous hardcoded data and the sheet is reconciled in favor of the sheet.
-- Any future updates to the taxonomy can be done by regenerating `src/data/tagging_scenarios.js` from the sheet — no more touching component code for data changes.
-
-### Still pending (queued for v4.3.0 or later)
-
-- **Card (mouse-only)** event has no UI trigger in MARK currently — `shortcuts.js` lists it as `{ key: null, mouse: true }`, but the review page only handles keyboard events. To make Card usable, a clickable button needs to be added somewhere in the review UI. The taxonomy data for Card is already in `tagging_scenarios.js`.
-- **Dead code cleanup** — `src/components/ErrorTagModal.jsx` is now confirmed unused and can be deleted in a follow-up commit.
-- **GK_WRONG_EVENT_MAP** — currently hardcoded inside TagPanel. If the team wants this data driven by the sheet too, the sheet's Goal Keeper rules need to encode the GK subtype dimension explicitly (e.g., via a "Source GK action" column), or a side-table can live in `tagging_scenarios.js`.
-
-### Versioning cadence rule (reminder)
-
-`4.2.0 → 4.3.0 → 4.4.0 → ... → 4.9.0 → 5.0.0 → 5.1.0 → ...`
