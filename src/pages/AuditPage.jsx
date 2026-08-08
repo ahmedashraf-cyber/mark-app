@@ -1979,6 +1979,7 @@ export default function AuditPage({ session, onBack, onFullReport, initialResult
       data.computedErrors    = data.computedErrors    || null
       data.computedFFErrors  = data.computedFFErrors  || null
       data.halfQualityScores = data.halfQualityScores || null
+      data.speedData         = data.speedData         || null
 
       // ── Score calculation (reviewer-only, correct) ───────────────────────
       const errorKeys = computeErrorKeys(data.baseEvents, data.amendments, reviewerIds)

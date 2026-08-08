@@ -1,5 +1,5 @@
 (async function(){
-  const BRIDGE_VERSION = '7.8.10';
+  const BRIDGE_VERSION = '7.8.11';
   if(window.__MARK_BRIDGE_VERSION__ === BRIDGE_VERSION){console.log('[MARK] bridge already running (v' + BRIDGE_VERSION + ')');return;}
   if(window.__MARK_BRIDGE_STOP__) window.__MARK_BRIDGE_STOP__();
   window.__MARK_BRIDGE__ = true;
@@ -1509,6 +1509,174 @@
           halfQualityScores = null;
         }
 
+        // ── Speed data per collector per module ──────────────────────────────────
+        // Confirmed logic: capturedTime-based, 5-min gap exclusion per module.
+        // Module windows: base+extras = half-start→half-end (main) or first→last base (secondary)
+        //                 all others  = first→last event of that module type
+        let speedData = null;
+        try {
+          const GAP_MS_SPD    = 5 * 60 * 1000;
+          const BASE_EXCL_SPD = new Set(['starting-xi','half-start','half-end','squad','pressure-start','pressure-end']);
+          const EXTRAS_T      = 'extras';
+          const PRESSURE_N    = new Set(['pressure-start','pressure-end']);
+          const FF_TYPES_SPD  = new Set(['freeze-frame','goal-location','impact']);
+
+          // Refinement/completion maps
+          const refinementMapSPD = {};
+          Object.values(cache).forEach(v => {
+            if (v.__typename === 'Event' && v.category === 'refinement') {
+              if (!refinementMapSPD[v.key]) refinementMapSPD[v.key] = new Set();
+              refinementMapSPD[v.key].add(v.type);
+            }
+          });
+          const IGNORE_COMP = new Set(['clocks']);
+          const calcCompletion = (authorId, module) => {
+            const myBase = allBase.filter(v => v.author === authorId);
+            const requires = myBase.filter(v => {
+              const rp = (v.payload && v.payload['required-partials']) || [];
+              return rp.filter(p => !IGNORE_COMP.has(p)).includes(module);
+            });
+            if (!requires.length) return 'N/A';
+            const filled = requires.filter(v => refinementMapSPD[v.key] && refinementMapSPD[v.key].has(module)).length;
+            return ((filled / requires.length) * 100).toFixed(1) + '%';
+          };
+
+          // Active time calculator: splits events into sessions by 5-min gap, sums session durations
+          const calcActiveMs = (events, filterFn) => {
+            const valid = events.filter(filterFn).sort((a,b)=>(a.capturedTime||'').localeCompare(b.capturedTime||''));
+            if (valid.length < 2) return valid.length === 1 ? 0 : 0;
+            let activeMs = 0;
+            for (let i = 1; i < valid.length; i++) {
+              const gap = new Date(valid[i].capturedTime) - new Date(valid[i-1].capturedTime);
+              if (gap < GAP_MS_SPD) activeMs += gap;
+            }
+            return activeMs;
+          };
+
+          speedData = {};
+
+          collectorIds.forEach(function(cId) {
+            const allByColl = Object.values(cache).filter(v =>
+              v.__typename === 'Event' && v.author === cId && v.capturedTime &&
+              (v.category === 'base' || v.category === 'refinement' || v.category === 'amendment')
+            );
+
+            const mk = (activeMs, events, compModule) => {
+              const totalEvents = events.length;
+              const speedPerHour = activeMs > 0 ? Math.round(totalEvents / (activeMs / 3600000)) : 0;
+              const completionRate = compModule ? calcCompletion(cId, compModule) : null;
+              return { activeMs, totalEvents, speedPerHour, completionRate };
+            };
+
+            // ── Base + Extras ──────────────────────────────────────────────────
+            const isBaseExtrasEv = v => {
+              if (v.category === 'base') {
+                const n = v.payload && v.payload.name;
+                return n && !BASE_EXCL_SPD.has(n);
+              }
+              return (v.category === 'refinement' || v.category === 'amendment') && v.type === EXTRAS_T;
+            };
+            const beEvents = allByColl.filter(isBaseExtrasEv).sort((a,b)=>(a.capturedTime||'').localeCompare(b.capturedTime||''));
+            let beWindowStart = null, beWindowEnd = null, beWindowMethod = 'first → last base', beMultiDay = false;
+            const hsEv = Object.values(cache).find(v => v.__typename==='Event' && v.category==='base' && v.author===cId && v.payload && v.payload.name==='half-start');
+            const heEv = Object.values(cache).find(v => v.__typename==='Event' && v.category==='base' && v.author===cId && v.payload && v.payload.name==='half-end');
+            if (hsEv && heEv) {
+              beWindowStart = new Date(hsEv.capturedTime).getTime();
+              beWindowEnd   = new Date(heEv.capturedTime).getTime();
+              beWindowMethod = 'half-start → half-end';
+            } else {
+              const baseOnly = beEvents.filter(v => v.category === 'base');
+              if (baseOnly.length > 0) {
+                beWindowStart = new Date(baseOnly[0].capturedTime).getTime();
+                beWindowEnd   = new Date(baseOnly[baseOnly.length-1].capturedTime).getTime();
+              }
+            }
+            let beActiveMs = 0;
+            if (beWindowStart !== null && beWindowEnd !== null) {
+              const inWindow = beEvents.filter(v => {
+                const t = new Date(v.capturedTime).getTime();
+                return t >= beWindowStart && t <= beWindowEnd;
+              });
+              // Split into sessions, exclude sessions with 0 base AND 0 extras
+              const beSessions = [];
+              if (inWindow.length > 0) {
+                let cur = [inWindow[0]];
+                for (let i = 1; i < inWindow.length; i++) {
+                  const gap = new Date(inWindow[i].capturedTime) - new Date(inWindow[i-1].capturedTime);
+                  if (gap >= GAP_MS_SPD) { beSessions.push(cur); cur = [inWindow[i]]; } else cur.push(inWindow[i]);
+                }
+                beSessions.push(cur);
+              }
+              beSessions.forEach(s => {
+                const hasBase   = s.some(v => v.category === 'base');
+                const hasExtras = s.some(v => v.type === EXTRAS_T);
+                if (!hasBase && !hasExtras) return;
+                beActiveMs += new Date(s[s.length-1].capturedTime) - new Date(s[0].capturedTime);
+              });
+              beMultiDay = beWindowStart && beWindowEnd &&
+                new Date(beWindowStart).toDateString() !== new Date(beWindowEnd).toDateString();
+            }
+            const beInWindow = beWindowStart !== null ? beEvents.filter(v => {
+              const t = new Date(v.capturedTime).getTime();
+              return t >= beWindowStart && t <= beWindowEnd;
+            }) : beEvents;
+            const beScenario = beInWindow.some(v=>v.category==='base') && beInWindow.some(v=>v.type===EXTRAS_T)
+              ? 'base+extras' : beInWindow.some(v=>v.category==='base') ? 'base only' : 'extras only';
+
+            // ── Pressure ───────────────────────────────────────────────────────
+            const pressEv = allByColl.filter(v => v.category==='base' && v.payload && PRESSURE_N.has(v.payload.name))
+              .sort((a,b)=>(a.capturedTime||'').localeCompare(b.capturedTime||''));
+            const pressActiveMs = pressEv.length > 1 ? calcActiveMs(pressEv, ()=>true) : 0;
+
+            // ── Generic refinement module helper ───────────────────────────────
+            const calcRefMod = (typeSet) => {
+              const evs = allByColl.filter(v =>
+                (v.category==='refinement'||v.category==='amendment') && typeSet.has(v.type)
+              ).sort((a,b)=>(a.capturedTime||'').localeCompare(b.capturedTime||''));
+              if (!evs.length) return null;
+              const activeMs = evs.length > 1 ? calcActiveMs(evs, ()=>true) : 0;
+              return { activeMs, totalEvents: evs.length, speedPerHour: activeMs>0?Math.round(evs.length/(activeMs/3600000)):0 };
+            };
+
+            const playersRes   = calcRefMod(new Set(['players']));
+            const locationRes  = calcRefMod(new Set(['location']));
+            const ffRes        = calcRefMod(FF_TYPES_SPD);
+
+            speedData[cId] = {
+              baseExtras: {
+                activeMs: beActiveMs, totalEvents: beInWindow.length,
+                speedPerHour: beActiveMs>0?Math.round(beInWindow.length/(beActiveMs/3600000)):0,
+                completionRate: calcCompletion(cId, 'extras'),
+                scenario: beScenario, windowMethod: beWindowMethod, multiDay: beMultiDay,
+              },
+              pressure: pressEv.length > 0 ? {
+                activeMs: pressActiveMs, totalEvents: pressEv.length,
+                speedPerHour: pressActiveMs>0?Math.round(pressEv.length/(pressActiveMs/3600000)):0,
+                completionRate: null,
+              } : null,
+              players: playersRes ? {
+                activeMs: playersRes.activeMs, totalEvents: playersRes.totalEvents,
+                speedPerHour: playersRes.speedPerHour,
+                completionRate: calcCompletion(cId, 'players'),
+              } : null,
+              location: locationRes ? {
+                activeMs: locationRes.activeMs, totalEvents: locationRes.totalEvents,
+                speedPerHour: locationRes.speedPerHour,
+                completionRate: calcCompletion(cId, 'location'),
+              } : null,
+              freezeFrame: ffRes ? {
+                activeMs: ffRes.activeMs, totalEvents: ffRes.totalEvents,
+                speedPerHour: ffRes.speedPerHour,
+                completionRate: calcCompletion(cId, 'goal-location'),
+              } : null,
+            };
+          });
+          console.log('[MARK] speedData computed for', Object.keys(speedData).length, 'collectors');
+        } catch (spdErr) {
+          console.warn('[MARK] speedData failed:', spdErr && spdErr.message);
+          speedData = null;
+        }
+
         // ── Lineup players (home + away with team info) ───────────────────────
         // Used by MARK to resolve player names/jersey numbers in amendments
         let lineupPlayers = [];
@@ -1570,6 +1738,7 @@
           computedErrors,
           computedFFErrors,
           halfQualityScores,
+          speedData,
           diagnostics,
           usedTelemetry,
           environment: (typeof process !== 'undefined' && process.env && process.env.LIVE_COLLECTION_SERVICE_URL)
