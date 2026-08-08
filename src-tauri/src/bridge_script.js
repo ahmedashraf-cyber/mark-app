@@ -1,5 +1,5 @@
 (async function(){
-  const BRIDGE_VERSION = '7.8.5';
+  const BRIDGE_VERSION = '7.8.6';
   if(window.__MARK_BRIDGE_VERSION__ === BRIDGE_VERSION){console.log('[MARK] bridge already running (v' + BRIDGE_VERSION + ')');return;}
   if(window.__MARK_BRIDGE_STOP__) window.__MARK_BRIDGE_STOP__();
   window.__MARK_BRIDGE__ = true;
@@ -1380,17 +1380,49 @@
                 recalculated: true,
               };
             } else {
-              // No A/B/C cats available — overall only, A/B/C/Others null
+              // No categorizedEvents from tracker button (completed match) —
+              // fall back to static event name → group mapping.
+              // Confirmed 0 unmapped on match 1294780 (31 event types, all covered).
+              const STATIC_GROUP = {
+                // A — high-value / key actions
+                'shot': 'A', 'end-shot': 'A', 'goal-keeper': 'A', 'card': 'A',
+                'foul-committed': 'A', 'stoppage': 'A', 'end-stoppage': 'A',
+                'referee-ball-drop': 'A', 'out': 'A', 'camera-on': 'A', 'camera-off': 'A',
+                // B — defensive / duel actions
+                'clearance': 'B', 'interception': 'B', 'block': 'B', 'dribble': 'B',
+                'tackle': 'B', 'miscontrol': 'B', 'shield': 'B', 'fifty-fifty': 'B',
+                'hold-up-duel': 'B', 'positioning-duel': 'B', 'leg-stretch-duel': 'B',
+                'separation-duel': 'B',
+                // C — pressure / recovery
+                'ball-recovery': 'C', 'pressure-start': 'C', 'pressure-end': 'C',
+                // Others — pass flow (pass, reception, unknown-pass-end, anything else)
+              };
+              const EXCLUDED_STATIC = new Set(['starting-xi', 'half-start', 'half-end', 'squad']);
+
+              // Build name lookup from allBase (already available in this scope)
+              const nameByKeyS = {};
+              allBase.forEach(v => { if (v.payload && v.payload.name) nameByKeyS[v.key] = v.payload.name; });
+
+              // Bucket viewed keys by static group
+              const bucketsS = { A:{viewed:0,errors:0}, B:{viewed:0,errors:0}, C:{viewed:0,errors:0}, Others:{viewed:0,errors:0} };
+              viewedKeysNew.forEach(k => {
+                const name = nameByKeyS[k];
+                if (!name || EXCLUDED_STATIC.has(name)) return;
+                const g = STATIC_GROUP[name] || 'Others';
+                bucketsS[g].viewed++;
+                if (accurateErrorKeys.has(k)) bucketsS[g].errors++;
+              });
+
+              const mkS = b => ({ viewed: b.viewed, errors: b.errors, score: b.viewed > 0 ? Math.round(((b.viewed - b.errors) / b.viewed) * 100) : null });
+
               newReviewGroupScores = {
                 overall: { viewed: ov, errors: oe, score: overallScore },
-                A: { viewed: 0, errors: 0, score: null },
-                B: { viewed: 0, errors: 0, score: null },
-                C: { viewed: 0, errors: 0, score: null },
-                Others: { viewed: 0, errors: 0, score: null },
+                A: mkS(bucketsS.A), B: mkS(bucketsS.B), C: mkS(bucketsS.C), Others: mkS(bucketsS.Others),
                 captureMs: 0,
                 recalculated: true,
-                noCats: true,
+                staticMapping: true,  // flag so UI can show "Static mapping" if needed
               };
+              console.log('[MARK] A/B/C via static mapping (no capturedCats)');
             }
             console.log('[MARK] newReviewGroupScores:', JSON.stringify(newReviewGroupScores));
           } catch(rgRecalcErr) {
