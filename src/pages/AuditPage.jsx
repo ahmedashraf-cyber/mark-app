@@ -427,6 +427,47 @@ function ExistingSessionView({ session, onSeek }) {
   )
 }
 
+const REVIEW_GROUPS = {
+  A: {
+    label: 'A - Review', color: '#0A84FF',
+    match: (e, extras) => {
+      const n = e.name, t = e.fields?.type || ''
+      if (['shot','own-goal-against','foul-committed','error','stoppage',
+           'end-stoppage','referee-ball-drop','end-shot','starting-xi',
+           'substitution','out','tactical-shift','player-off','player-on',
+           'card','offside','freeze-frame','shield'].includes(n)) return true
+      if (n === 'pass' && t !== 'recovery') return true
+      if (n === 'goal-keeper' && ['save','conceded-no-save'].includes(t)) return true
+      return false
+    }
+  },
+  B: {
+    label: 'B - Review', color: '#30D158',
+    match: (e, extras) => {
+      const n = e.name, t = e.fields?.type || ''
+      if (['clearance','interception','block','dribble','tackle','miscontrol','fifty-fifty'].includes(n)) return true
+      if (n === 'pass' && t === 'recovery') return true
+      if (n === 'goal-keeper' && !['save','conceded-no-save'].includes(t)) return true
+      return false
+    }
+  },
+  C: {
+    label: 'C - Review', color: '#FFD60A',
+    match: (e, extras) => {
+      const n = e.name
+      if (['ball-recovery','pressure-start','pressure-end'].includes(n)) return true
+      if (['pass','shot','clearance','miscontrol'].includes(n) && extras?.includes('aerial-won')) return true
+      return false
+    }
+  }
+}
+
+function filterAmendments(amendments, reviewerIds) {
+  const set = new Set((reviewerIds || []).map(Number))
+  if (set.size === 0) return []
+  return amendments.filter(a => set.has(Number(a.author)))
+}
+
 function computeErrorKeys(baseEvents, amendments, reviewerIds) {
   const set = new Set((reviewerIds || []).map(Number))
   const errs = new Set()
