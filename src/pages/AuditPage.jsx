@@ -427,6 +427,60 @@ function ExistingSessionView({ session, onSeek }) {
   )
 }
 
+function computeErrorKeys(baseEvents, amendments, reviewerIds) {
+  const set = new Set((reviewerIds || []).map(Number))
+  const errs = new Set()
+  if (set.size === 0) return errs
+  const reviewerBaseKeys = new Set(
+    (baseEvents || []).filter(e => set.has(Number(e.author))).map(e => e.key)
+  )
+  ;(amendments || []).forEach(a => {
+    if (!set.has(Number(a.author))) return
+    if (reviewerBaseKeys.has(a.key)) return
+    errs.add(a.key)
+  })
+  return errs
+}
+
+function calcGroupScore(group, baseEvents, amendments, refinements, reviewerIds) {
+  const groupBase = baseEvents.filter(e => {
+    const extras = refinements[e.key] || []
+    return group.match(e, extras)
+  })
+  if (groupBase.length === 0) return { score: null, reviewed: 0, edited: 0 }
+  const groupKeys = new Set(groupBase.map(e => e.key))
+  const errorKeys = computeErrorKeys(
+    groupBase,
+    amendments.filter(a => groupKeys.has(a.key)),
+    reviewerIds
+  )
+  const uniqueEdited = errorKeys.size
+  const score = Math.round(((groupBase.length - uniqueEdited) / groupBase.length) * 100)
+  return { score, reviewed: groupBase.length, edited: uniqueEdited }
+}
+
+function calcEventTypeScores(baseEvents, amendments, reviewerIds) {
+  const byName = {}
+  ;(baseEvents || []).forEach(e => {
+    const name = e.name || 'unknown'
+    if (!byName[name]) byName[name] = []
+    byName[name].push(e)
+  })
+  const result = {}
+  for (const [name, events] of Object.entries(byName)) {
+    const keys = new Set(events.map(e => e.key))
+    const relatedAmends = (amendments || []).filter(a => keys.has(a.key))
+    const errorKeys = computeErrorKeys(events, relatedAmends, reviewerIds)
+    const total = events.length
+    const errors = errorKeys.size
+    result[name] = {
+      total, errors,
+      score: total > 0 ? Math.round(((total - errors) / total) * 100) : null,
+    }
+  }
+  return result
+}
+
 function AuditDashboard({ results, score, abcScores, onFullReport, session, identityMap, onSeek }) {
   const [errorsExpanded, setErrorsExpanded] = useState(false)
   const [breakdownOpen, setBreakdownOpen] = useState(false)
