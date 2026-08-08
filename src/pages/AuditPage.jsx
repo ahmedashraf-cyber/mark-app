@@ -428,7 +428,7 @@ function ExistingSessionView({ session, onSeek }) {
 }
 
 function QuickSummary({ results, score, abcScores, onFullReport }) {
-  const [breakdownOpen, setBreakdownOpen] = React.useState(false)
+  const [breakdownOpen, setBreakdownOpen] = useState(false)
 
   const types = {}
   results.amendments.forEach(a => { types[a.type] = (types[a.type] || 0) + 1 })
