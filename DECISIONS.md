@@ -1,9 +1,7 @@
 # MARK — Decision Log
 
-A record of *why* MARK works the way it does — the decisions taken, the
-alternatives rejected, and the investigations behind them. Read alongside
-[CHANGELOG.md](./CHANGELOG.md) (the *what/when*) and
-[MARK_CONTEXT.md](./MARK_CONTEXT.md) (the *how*).
+A record of *why* MARK works the way it does — decisions taken, alternatives rejected,
+investigations behind them. Read alongside CHANGELOG.md (what/when) and MARK_CONTEXT.md (how).
 
 ---
 
@@ -17,231 +15,205 @@ refinements from bridge, A/B/C deferral, semantic versioning.
 ## 20. Error Engine — 5-Rule System (v7.8.x, confirmed 2026-07-28)
 
 **Match tested:** Saint-Étienne vs. Angers, 1st Half (matchId 1294780)
-**Authors confirmed:**
-- 3416 = Main Collector (1416 base events, views=0)
-- 1935 = Secondary Collector (949 base events, views=150 on 2025-12-31)
-- 2119 = Reviewer (views=1005 on 2026-07-24)
-- 2909 = Playthrough viewer (views=23 on 2026-07-27, no amendments → excluded)
+**Authors:** 3416 = Main Collector, 1935 = Secondary Collector, 2119 = Reviewer, 2909 = Playthrough (excluded)
 
 ### Rule 1 — Self-edits excluded
-If the reviewer tagged a base event themselves (missed event), any amendments
-they make on that same event are excluded. Not collector errors.
-
-**Implementation:** Build `reviewerAddedKeys` set from base events authored by
-reviewer. Filter out from `allReviewerAmends`.
+Reviewer amending their own added events = not collector errors.
+`reviewerAddedKeys` set built from base events authored by reviewer.
 
 ### Rule 2 — Same value excluded
-If reviewer's amendment payload === collector's original refinement payload
-(old == new), it is NOT counted as an error. No noise from cosmetic saves.
-
-**Implementation:** `JSON.stringify(oldRef?.payload) === JSON.stringify(latestAmend?.payload)` → skip.
+`JSON.stringify(oldRef?.payload) === JSON.stringify(latestAmend?.payload)` → skip.
 
 ### Rule 3 — Deleted+Added / Deleted+Edited
-When reviewer deletes an event AND adds a new event within ±1000ms:
-- Different event name → `Deleted+Added` (collector tagged wrong event type)
-- Same event name → `Deleted+Edited` (collector tagged same event with wrong values)
+Pair deletion + added event within ±1000ms (PAIR_TOLERANCE_MS).
+Different name → `Deleted+Added`. Same name → `Deleted+Edited`.
 
-**Tolerance:** 1000ms (PAIR_TOLERANCE_MS). Pair by closest timestamp match.
-
-### Rule 4 — Location threshold (euclidean distance > 5)
-For `location` module: `payload.location.actual.x/y`
-For `goal-location` module: `payload['goal-location'].x/y`
-Only counts as error if euclidean distance between collector and reviewer coordinates > 5 units.
+### Rule 4 — Location threshold (euclidean > 5 units)
+`location` module: `payload.location.actual.x/y`
+`goal-location` module: `payload['goal-location'].x/y`
 
 ### Rule 5 — Freeze Frame (shots only)
-- Only applied to events with `base.payload.name === 'shot'`
-- Latest collector FF = latest `refinement/freeze-frame` by non-reviewer (any category)
-- Latest reviewer FF = latest `amendment/freeze-frame` by reviewer
-- Join players by `playerId` (NOT index `id` field)
-- Roles (keeper/shooter/opponent): values in `roles.keeper` etc. are INDEXES into players array → resolve to `playerId` via `players[index].playerId`
-- Player position: `pitchPosition.default.x/y`
-- Group/team: `groupIndicator` field (`TEAM_A`, `TEAM_B`, `REF`, `KEEPER`)
-- Error types: Wrong Keeper, Wrong Shooter, Wrong Opponent, Added Player, Deleted Player, Wrong Team, Wrong Location (euclidean > 5 on matched players only)
+Join players by `playerId`. Roles = indexes into players array → resolve first.
+Error types: Wrong Keeper, Wrong Shooter, Wrong Opponent, Added/Deleted Player, Wrong Team, Wrong Location.
 
-### Confirmed numbers for match 1294780:
-- computedErrors: 41–43 (non-FF)
-- computedFFErrors: 1
-- Overall score: 96% (1005 viewed, ~43 errors)
+**Confirmed:** computedErrors: 41–43, computedFFErrors: 1, Overall: 96%
 
 ---
 
 ## 21. Apollo Cache Deduplication (v7.8.1+, confirmed 2026-07-28)
 
-**Problem:** Tag Once accumulates duplicate events in Apollo cache when the same
-match is loaded multiple times in a session. Match 1294780 showed 10,051 events
-in cache when the true count is ~2,500.
-
-**Deduplication strategy (confirmed working):**
-```js
-// base: one per key (first seen)
-dk = 'base|' + v.key
-// telemetry: one per key+author (latest capturedTime)
-dk = 'tel|' + v.key + '|' + v.author
-// amendment/refinement: one per key+type+author (latest capturedTime)
-dk = category + '|' + key + '|' + type + '|' + author
-```
-
-After dedup: ~9116 events (still not ~2500 — being investigated).
-
-**telemetryAll dedup** (separate from error engine dedup):
-```js
-dk = v.key + '|' + v.author  // keeps one telemetry record per event per viewer
-```
-This gives correct `openedKeys` count (1005 for reviewer 2119).
+Cache inflation: match 1294780 showed 10,051 events when true count is ~2,500.
+Strategy: base=one per key; telemetry=one per key+author (latest CT); amendment/refinement=one per key+type+author (latest CT).
 
 ---
 
 ## 22. Reviewer Detection — Top Viewer Only (v7.8.x)
 
-**Problem:** 1935 (secondary collector, views=150) and 2909 (playthrough, views=23)
-were being included as reviewers alongside 2119 (views=1005).
-
-**Rule confirmed:**
-- Reviewer = author with HIGHEST views count who is NOT the primary collector AND has amendments
-- Only ONE reviewer (the top viewer) — not all viewers
-- 1935 is secondary collector (949 base events despite having views=150)
-- 2909 is playthrough viewer (no amendments → excluded)
-
-**Bridge implementation:**
-```js
-candidates.sort((a,b) => viewCounts[b] - viewCounts[a])
-reviewerIds = [candidates[0]]  // top viewer only
-```
-
-**AuditPage implementation:**
-```js
-viewers.sort((a,b) => (b.views||0) - (a.views||0))
-const topViewer = viewers[0]
-if (!isPrimaryCollector) trueReviewerIds.push(Number(topViewer.author))
-```
+Reviewer = author with HIGHEST views who is NOT primary collector AND has amendments.
+Only ONE reviewer. 1935 is secondary collector (base events > 0 despite views=150).
 
 ---
 
-## 23. Reviewed Count = Telemetry Viewed Keys (v7.8.x, confirmed 2026-07-28)
+## 23. Reviewed Count = Telemetry Viewed Keys (confirmed 2026-07-28)
 
-**Confirmed correct number for match 1294780:** 1005 unique events viewed by reviewer 2119.
-
-**Why NOT 736:** Earlier test was on a partially loaded cache. Full cache has 2375 base events.
-**Why NOT 1122:** telemetryAll was not deduplicated, including 1935 (150 views) in openedKeys.
-**Why 1005 is correct:** All 1005 activations are on 2026-07-24 by author 2119 only.
-Coverage: 42% of 2375 base events — reviewer only checks events in their assigned categories.
-
-**Error rate validation:**
-- Phase 1 (2:47–3:25 PM): 358 events, 17 errors, 4.7% error rate, 3.1s avg watch
-- Phase 2 (3:41–4:03 PM): 647 events, 30 errors, 4.6% error rate, 1.3s avg watch
-- Combined: 1005 events, 47 errors, 4.7% error rate, 1.9s avg watch
-- 16-minute gap between phases = break
+1005 unique events viewed by reviewer 2119 on match 1294780.
+Coverage: 42% of 2375 base events. Reviewer only checks assigned categories.
 
 ---
 
-## 24. Speed Metric Definitions (confirmed 2026-07-28)
+## 24. Speed Metric Definitions (confirmed 2026-07-28, updated 2026-08-08)
 
 **Gap threshold:** 5 minutes (GAP_MS = 5 * 60 * 1000)
-If any role abandons work for >5 minutes, that gap is excluded from active time.
 
-**Collector tagging speed:**
-- Use `capturedTime` of base events (first→last, excluding gaps >5min)
-- Report per author separately (main collector vs secondary collector)
-- Option A (base only) = pure tagging speed
-- Option B (base + refinements) = collection work total
-- Option C (all work) = full session including self-corrections
-- **Recommended default: Option B** for total collection time
+**Module windows (confirmed via console testing):**
+| Module | Window definition | Notes |
+|--------|-------------------|-------|
+| Base+Extras | Main: half-start→half-end capturedTime; Secondary: first→last base event capturedTime | Includes extras refs/amends |
+| Pressure | first→last pressure base event | pressure-start/end only |
+| Players | first→last players ref/amend | |
+| Location | first→last location ref/amend | 1935 did 0 location on match 1294780 |
+| Freeze-frame | first→last FF+goal-location+impact ref/amend | Very sparse, multi-day normal |
 
-**Confirmed numbers for match 1294780 (Option B):**
-| Author | Role | Active time | Events | Speed |
-|--------|------|-------------|--------|-------|
-| 3416 | Main Collector | 5:49:42 | 3711 | 637 ev/hr |
-| 1935 | Secondary Collector | 3:53:20 | 2316 | 596 ev/hr |
-| 2119 | Reviewer | 0:32:31 | 1005 | 1854 ev/hr |
+**Multi-day handling:** 1935 worked Dec 30→Dec 31 on match 1294780.
+18-hour overnight gap excluded by 5-min gap rule. Active time correct at 2h 1m.
 
-**Reviewer speed:**
-- Use `activatedAt` → `deactivatedAt` from telemetry payload
-- Cap each event watch at 5 minutes (one event had 15.9min → capped to 5min)
-- 1005 events deduped, 32:31 active, 1854 ev/hr
-- Avg watch: 1.9s overall (4.8s for amended events, 2.5s for approved)
+**Session exclusion rule:** Sessions (groups of events between 5-min gaps) with 0 base AND 0 extras
+are excluded from base+extras active time. Pure-refinement sessions don't count toward base speed.
 
-**Per-module speed (Option A, 5min gap, confirmed):**
-| Module | Author | Records | Active | Speed |
-|--------|--------|---------|--------|-------|
-| players | 1935 | 816 | 1:13:57 | 662 ev/hr |
-| location | 3416 | 761 | 1:05:46 | 694 ev/hr |
-| extras | 1935 | 520 | 0:36:42 | 850 ev/hr |
-| players | 3416 | 747 | 1:39:08 | 452 ev/hr |
-| extras | 3416 | 759 | 2:56:42 | 258 ev/hr |
-| freeze-frame | 1935 | 13 | 0:08:33 | 91 ev/hr · 39.5s/record |
-| freeze-frame | 3416 | 14 | 0:19:43 | 43 ev/hr · 84.6s/record |
-
-**Freeze-frame note:** gaps are inherently large (tied to shot events).
-3416: median gap 285.5s between FF records.
-1935: median gap 437.4s between FF records.
-Speed metric is valid (Option A, 5min gap) but context matters.
-
-**Reviewer amendment speed per module:**
-| Module | Amendments | Active | Speed | Avg/rec |
-|--------|-----------|--------|-------|---------|
-| players | 18 | 20:57 | 52/hr | 69.9s |
-| location | 9 | 5:09 | 105/hr | 34.4s |
-| extras | 3 | 2:27 | 73/hr | 49.0s |
-| freeze-frame | 4 | 2:12 | 109/hr | 33.2s |
-| impact | 4 | 1:24 | 170/hr | 21.2s |
-| goal-location | 2 | 2:32 | 47/hr | 76.1s |
+**Confirmed numbers (match 1294780, half 1):**
+| Module | Main (3416) | Secondary (1935) | Overall Half |
+|--------|-------------|------------------|--------------|
+| Base+Extras | 2h 40m / 735/hr | 2h 1m / 650/hr | 4h 41m / 699/hr |
+| Pressure | 30m 59s / 385/hr | 22m 56s / 217/hr | 53m 56s / 314/hr |
+| Players | 1h 41m / 515/hr | 1h 13m / 780/hr | 2h 55m / 627/hr |
+| Location | 1h 11m / 737/hr | N/A (0 events) | 1h 11m / 737/hr |
+| Freeze-frame | 34m 3s / 79/hr | 23m 3s / 107/hr | 57m 6s / 90/hr |
 
 ---
 
 ## 25. Collector Self-Corrections Are NOT Reviewer Errors (confirmed 2026-07-28)
 
-**Match 1294780 self-correction counts:**
-- 3416: 1007 `amendment/deletion` + 198 `amendment/base` + 124 `amendment/players` + 117 `amendment/location` = 1528 total self-amendments
-- 1935: 63 `amendment/deletion` + 82 `amendment/base` + 145 `amendment/players` = 310 total self-amendments
-
-These are collectors fixing their own work during collection — NOT reviewer errors.
-Only amendments authored by the reviewer (2119) count as errors in MARK's scoring.
+3416: 1528 total self-amendments. 1935: 310 total self-amendments.
+Only reviewer (2119) amendments count as errors.
 
 ---
 
 ## 26. Freeze Frame Payload Structure (confirmed 2026-07-28)
 
-```js
-payload.freezeFrame.players = [
-  { id: 0,  // position INDEX (not player identity)
-    playerId: 1049,  // actual player identity
-    groupIndicator: 'TEAM_A',  // 'TEAM_A', 'TEAM_B', 'REF', 'KEEPER'
-    pitchPosition: { default: { x: 45.2, y: 30.1 } }
-  }, ...
-]
-payload.freezeFrame.roles = {
-  keeper:   [3],  // array of INDEX values into players array
-  shooter:  [7],
-  opponent: [13]
-}
+`roles.keeper/shooter/opponent` = INDEXES into players array, not playerIds.
+Must resolve: `players[roles.keeper[0]].playerId`.
+
+---
+
+## 27. Completeness Check — required-partials (confirmed 2026-08-08)
+
+Tag Once stores `required-partials` field in base event payload.
+Lists which modules each event requires (players, location, extras, goal-location, clocks).
+`clocks` is always ignored (metadata, not collectible).
+
+**Confirmed completeness numbers (match 1294780, half 1):**
+| Module | Main 3416 | Secondary 1935 | Combined |
+|--------|-----------|----------------|---------|
+| players | 59.9% ⚠️ | 93.0% ✅ | 73.6% |
+| location | 60.3% ⚠️ | 0.0% ❌ | 35.5% |
+| extras | 99.1% ✅ | 93.4% ✅ | 96.7% |
+| goal-location | 57.1% ⚠️ | 90.0% ✅ | 70.8% |
+
+---
+
+## 28. A/B/C Score Methods (confirmed 2026-08-08)
+
+**Live review:** Tracker button IPC tap → `openQualityReviewToolWindow` → `categorizedEvents`
+**Completed matches:** Static event name → group mapping (0 unmapped on match 1294780)
+
+Static mapping confirmed:
+- A: shot, end-shot, goal-keeper, card, foul-committed, stoppage, end-stoppage, referee-ball-drop, out, camera-on, camera-off
+- B: clearance, interception, block, dribble, tackle, miscontrol, shield, fifty-fifty, hold-up-duel, positioning-duel, leg-stretch-duel, separation-duel
+- C: ball-recovery, pressure-start, pressure-end
+- Others: pass, reception, unknown-pass-end, everything else
+
+**Confirmed scores (match 1294780):** A=82%, B=94%, C=97%, Others=98%
+
+---
+
+## 29. Half Quality Score (confirmed 2026-08-08)
+
+**Definition:** errors / total collector base events (not just reviewed events)
+**Denominator:** all base events by collector, excluding those deleted by anyone
+**Numerator:** unique error keys from 5-rule engine attributed to that collector
+**Formula:** `(denominator - errors) / denominator × 100`
+
+**Confirmed (match 1294780):**
+- Collector 3416: denominator=1284, errors=34, score=97.6% (MARK shows 97%)
+- Collector 1935: denominator=947, errors=0, score=100%
+- Combined: 1284 events
+
+**Decision: collector-to-collector deletions NOT excluded from denominator.**
+When 3416 deleted 886 of 1935's events, those 886 still count toward 1935's denominator.
+Reason: 1935 did the work, it counts regardless of whether 3416 cleaned it up.
+
+---
+
+## 30. Validation Error Replication from Apollo Cache (confirmed 2026-08-08)
+
+**Investigation:** Tried to find validation error history in Tag Once.
+**All locations checked — no history found:**
+- Apollo cache: ValidationLog objects computed on-demand, not persisted
+- localStorage/sessionStorage: no validation data
+- IndexedDB: only Firebase auth
+- File system (AppData): no validation logs
+- All 19 IPC channels: no history payload
+- React fiber tree: no validation state
+- Network calls: zero network calls during validation (purely local)
+- Electron remote: not available
+
+**Key finding:** `openValidationWindow` IPC channel = errors exist.
+If only `validationApiResponse` fires with `currentState: loaded` → 0 errors.
+
+**Confirmed replication rule (matches Tag Once exactly):**
+```javascript
+// validation errors = non-deleted base events where required-partials has missing refinements
+const deletedKeys = new Set(halfEvents.filter(v=>v.category==='amendment'&&v.type==='deletion').map(v=>v.key))
+baseHalf.forEach(v => {
+  if (deletedKeys.has(v.key)) return  // CRITICAL: skip deleted events
+  const required = (v.payload?.['required-partials']||[]).filter(p=>p!=='clocks')
+  const missing = required.filter(m => !refinementMap[v.key]?.has(m))
+  // missing.length > 0 = validation error
+})
 ```
 
-**Critical:** roles values are player array INDEXES, not playerIds.
-Must resolve: `players[roles.keeper[0]].playerId` to get actual player identity.
+**Confirmed on:**
+- Match 1444657 half 1: computed=0, live IPC=0 → ✅ PERFECT MATCH
+- Match 1294780 half 1: computed=418 events with errors, live IPC=977 errors (different count
+  because 1294780 was not fully clean — 418 unique events, 977 = total missing partial instances)
+
+**Why 229 vs 0 discrepancy (resolved):**
+First attempt showed 229 computed vs 0 live on match 1444657.
+Root cause: we weren't filtering out deleted events from the denominator.
+After adding `deletedKeys` filter: 229 → 0. Perfect match.
 
 ---
 
-## 27. Reviewer Behaviour Analysis (confirmed 2026-07-28)
+## 31. Productivity Formula (decided 2026-08-08, NOT YET BUILT)
 
-**Match 1294780 reviewer (2119) behaviour:**
-- Total events reviewed: 1005
-- Events with amendments (errors): 47 (4.7%)
-- Events approved without amendment: 958 (95.3%)
-- Events watched <2s: 905 (867 clean approvals, 38 errors caught despite fast view)
-- Events with deactivation timestamp: 1005 (100% complete)
-- One event had 15.9 min watch time (reviewer was distracted/paused)
+**Formula:** total completed module-halves / 12
+- 6 modules × 2 halves = 12 total units = 1.0 productivity
+- Each module in each half = 1 unit if ≥95% complete, 0 if <95%
+- Validation = binary: 0 errors = 1 unit, any errors = 0 units
+- Pressure: binary — collector has pressure events in this half = done
 
-**Two-phase review pattern:**
-- Phase 1 (careful): 358 events, 3:25 PM cutoff, 4.7% error rate, 3.1s avg watch
-- Phase 2 (fast): 647 events, starts 3:41 PM, 4.6% error rate, 1.3s avg watch
-- Quality is consistent across both phases — reviewer not cutting corners in Phase 2
+**6 modules:**
+1. Base+Extras (extras completion ≥95%)
+2. Pressure (collector tagged pressure events in this half)
+3. Players (players completion ≥95%)
+4. Location (location completion ≥95%)
+5. Freeze-frame (goal-location completion ≥95%, fallback: freeze-frame refs exist)
+6. Validation (0 validation errors)
 
----
+**Examples:**
+- 6 modules done in half 1 only = 6/12 = 0.5
+- 6/6 half 1 + 3/6 half 2 = 9/12 = 0.75
+- All 12 = 12/12 = 1.0
 
-## 28. Metadata Events in Apollo Cache (observed 2026-07-28)
-
-Author 2119 has `metadata/metadata: 50` events in the cache.
-These are NOT amendments or refinements. They appear to be Tag Once's internal
-review completion markers (e.g. `qaIsReviewed = true`).
-MARK currently ignores these — they should NOT be counted in any error or speed metric.
+**Status: Console snippet confirmed working (see PRODUCTIVITY_RESEARCH.md). Not yet in bridge or AuditDashboard.**
 

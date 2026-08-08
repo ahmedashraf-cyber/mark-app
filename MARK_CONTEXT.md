@@ -1,7 +1,7 @@
 # MARK — Full Context
-**Version:** 7.8.2
-**Last updated:** 2026-07-28
-**Status:** Active — in use by Hudl Egypt reviewers. Error engine v7.8.x deployed.
+**Version:** 7.8.11
+**Last updated:** 2026-08-08
+**Status:** Active — in use by Hudl Egypt reviewers.
 
 ---
 
@@ -24,23 +24,22 @@
 
 ```bash
 cd /home/claude
-git clone https://ahmedashraf-cyber:TOKEN@github.com/ahmedashraf-cyber/mark-app.git mark_push
-cd mark_push
+git clone https://ahmedashraf-cyber:TOKEN@github.com/ahmedashraf-cyber/mark-app.git mark_review2
+cd mark_review2
 git config user.email "ahmed.ashraf@hudl.com"
 git config user.name "Ahmed Ashraf"
 ```
 
-**Version bump rule — ALL 5 files must match:**
+**Version bump rule — ALL 6 files must match:**
 1. `package.json` → `"version": "X.Y.Z"`
 2. `src-tauri/Cargo.toml` → `version = "X.Y.Z"`
 3. `src-tauri/tauri.conf.json` → `"version": "X.Y.Z"` + `"title": "MARK X.Y.Z — Review App"`
 4. `src-tauri/src/bridge_script.js` → `const BRIDGE_VERSION = 'X.Y.Z'`
 5. `src-tauri/src/main.rs` → `const ASAR_MARKER: &str = "<!-- MARK_BRIDGE_INJECTED vX.Y.Z -->"`
+6. `src/hooks/useUpdateCheck.js` → `export const CURRENT_VERSION = 'X.Y.Z'`
 
-**CRITICAL:** ASAR_MARKER must ALWAYS be bumped with every version. If Tag Once
-already has the old marker in app.html, the new bridge will never be injected.
-
-**After pushing:** wait for GitHub Actions green → install new `.exe` from Releases.
+**CRITICAL:** ASAR_MARKER must ALWAYS be bumped. Bridge won't reinject if marker matches.
+**After pushing:** wait for GitHub Actions green → install new `.exe` from Releases → re-embed bridge.
 
 ---
 
@@ -68,180 +67,172 @@ Tag Once (Electron app)                    MARK (Tauri app)
 │  bridge_script.js injected      │ WS    │  useSync.js              │
 │                                 │◄─────►│  localhost:9001          │
 │  Apollo cache → extract()       │       │                          │
-│  Error engine (5 rules)         │       │  QuickSummary (scores)   │
+│  Error engine (5 rules)         │       │  AuditDashboard          │
 │  Reviewer/collector detection   │       │  AmendmentsTable         │
-│  Telemetry dedup                │       │  FF errors table         │
-│  Score recalculation            │       │  CSV export              │
+│  Speed computation              │       │  FF errors table         │
+│  Half Quality Score             │       │  CSV export              │
+│  A/B/C static mapping           │       │  Save Audit button       │
 └─────────────────────────────────┘       └──────────────────────────┘
 ```
 
 **Bridge sends to MARK (qaResultsResponse):**
-- `baseEvents[]` — viewed base events (reviewer's openedKeys)
-- `amendments[]` — all amendments (all authors)
-- `refinements` — map of key_type → payload
-- `collectorId`, `collectorIds`, `reviewerId`, `reviewerIds`
-- `identities[]` — HR codes + names from EventHistory sweep
-- `lineupPlayers[]` — home + away players with jersey numbers
-- `moduleScores` — legacy module score breakdown
-- `reviewGroupScores` — recalculated A/B/C/Others scores (uses 5-rule errors)
-- `computedErrors[]` — non-FF errors from 5-rule engine
-- `computedFFErrors[]` — freeze frame errors (shots only)
-- `diagnostics` — debug info
+```javascript
+{
+  type: 'qaResultsResponse',
+  matchId, bridgeVersion, videoTime,
+  baseEvents[],          // reviewer-viewed base events
+  amendments[],          // all amendments (all authors)
+  refinements,           // map: key_type → payload
+  collectorId,           // primary collector (back-compat)
+  collectorIds[],        // all collectors, SORTED: main first (has half-start/end anchors), then by base count
+  reviewerId, reviewerIds[],
+  identities[],          // HR codes + names
+  lineupPlayers[],       // home + away players with jersey numbers
+  moduleScores,          // legacy per-module scores
+  reviewGroupScores,     // A/B/C/Others scores (recalculated using 5-rule errors)
+  computedErrors[],      // non-FF errors from 5-rule engine
+  computedFFErrors[],    // freeze frame errors (shots only)
+  halfQualityScores,     // { combined: {score,denominator,errors}, perCollector: {[id]: ...} }
+  speedData,             // { [collectorId]: { baseExtras, pressure, players, location, freezeFrame } }
+  diagnostics,           // debug info (universeBase, reviewed, telemetry, work, baseAuthors)
+  usedTelemetry,
+  environment,
+  ts
+}
+```
 
 ---
 
 ## Error Engine — 5 Rules (v7.8.x)
 
-Computed in bridge, pre-sent to MARK. All 5 rules confirmed via console testing
-on match 1294780 (Saint-Étienne vs. Angers, 1st Half).
+See DECISIONS.md §20 for full details. Computed in bridge, pre-sent to MARK.
 
-**Rule 1:** Self-edits excluded — reviewer amending their own added events = not errors
-**Rule 2:** Same value excluded — old payload == new payload = not an error
-**Rule 3:** Deleted+Added / Deleted+Edited — pair deletions with added events within ±1s
-  - same event name = `Deleted+Edited`
-  - different event name = `Deleted+Added`
-**Rule 4:** Location threshold — euclidean distance > 5 units only
-  - `location`: `payload.location.actual.x/y`
-  - `goal-location`: `payload['goal-location'].x/y`
-**Rule 5:** Freeze frame (shots only) — join by `playerId`, resolve roles by index
+**Rule 1:** Self-edits excluded
+**Rule 2:** Same value excluded
+**Rule 3:** Deleted+Added / Deleted+Edited (±1000ms)
+**Rule 4:** Location threshold (euclidean > 5 units)
+**Rule 5:** Freeze Frame — shots only, join by playerId, resolve role indexes
 
-**Key deduplication** (Apollo cache inflation fix):
-```js
-base:       dk = 'base|' + key              // one per key
-telemetry:  dk = 'tel|' + key + '|' + author // one per key+author
-amendments: dk = category+'|'+key+'|'+type+'|'+author
+---
+
+## Collector Detection (v7.8.10+)
+
+```javascript
+const COLLECTOR_WORK_MIN = 600  // base + refinement records
+
+// Detection: high base+refinement work
+let collectorIds = [...allAuthors].filter(a =>
+  ((baseAuthorCounts[a]||0) + (refinementCounts[a]||0)) > COLLECTOR_WORK_MIN
+)
+
+// Sort: main first (has half-start+half-end), then by base count descending
+collectorIds.sort((a, b) => {
+  const aHasAnchors = hasHalfStart(a) && hasHalfEnd(a)
+  const bHasAnchors = hasHalfStart(b) && hasHalfEnd(b)
+  if (aHasAnchors && !bHasAnchors) return -1
+  if (!aHasAnchors && bHasAnchors) return 1
+  return baseAuthorCounts[b] - baseAuthorCounts[a]
+})
 ```
 
-**Confirmed numbers for match 1294780:**
-- computedErrors: 41–43 | computedFFErrors: 1 | overall: 96%
-- Reviewed: 1005 events | Errors: 43 | Score: 96%
+---
+
+## Score Types
+
+### Overall Score
+`(reviewed - errors) / reviewed × 100`
+- `reviewed` = unique keys from reviewer telemetry (deduped)
+- `errors` = unique error keys from 5-rule engine
+
+### Half Quality Score
+`(denominator - errors) / denominator × 100`
+- `denominator` = all base events by collector, excluding deleted-by-anyone
+- `errors` = unique error keys attributed to that collector
+
+### A/B/C Scores
+- Live review: tracker button IPC (`openQualityReviewToolWindow`)
+- Completed matches: static event name → group mapping
+- A=shot/card/foul/keeper..., B=clearance/block/dribble/tackle..., C=ball-recovery/pressure
+
+### Module Completeness (not a score, a % indicator)
+- `(filled/requires) × 100` per module per collector
+- Requires = events with that module in `required-partials`, non-deleted
+- Filled = events with a refinement of that type
+- Threshold for "done": ≥95%
 
 ---
 
-## Reviewer Detection
+## Speed Data Structure (v7.8.11+)
 
-**Rule:** Reviewer = author with highest telemetry views who is NOT the primary
-collector AND has at least 1 amendment. Only the TOP viewer qualifies.
-
-**Bridge:**
-```js
-candidates.sort((a,b) => viewCounts[b] - viewCounts[a])
-reviewerIds = candidates.length > 0 ? [candidates[0]] : []
-```
-
-**AuditPage (client-side fallback):**
-```js
-viewers.sort((a,b) => (b.views||0) - (a.views||0))
-const topViewer = viewers[0]
-const isPrimaryCollector = topViewer.author === topBaseAuthor.author && topViewer.base > 100
-if (!isPrimaryCollector) trueReviewerIds.push(Number(topViewer.author))
-```
-
-**Match 1294780 example:**
-- 3416: views=0, base=1416 → Main Collector
-- 1935: views=150, base=949 → Secondary Collector (NOT reviewer despite having views)
-- 2909: views=23, amendments=0 → Playthrough viewer (excluded)
-- 2119: views=1005 → **Reviewer** ✅
-
----
-
-## Score Calculation
-
-**Overall:** `(viewed - errors) / viewed * 100`
-**A/B/C/Others:** requires `capturedCats` from tracker button click during live review
-**noCats:** when tracker button not found (completed match), only Overall is shown
-
-**Viewed count:** unique event keys from reviewer's deduplicated telemetry
-- Dedup: one record per `key+author` (latest capturedTime)
-- Match 1294780: 1005 unique keys (confirmed correct)
-
-**Error keys:** unique event keys from computedErrors + computedFFErrors
-- Does NOT use raw amendment count (would include collector self-corrections)
-- Does NOT use all viewer telemetry (would include playthrough viewers)
-
----
-
-## WebSocket Timeout
-
-`useSync.js` timeout for `qaResultsResponse`: **30 seconds**
-(increased from 8s to handle large matches with many events)
-
----
-
-## Freeze Frame Payload Structure
-
-```js
-payload.freezeFrame = {
-  players: [
-    { id: 0,           // position INDEX (not player identity)
-      playerId: 1049,  // actual player identity — use this for comparison
-      groupIndicator: 'TEAM_A',  // TEAM_A, TEAM_B, REF, KEEPER
-      pitchPosition: { default: { x: 45.2, y: 30.1 } }
-    }
-  ],
-  roles: {
-    keeper:   [3],   // INDEX into players array (NOT playerId)
-    shooter:  [7],
-    opponent: [13]
+```javascript
+speedData = {
+  [collectorId]: {
+    baseExtras: {
+      activeMs, totalEvents, speedPerHour,
+      completionRate,   // extras completion %
+      scenario,         // 'base+extras' | 'base only' | 'extras only'
+      windowMethod,     // 'half-start → half-end' | 'first → last base'
+      multiDay,         // boolean
+    },
+    pressure:    { activeMs, totalEvents, speedPerHour, completionRate: null },
+    players:     { activeMs, totalEvents, speedPerHour, completionRate },  // players %
+    location:    { activeMs, totalEvents, speedPerHour, completionRate },  // location %
+    freezeFrame: { activeMs, totalEvents, speedPerHour, completionRate },  // goal-location %
   }
 }
 ```
 
-**Resolve role:** `players[roles.keeper[0]].playerId`
-**Error types:** Wrong Keeper/Shooter/Opponent (role changed), Added/Deleted Player,
-Wrong Team (groupIndicator changed), Wrong Location (euclidean > 5, matched players only)
+---
+
+## AuditDashboard Layout (v7.8.7+)
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  [Overall] [Half Quality] [A-Review] [B-Review] [C-Review] [Others]  ← 6 score cards
+├──────────────────────────────────┬──────────────────────────────┤
+│  MAIN COLLECTOR (large)          │  SECONDARY (compact 280px)   │
+│  • HR code + name                │  • HR code + name            │
+│  • Half Quality %                │  • Half Quality %            │
+│  • Total active time (sum)       │  • Total active time         │
+│  • Per-module breakdown:         │  • Compact module rows       │
+│    Base+Extras  2h40m  735/hr    │                              │
+│    Pressure     30m    385/hr    │                              │
+│    Players      1h41m  515/hr 59.9% │                          │
+│    Location     1h11m  737/hr 60.3% │                          │
+│    Freeze-frame 34m    79/hr  57.1% │                          │
+├──────────────────────────────────┴──────────────────────────────┤
+│  ERRORS TABLE (always visible, first 5 rows, expand button)     │
+│  TIME | EVENT | ERROR TYPE | MODULE | COLLECTOR | KEY           │
+├─────────────────────────────────────────────────────────────────┤
+│  STATS BAR: 1005 REVIEWED  41 ERRORS  1284 HALF TOTAL  [Report] │
+└─────────────────────────────────────────────────────────────────┘
+```
 
 ---
 
-## Speed Metrics (confirmed 2026-07-28)
+## Firestore Collections
 
-**Gap threshold:** 5 minutes — gaps >5min excluded from active time calculation
+### `mark_audit_sessions`
+One document per audit. Deleted and recreated on re-audit (no duplicates).
+Key fields: sessionId, matchId, half, reviewerId, collectorIds, qualityScore,
+qualityScoreA/B/C, moduleScores, halfQualityScore (not yet saved), speedData (not yet saved).
 
-**Match 1294780 confirmed speeds:**
-
-| Role | Author | Active time | Speed |
-|------|--------|-------------|-------|
-| Main Collector | 3416 | 5:49:42 (base+refs) | 637 ev/hr |
-| Secondary Collector | 1935 | 3:53:20 (base+refs) | 596 ev/hr |
-| Reviewer | 2119 | 0:32:31 (watch time) | 1854 ev/hr |
-
-**Per-module speeds** — see DECISIONS.md #24 for full table.
-
-**Reviewer two-phase pattern:**
-- Phase 1 (2:47–3:25 PM): careful review, 358 events, 3.1s avg watch
-- Phase 2 (3:41–4:03 PM): fast approval, 647 events, 1.3s avg watch
-- Error rate consistent across both phases (~4.7%)
+### `mark_audit_amendments`
+One document per reviewer amendment, linked via sessionId.
+Key fields: key, type, originalName, author, capturedTime, videoTimestamp, payload.
 
 ---
 
-## Pending Work (as of 2026-07-28)
+## Known Limitations
 
-1. **Apollo cache dedup** — deduped count is 9116 not ~2500. Root cause unclear.
-   The error engine still produces correct results (41-43 errors) because the
-   dedup strategy correctly handles amendments/refinements per key+type+author.
-   The 9116 vs 2500 discrepancy needs further investigation.
-
-2. **A/B/C scores** — show `—` for completed matches (tracker button not found).
-   Only works during live review when the tracker button is available.
-   Consider capturing `capturedCats` during the review session and storing in Firestore.
-
-3. **Speed metrics in UI** — speed per role per module is confirmed from console
-   testing but not yet displayed in MARK's UI. Awaiting permission to build.
-
-4. **FIELD pending roles** — Training Supervisor and Trainee roles not yet built.
-
-5. **Score denominator alignment** — MARK's denominators run ~3–7% higher than
-   the Analysis Team's reference. Reconciliation pending direct collaboration
-   with the Analysis Team.
-
----
-
-## Known Issues
-
-| Issue | Status | Details |
-|-------|--------|---------|
-| deduped=9116 | Open | Should be ~2500. Error engine still correct. |
-| A/B/C empty on completed matches | By design | Need capturedCats from live session |
-| 1935 tagging dates (Dec 2025) | By design | Match was re-tagged months later |
-| blueprint-icons font 404s | Cosmetic | Tag Once fonts not in MARK's bundle |
+| Limitation | Detail | Status |
+|------------|--------|--------|
+| Apollo cache dependency | Events not loaded into Tag Once = invisible to MARK | Known, ~0.08% miss rate |
+| One reviewer per half | Top telemetry viewer only | By design |
+| A/B/C null on completed | Tracker button sends no payload on completed matches | Fixed v7.8.6 (static mapping) |
+| Half Quality Score not in Firestore | Computed but not saved to DB | Pending |
+| Speed data not in Firestore | Computed but not saved to DB | Pending |
+| `totalBaseEvents` in Firestore = reviewed | Should be total collector base events | Pending fix |
+| Productivity not built | Formula confirmed, console tested, not in MARK yet | See PRODUCTIVITY_RESEARCH.md |
+| Validation history not in Tag Once | Tag Once computes errors on-demand, no history | Confirmed after exhaustive search |
 
