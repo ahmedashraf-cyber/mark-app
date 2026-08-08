@@ -1,5 +1,5 @@
 (async function(){
-  const BRIDGE_VERSION = '7.8.3';
+  const BRIDGE_VERSION = '7.8.4';
   if(window.__MARK_BRIDGE_VERSION__ === BRIDGE_VERSION){console.log('[MARK] bridge already running (v' + BRIDGE_VERSION + ')');return;}
   if(window.__MARK_BRIDGE_STOP__) window.__MARK_BRIDGE_STOP__();
   window.__MARK_BRIDGE__ = true;
@@ -1406,6 +1406,67 @@
           newReviewGroupScores = null;
         }
 
+        // ── Half Quality Score ─────────────────────────────────────────────────
+        // Denominator = total clean base events by collector in the full half
+        //   (all base events authored by collector, excluding those deleted by anyone)
+        // Numerator   = unique error keys attributed to that collector (ownership rules)
+        // One combined score + per-collector breakdown when 2+ collectors
+        let halfQualityScores = null;
+        try {
+          if (computedErrors !== null && computedFFErrors !== null) {
+            // All deleted keys (by anyone)
+            const allDeletedKeys = new Set(
+              Object.values(cache)
+                .filter(v => v.__typename === 'Event' && v.category === 'amendment' && v.type === 'deletion')
+                .map(v => v.key)
+            );
+
+            // Per-collector clean denominator (unique base keys, excl. deleted)
+            const collDenom = {};
+            collectorIds.forEach(c => { collDenom[c] = new Set(); });
+            allBase.forEach(v => {
+              if (!collDenom[v.author]) return;
+              if (allDeletedKeys.has(v.key)) return;
+              collDenom[v.author].add(v.key);
+            });
+
+            // Per-collector error keys (from 5-rule engine attribution)
+            const allErrKeys = [...computedErrors, ...computedFFErrors];
+            const collErrors = {};
+            collectorIds.forEach(c => { collErrors[c] = new Set(); });
+            allErrKeys.forEach(e => {
+              const c = e.collectorId;
+              if (collErrors[c] != null) collErrors[c].add(e.key);
+            });
+
+            // Combined denominator (all collectors combined, no double-count)
+            const combinedDenomKeys = new Set();
+            collectorIds.forEach(c => collDenom[c].forEach(k => combinedDenomKeys.add(k)));
+            const combinedErrKeys = new Set(allErrKeys.map(e => e.key));
+
+            const mkHQ = (denom, errKeys) => {
+              if (denom === 0) return { score: null, denominator: 0, errors: 0 };
+              const errs = errKeys.size;
+              return { score: Math.round(((denom - errs) / denom) * 100), denominator: denom, errors: errs };
+            };
+
+            // Per-collector breakdown
+            const perCollector = {};
+            collectorIds.forEach(c => {
+              perCollector[c] = mkHQ(collDenom[c].size, collErrors[c]);
+            });
+
+            halfQualityScores = {
+              combined:     mkHQ(combinedDenomKeys.size, combinedErrKeys),
+              perCollector,
+            };
+            console.log('[MARK] halfQualityScores:', JSON.stringify(halfQualityScores));
+          }
+        } catch (hqErr) {
+          console.warn('[MARK] halfQualityScores failed:', hqErr && hqErr.message);
+          halfQualityScores = null;
+        }
+
         // ── Lineup players (home + away with team info) ───────────────────────
         // Used by MARK to resolve player names/jersey numbers in amendments
         let lineupPlayers = [];
@@ -1466,6 +1527,7 @@
           reviewGroupScores: newReviewGroupScores || reviewGroupScores,
           computedErrors,
           computedFFErrors,
+          halfQualityScores,
           diagnostics,
           usedTelemetry,
           environment: (typeof process !== 'undefined' && process.env && process.env.LIVE_COLLECTION_SERVICE_URL)

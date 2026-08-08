@@ -89,6 +89,65 @@ function AmendBadge({ type }) {
 
 // ── Mini score card ───────────────────────────────────────────────────────────
 // ── Score card (equal size for all 4) ─────────────────────────────────────────
+function MiniScoreCard({ label, score, denominator, errors, denomLabel = 'TOTAL', color }) {
+  const displayColor = score !== null
+    ? (score >= 80 ? '#30D158' : score >= 60 ? '#FFD60A' : '#FF453A')
+    : color
+  const pct = score !== null ? score : 0
+  const r = 24
+  const circ = 2 * Math.PI * r
+  const offset = circ - (pct / 100) * circ
+
+  return (
+    <div style={{
+      background: 'var(--bg-2)', border: `1px solid ${score !== null ? displayColor + '30' : 'var(--b-1)'}`,
+      borderRadius: 10, padding: '10px 8px',
+      display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6,
+      opacity: score === null ? 0.4 : 1,
+    }}>
+      <div style={{ fontSize: 8, fontWeight: 800, color: displayColor, letterSpacing: 1.2, textTransform: 'uppercase' }}>
+        {label}
+      </div>
+      <div style={{ position: 'relative', width: 58, height: 58 }}>
+        <svg width="58" height="58" viewBox="0 0 58 58">
+          <circle cx="29" cy="29" r={r} fill="none" stroke="var(--b-2)" strokeWidth="5"/>
+          {score !== null && (
+            <circle cx="29" cy="29" r={r} fill="none"
+              stroke={displayColor} strokeWidth="5"
+              strokeDasharray={circ} strokeDashoffset={offset}
+              strokeLinecap="round"
+              style={{ transform: 'rotate(-90deg)', transformOrigin: '50% 50%',
+                transition: 'stroke-dashoffset 1.2s cubic-bezier(0.16,1,0.3,1)' }}
+            />
+          )}
+        </svg>
+        <div style={{
+          position: 'absolute', inset: 0,
+          display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+        }}>
+          <span style={{ fontFamily: 'Inter', fontWeight: 900, fontSize: 13, color: displayColor, lineHeight: 1 }}>
+            {score !== null ? score : '—'}
+          </span>
+          {score !== null && <span style={{ fontSize: 7, color: 'var(--t-3)', fontWeight: 700 }}>%</span>}
+        </div>
+      </div>
+      {score !== null && (
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <div style={{ textAlign: 'center' }}>
+            <div style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 11, fontWeight: 700, color: '#FF453A', lineHeight: 1 }}>{errors}</div>
+            <div style={{ fontSize: 7, color: 'var(--t-3)', fontWeight: 600, letterSpacing: 0.8, marginTop: 2 }}>ERRORS</div>
+          </div>
+          <div style={{ width: 1, height: 18, background: 'var(--b-2)' }}/>
+          <div style={{ textAlign: 'center' }}>
+            <div style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 11, fontWeight: 700, color: 'var(--t-2)', lineHeight: 1 }}>{denominator}</div>
+            <div style={{ fontSize: 7, color: 'var(--t-3)', fontWeight: 600, letterSpacing: 0.8, marginTop: 2 }}>{denomLabel}</div>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
 function ScoreCard({ label, score, reviewed, edited, color, isOverall = false }) {
   const displayColor = isOverall
     ? (score >= 80 ? '#30D158' : score >= 60 ? '#FFD60A' : '#FF453A')
@@ -369,20 +428,30 @@ function ExistingSessionView({ session, onSeek }) {
 }
 
 function QuickSummary({ results, score, abcScores, onFullReport }) {
+  const [breakdownOpen, setBreakdownOpen] = React.useState(false)
+
   const types = {}
   results.amendments.forEach(a => { types[a.type] = (types[a.type] || 0) + 1 })
   const uniqueEdited = computeErrorKeys(results.baseEvents, results.amendments, results.reviewerIds).size
 
   // Prefer recalculated bridge reviewGroupScores (rules 1-5) over client-side calc
-  // Bridge recalculates scores using accurate error keys from the 5 confirmed rules
   const rg = results.reviewGroupScores
   const getScore  = (key) => rg ? (rg[key]?.score  ?? null) : (abcScores?.[key]?.score  ?? null)
   const getViewed = (key) => rg ? (rg[key]?.viewed  ?? 0)    : (abcScores?.[key]?.reviewed ?? 0)
   const getErrors = (key) => rg ? (rg[key]?.errors  ?? 0)    : (abcScores?.[key]?.edited   ?? 0)
   const overallScore  = rg ? (rg.overall?.score  ?? score) : score
   const overallViewed = rg ? (rg.overall?.viewed ?? results.baseEvents.length) : results.baseEvents.length
-  // Use bridge reviewGroupScores overall.errors (accurate 5-rule unique error keys)
   const overallErrors = rg ? (rg.overall?.errors ?? uniqueEdited) : uniqueEdited
+
+  // Half Quality Score — from bridge halfQualityScores
+  const hq = results.halfQualityScores
+  const hqScore      = hq?.combined?.score      ?? null
+  const hqDenominator= hq?.combined?.denominator ?? 0
+  const hqErrors     = hq?.combined?.errors      ?? 0
+
+  // Per-collector breakdown — show when 2+ collectors
+  const collectorIds = results.collectorIds || (results.collectorId != null ? [results.collectorId] : [])
+  const hasMultiCollector = collectorIds.length > 1 && hq?.perCollector
 
   return (
     <div className="scale-in" style={{
@@ -390,14 +459,87 @@ function QuickSummary({ results, score, abcScores, onFullReport }) {
       borderRadius: 16, padding: '16px',
       boxShadow: '0 8px 32px rgba(0,0,0,0.5)',
     }}>
-      {/* 5 score cards: Overall + A + B + C + Others */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr 1fr', gap: 10, marginBottom: 14 }}>
-        <ScoreCard label="Overall"    score={overallScore}      reviewed={overallViewed}      edited={overallErrors}      color="var(--p2)" isOverall/>
-        <ScoreCard label="A - Review" score={getScore('A')}      reviewed={getViewed('A')}      edited={getErrors('A')}      color="#0A84FF"/>
-        <ScoreCard label="B - Review" score={getScore('B')}      reviewed={getViewed('B')}      edited={getErrors('B')}      color="#30D158"/>
-        <ScoreCard label="C - Review" score={getScore('C')}      reviewed={getViewed('C')}      edited={getErrors('C')}      color="#FFD60A"/>
-        <ScoreCard label="Others"     score={getScore('Others')} reviewed={getViewed('Others')} edited={getErrors('Others')} color="#BF5AF2"/>
+      {/* 6 score cards: Overall + Half Quality + A + B + C + Others */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr 1fr 1fr', gap: 10, marginBottom: 14 }}>
+        <ScoreCard label="Overall"      score={overallScore}      reviewed={overallViewed}      edited={overallErrors}      color="var(--p2)"  isOverall/>
+        <ScoreCard label="Half Quality" score={hqScore}           reviewed={hqDenominator}      edited={hqErrors}           color="#FF9F0A"     isOverall/>
+        <ScoreCard label="A - Review"   score={getScore('A')}      reviewed={getViewed('A')}      edited={getErrors('A')}      color="#0A84FF"/>
+        <ScoreCard label="B - Review"   score={getScore('B')}      reviewed={getViewed('B')}      edited={getErrors('B')}      color="#30D158"/>
+        <ScoreCard label="C - Review"   score={getScore('C')}      reviewed={getViewed('C')}      edited={getErrors('C')}      color="#FFD60A"/>
+        <ScoreCard label="Others"       score={getScore('Others')} reviewed={getViewed('Others')} edited={getErrors('Others')} color="#BF5AF2"/>
       </div>
+
+      {/* Per-collector breakdown — collapsed by default, only when 2+ collectors */}
+      {hasMultiCollector && (
+        <div style={{ marginBottom: 12 }}>
+          <button
+            onClick={() => setBreakdownOpen(o => !o)}
+            style={{
+              width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+              padding: '8px 12px', background: 'var(--bg-3)',
+              border: '1px solid var(--b-1)', borderRadius: 8,
+              cursor: 'pointer', color: 'var(--t-2)', fontSize: 10,
+              fontWeight: 700, letterSpacing: 1, textTransform: 'uppercase',
+            }}
+          >
+            <span>Per-Collector Breakdown ({collectorIds.length} collectors)</span>
+            <span style={{ fontSize: 12, transition: 'transform .2s', transform: breakdownOpen ? 'rotate(180deg)' : 'rotate(0deg)' }}>▾</span>
+          </button>
+
+          {breakdownOpen && (
+            <div style={{
+              marginTop: 8, display: 'grid',
+              gridTemplateColumns: `repeat(${collectorIds.length}, 1fr)`,
+              gap: 10,
+            }}>
+              {collectorIds.map(cId => {
+                const cHQ  = hq?.perCollector?.[cId]
+                const cHQScore = cHQ?.score      ?? null
+                const cHQDenom = cHQ?.denominator ?? 0
+                const cHQErr   = cHQ?.errors      ?? 0
+
+                // Per-collector overall: viewed events where base author = this collector
+                // Approximate from bridge diagnostics if available
+                const diag = results.diagnostics
+                const baseAuthors = diag?.baseAuthors || []
+                const baseByAuthor = baseAuthors.find(b => String(b.author) === String(cId))
+                const cLabel = `Collector ${cId}`
+
+                return (
+                  <div key={cId} style={{
+                    background: 'var(--bg-3)', border: '1px solid var(--b-1)',
+                    borderRadius: 10, padding: '12px',
+                  }}>
+                    {/* Collector label */}
+                    <div style={{
+                      fontSize: 9, fontWeight: 800, color: 'var(--t-3)',
+                      letterSpacing: 1.2, textTransform: 'uppercase', marginBottom: 10,
+                      textAlign: 'center',
+                    }}>
+                      {cLabel}
+                      {baseByAuthor && (
+                        <span style={{ color: 'var(--t-3)', fontWeight: 500 }}> · {baseByAuthor.base} base</span>
+                      )}
+                    </div>
+
+                    {/* Two mini score cards side by side */}
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+                      <MiniScoreCard
+                        label="Half Quality"
+                        score={cHQScore}
+                        denominator={cHQDenom}
+                        errors={cHQErr}
+                        denomLabel="TOTAL"
+                        color="#FF9F0A"
+                      />
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Bottom: stats + badges + full report */}
       <div style={{
@@ -407,9 +549,10 @@ function QuickSummary({ results, score, abcScores, onFullReport }) {
         border: '1px solid var(--b-1)',
       }}>
         {[
-          { label: 'REVIEWED', value: results.baseEvents.length, color: 'var(--t-1)' },
-          { label: 'ERRORS',   value: uniqueEdited,              color: '#FF453A' },
-          { label: 'UP TO',    value: fmt(results.videoTime),     color: 'var(--p2)' },
+          { label: 'REVIEWED',  value: results.baseEvents.length, color: 'var(--t-1)' },
+          { label: 'ERRORS',    value: uniqueEdited,               color: '#FF453A'    },
+          { label: 'HALF TOTAL',value: hqDenominator || '—',       color: '#FF9F0A'    },
+          { label: 'UP TO',     value: fmt(results.videoTime),      color: 'var(--p2)' },
         ].map(s => (
           <div key={s.label} style={{ display: 'flex', alignItems: 'baseline', gap: 5 }}>
             <span style={{ fontFamily: 'Inter', fontWeight: 900, fontSize: 16, color: s.color }}>{s.value}</span>
@@ -1667,8 +1810,9 @@ export default function AuditPage({ session, onBack, onFullReport, initialResult
       // ── Store bridge-computed errors (rules 1-5) ──────────────────────────
       // Bridge pre-computes all errors using the 5 confirmed rules.
       // Fall back gracefully if bridge didn't compute them.
-      data.computedErrors   = data.computedErrors   || null
-      data.computedFFErrors = data.computedFFErrors || null
+      data.computedErrors    = data.computedErrors    || null
+      data.computedFFErrors  = data.computedFFErrors  || null
+      data.halfQualityScores = data.halfQualityScores || null
 
       // ── Score calculation (reviewer-only, correct) ───────────────────────
       const errorKeys = computeErrorKeys(data.baseEvents, data.amendments, reviewerIds)
