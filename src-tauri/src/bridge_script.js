@@ -1,5 +1,5 @@
 (async function(){
-  const BRIDGE_VERSION = '7.8.9';
+  const BRIDGE_VERSION = '7.8.10';
   if(window.__MARK_BRIDGE_VERSION__ === BRIDGE_VERSION){console.log('[MARK] bridge already running (v' + BRIDGE_VERSION + ')');return;}
   if(window.__MARK_BRIDGE_STOP__) window.__MARK_BRIDGE_STOP__();
   window.__MARK_BRIDGE__ = true;
@@ -588,6 +588,16 @@
           ((baseAuthorCounts[a] || 0) + (refinementCounts[a] || 0)) > COLLECTOR_WORK_MIN
         );
         if (collectorIds.length === 0 && topBase != null) collectorIds = [parseInt(topBase)];
+        // Sort: collector with half-start+half-end first (main), then by base count descending
+        collectorIds.sort((a, b) => {
+          const aHasAnchors = Object.values(cache).some(v => v.__typename==='Event' && v.category==='base' && v.author===a && v.payload && v.payload.name==='half-start') &&
+                              Object.values(cache).some(v => v.__typename==='Event' && v.category==='base' && v.author===a && v.payload && v.payload.name==='half-end');
+          const bHasAnchors = Object.values(cache).some(v => v.__typename==='Event' && v.category==='base' && v.author===b && v.payload && v.payload.name==='half-start') &&
+                              Object.values(cache).some(v => v.__typename==='Event' && v.category==='base' && v.author===b && v.payload && v.payload.name==='half-end');
+          if (aHasAnchors && !bHasAnchors) return -1;
+          if (!aHasAnchors && bHasAnchors) return 1;
+          return (baseAuthorCounts[b]||0) - (baseAuthorCounts[a]||0);
+        });
         const collectorSet = new Set(collectorIds);
         collectorIdNum = collectorIds.length ? collectorIds[0] : null;   // primary (back-compat)
 

@@ -542,6 +542,21 @@ function AuditDashboard({ results, score, abcScores, onFullReport, session, iden
 
   // ── Collectors ────────────────────────────────────────────────────────────
   const collectorIds   = results.collectorIds || (results.collectorId != null ? [results.collectorId] : [])
+  const idMap          = identityMap || results.identityMap || {}
+  const resolveCollector = (id) => {
+    const entry = idMap[String(id)]
+    if (!entry) return { label: `Collector ${id}`, hr: String(id), name: '' }
+    const hr   = entry.hrcode || entry.hrCode || String(id)
+    const name = entry.name || ''
+    return { label: name ? `${hr} — ${name}` : hr, hr, name }
+  }
+
+  // Main = whoever has half-start + half-end in diagnostics, fallback to collectorIds[0]
+  const diagBaseAuthors = (results.diagnostics?.baseAuthors || []).map(b => b.author)
+  const hasAnchors = (id) => {
+    // Check diagnostics work profile or fallback: collectorIds[0] from bridge (already sorted)
+    return id === collectorIds[0]
+  }
   const mainCollector  = collectorIds[0] ?? null
   const secondaryIds   = collectorIds.slice(1)
   const hasSecondary   = secondaryIds.length > 0
@@ -743,7 +758,7 @@ function AuditDashboard({ results, score, abcScores, onFullReport, session, iden
             <div style={{ display:'flex', alignItems:'center', gap:10 }}>
               <div style={{ width:32, height:32, borderRadius:'50%', background:'rgba(232,89,12,0.12)', border:'1px solid rgba(232,89,12,0.3)', display:'flex', alignItems:'center', justifyContent:'center', fontSize:12, fontWeight:900, color:'var(--p2)', flexShrink:0 }}>M</div>
               <div>
-                <div style={{ fontSize:13, fontWeight:700 }}>Collector {mainCollector} <span style={{ fontSize:10, fontWeight:500, color:'var(--t-3)' }}>— Main</span></div>
+                <div style={{ fontSize:13, fontWeight:700 }}>{resolveCollector(mainCollector).label} <span style={{ fontSize:10, fontWeight:500, color:'var(--t-3)' }}>— Main</span></div>
                 <div style={{ fontSize:9, color:'var(--t-3)', marginTop:1 }}>
                   {speed?.[mainCollector]?.baseExtras?.windowMethod ?? 'half-start → half-end'}
                 </div>
@@ -785,7 +800,7 @@ function AuditDashboard({ results, score, abcScores, onFullReport, session, iden
               <div style={{ display:'flex', alignItems:'center', gap:7 }}>
                 <div style={{ width:26, height:26, borderRadius:'50%', background:'var(--b-1)', border:'1px solid var(--b-2)', display:'flex', alignItems:'center', justifyContent:'center', fontSize:10, fontWeight:700, color:'var(--t-3)', flexShrink:0 }}>S</div>
                 <div>
-                  <div style={{ fontSize:12, fontWeight:600, color:'var(--t-2)' }}>Collector {secId} <span style={{ fontSize:9, color:'var(--t-3)' }}>— Secondary</span></div>
+                  <div style={{ fontSize:12, fontWeight:600, color:'var(--t-2)' }}>{resolveCollector(secId).label} <span style={{ fontSize:9, color:'var(--t-3)' }}>— Secondary</span></div>
                   <div style={{ fontSize:9, color:'var(--t-3)', marginTop:1 }}>
                     {speed?.[secId]?.baseExtras?.windowMethod ?? 'first → last base'}
                     {speed?.[secId]?.baseExtras?.multiDay ? ' · ⚠️ multi-day' : ''}
@@ -856,7 +871,7 @@ function AuditDashboard({ results, score, abcScores, onFullReport, session, iden
                   <td style={{ padding:'5px 8px', fontWeight:600 }}>{err.eventName || '—'}</td>
                   <td style={{ padding:'5px 8px' }}><ErrorPill type={err.errorType || '—'} /></td>
                   <td style={{ padding:'5px 8px', color:'var(--t-3)' }}>{err.module || '—'}</td>
-                  <td style={{ padding:'5px 8px', fontFamily:'JetBrains Mono,monospace', color:'var(--t-3)', fontSize:10 }}>{err.collectorId ?? '—'}</td>
+                  <td style={{ padding:'5px 8px', fontFamily:'JetBrains Mono,monospace', color:'var(--t-3)', fontSize:10 }}>{err.collectorId != null ? resolveCollector(err.collectorId).hr : '—'}</td>
                   <td style={{ padding:'5px 8px', fontFamily:'JetBrains Mono,monospace', fontSize:9, color:'var(--t-3)' }}>{err.key ? err.key.slice(0,8) + '…' : '—'}</td>
                 </tr>
               ))}
