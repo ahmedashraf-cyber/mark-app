@@ -427,331 +427,387 @@ function ExistingSessionView({ session, onSeek }) {
   )
 }
 
-function QuickSummary({ results, score, abcScores, onFullReport }) {
+function AuditDashboard({ results, score, abcScores, onFullReport, session, identityMap, onSeek }) {
+  const [errorsExpanded, setErrorsExpanded] = useState(false)
   const [breakdownOpen, setBreakdownOpen] = useState(false)
 
+  // ── Scores ────────────────────────────────────────────────────────────────
+  const rg             = results.reviewGroupScores
+  const getScore       = k => rg ? (rg[k]?.score  ?? null) : (abcScores?.[k]?.score  ?? null)
+  const getViewed      = k => rg ? (rg[k]?.viewed  ?? 0)   : (abcScores?.[k]?.reviewed ?? 0)
+  const getErrors      = k => rg ? (rg[k]?.errors  ?? 0)   : (abcScores?.[k]?.edited   ?? 0)
+  const overallScore   = rg ? (rg.overall?.score  ?? score) : score
+  const overallViewed  = rg ? (rg.overall?.viewed ?? results.baseEvents.length) : results.baseEvents.length
+  const uniqueEdited   = computeErrorKeys(results.baseEvents, results.amendments, results.reviewerIds).size
+  const overallErrors  = rg ? (rg.overall?.errors ?? uniqueEdited) : uniqueEdited
+  const hq             = results.halfQualityScores
+  const hqScore        = hq?.combined?.score      ?? null
+  const hqDenom        = hq?.combined?.denominator ?? 0
+  const hqErrors       = hq?.combined?.errors      ?? 0
+
+  // ── Collectors ────────────────────────────────────────────────────────────
+  const collectorIds   = results.collectorIds || (results.collectorId != null ? [results.collectorId] : [])
+  const mainCollector  = collectorIds[0] ?? null
+  const secondaryIds   = collectorIds.slice(1)
+  const hasSecondary   = secondaryIds.length > 0
+  const diag           = results.diagnostics || {}
+
+  // ── Speed data from bridge ────────────────────────────────────────────────
+  const speed = results.speedData || null
+
+  // ── Amendment type counts ─────────────────────────────────────────────────
   const types = {}
   results.amendments.forEach(a => { types[a.type] = (types[a.type] || 0) + 1 })
-  const uniqueEdited = computeErrorKeys(results.baseEvents, results.amendments, results.reviewerIds).size
 
-  // Prefer recalculated bridge reviewGroupScores (rules 1-5) over client-side calc
-  const rg = results.reviewGroupScores
-  const getScore  = (key) => rg ? (rg[key]?.score  ?? null) : (abcScores?.[key]?.score  ?? null)
-  const getViewed = (key) => rg ? (rg[key]?.viewed  ?? 0)    : (abcScores?.[key]?.reviewed ?? 0)
-  const getErrors = (key) => rg ? (rg[key]?.errors  ?? 0)    : (abcScores?.[key]?.edited   ?? 0)
-  const overallScore  = rg ? (rg.overall?.score  ?? score) : score
-  const overallViewed = rg ? (rg.overall?.viewed ?? results.baseEvents.length) : results.baseEvents.length
-  const overallErrors = rg ? (rg.overall?.errors ?? uniqueEdited) : uniqueEdited
+  // ── Error rows (computedErrors + computedFFErrors) ────────────────────────
+  const allErrors = [
+    ...(results.computedErrors    || []),
+    ...(results.computedFFErrors  || []),
+  ].sort((a, b) => (a.timestamp || '').localeCompare(b.timestamp || ''))
+  const visibleErrors = errorsExpanded ? allErrors : allErrors.slice(0, 5)
 
-  // Half Quality Score — from bridge halfQualityScores
-  const hq = results.halfQualityScores
-  const hqScore      = hq?.combined?.score      ?? null
-  const hqDenominator= hq?.combined?.denominator ?? 0
-  const hqErrors     = hq?.combined?.errors      ?? 0
+  // ── Helpers ───────────────────────────────────────────────────────────────
+  const scoreColor = s => s == null ? 'var(--t-3)' : s >= 90 ? '#30D158' : s >= 75 ? '#FFD60A' : '#FF453A'
+  const completionColor = s => s == null ? 'var(--t-3)' : s >= 90 ? '#30D158' : s >= 70 ? '#FFD60A' : '#FF453A'
+  const fmtDur = ms => {
+    if (!ms || ms <= 0) return '—'
+    const h = Math.floor(ms / 3600000), m = Math.floor((ms % 3600000) / 60000), s = Math.floor((ms % 60000) / 1000)
+    return h > 0 ? `${h}h ${m}m` : `${m}m ${s}s`
+  }
 
-  // Per-collector breakdown — show when 2+ collectors
-  const collectorIds = results.collectorIds || (results.collectorId != null ? [results.collectorId] : [])
-  const hasMultiCollector = collectorIds.length > 1 && hq?.perCollector
-
-  return (
-    <div className="scale-in" style={{
-      background: 'var(--bg-2)', border: '1px solid var(--b-1)',
-      borderRadius: 16, padding: '16px',
-      boxShadow: '0 8px 32px rgba(0,0,0,0.5)',
-    }}>
-      {/* 6 score cards: Overall + Half Quality + A + B + C + Others */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr 1fr 1fr', gap: 10, marginBottom: 14 }}>
-        <ScoreCard label="Overall"      score={overallScore}      reviewed={overallViewed}      edited={overallErrors}      color="var(--p2)"  isOverall/>
-        <ScoreCard label="Half Quality" score={hqScore}           reviewed={hqDenominator}      edited={hqErrors}           color="#FF9F0A"     isOverall/>
-        <ScoreCard label="A - Review"   score={getScore('A')}      reviewed={getViewed('A')}      edited={getErrors('A')}      color="#0A84FF"/>
-        <ScoreCard label="B - Review"   score={getScore('B')}      reviewed={getViewed('B')}      edited={getErrors('B')}      color="#30D158"/>
-        <ScoreCard label="C - Review"   score={getScore('C')}      reviewed={getViewed('C')}      edited={getErrors('C')}      color="#FFD60A"/>
-        <ScoreCard label="Others"       score={getScore('Others')} reviewed={getViewed('Others')} edited={getErrors('Others')} color="#BF5AF2"/>
-      </div>
-
-      {/* Per-collector breakdown — collapsed by default, only when 2+ collectors */}
-      {hasMultiCollector && (
-        <div style={{ marginBottom: 12 }}>
-          <button
-            onClick={() => setBreakdownOpen(o => !o)}
-            style={{
-              width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-              padding: '8px 12px', background: 'var(--bg-3)',
-              border: '1px solid var(--b-1)', borderRadius: 8,
-              cursor: 'pointer', color: 'var(--t-2)', fontSize: 10,
-              fontWeight: 700, letterSpacing: 1, textTransform: 'uppercase',
-            }}
-          >
-            <span>Per-Collector Breakdown ({collectorIds.length} collectors)</span>
-            <span style={{ fontSize: 12, transition: 'transform .2s', transform: breakdownOpen ? 'rotate(180deg)' : 'rotate(0deg)' }}>▾</span>
-          </button>
-
-          {breakdownOpen && (
-            <div style={{
-              marginTop: 8, display: 'grid',
-              gridTemplateColumns: `repeat(${collectorIds.length}, 1fr)`,
-              gap: 10,
-            }}>
-              {collectorIds.map(cId => {
-                const cHQ  = hq?.perCollector?.[cId]
-                const cHQScore = cHQ?.score      ?? null
-                const cHQDenom = cHQ?.denominator ?? 0
-                const cHQErr   = cHQ?.errors      ?? 0
-
-                // Per-collector overall: viewed events where base author = this collector
-                // Approximate from bridge diagnostics if available
-                const diag = results.diagnostics
-                const baseAuthors = diag?.baseAuthors || []
-                const baseByAuthor = baseAuthors.find(b => String(b.author) === String(cId))
-                const cLabel = `Collector ${cId}`
-
-                return (
-                  <div key={cId} style={{
-                    background: 'var(--bg-3)', border: '1px solid var(--b-1)',
-                    borderRadius: 10, padding: '12px',
-                  }}>
-                    {/* Collector label */}
-                    <div style={{
-                      fontSize: 9, fontWeight: 800, color: 'var(--t-3)',
-                      letterSpacing: 1.2, textTransform: 'uppercase', marginBottom: 10,
-                      textAlign: 'center',
-                    }}>
-                      {cLabel}
-                      {baseByAuthor && (
-                        <span style={{ color: 'var(--t-3)', fontWeight: 500 }}> · {baseByAuthor.base} base</span>
-                      )}
-                    </div>
-
-                    {/* Two mini score cards side by side */}
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
-                      <MiniScoreCard
-                        label="Half Quality"
-                        score={cHQScore}
-                        denominator={cHQDenom}
-                        errors={cHQErr}
-                        denomLabel="TOTAL"
-                        color="#FF9F0A"
-                      />
-                    </div>
-                  </div>
-                )
-              })}
-            </div>
+  // ── Score ring ────────────────────────────────────────────────────────────
+  const Ring = ({ sc, color, size = 68 }) => {
+    const r = (size / 2) - 7
+    const circ = 2 * Math.PI * r
+    const offset = circ - ((sc ?? 0) / 100) * circ
+    const col = color || scoreColor(sc)
+    return (
+      <div style={{ position: 'relative', width: size, height: size, flexShrink: 0 }}>
+        <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
+          <circle cx={size/2} cy={size/2} r={r} fill="none" stroke="var(--b-2)" strokeWidth="6"/>
+          {sc !== null && (
+            <circle cx={size/2} cy={size/2} r={r} fill="none"
+              stroke={col} strokeWidth="6"
+              strokeDasharray={circ} strokeDashoffset={offset}
+              strokeLinecap="round"
+              style={{ transform:'rotate(-90deg)', transformOrigin:'50% 50%', transition:'stroke-dashoffset 1.2s cubic-bezier(0.16,1,0.3,1)' }}
+            />
           )}
+        </svg>
+        <div style={{ position:'absolute', inset:0, display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center' }}>
+          <span style={{ fontFamily:'Inter', fontWeight:900, fontSize: size * 0.26, color: col, lineHeight:1 }}>
+            {sc !== null ? sc : '—'}
+          </span>
+          {sc !== null && <span style={{ fontSize:7, color:'var(--t-3)', fontWeight:700, letterSpacing:1 }}>%</span>}
         </div>
-      )}
-
-      {/* Bottom: stats + badges + full report */}
-      <div style={{
-        display: 'flex', alignItems: 'center', gap: 16,
-        padding: '10px 12px',
-        background: 'var(--bg-3)', borderRadius: 10,
-        border: '1px solid var(--b-1)',
-      }}>
-        {[
-          { label: 'REVIEWED',  value: results.baseEvents.length, color: 'var(--t-1)' },
-          { label: 'ERRORS',    value: uniqueEdited,               color: '#FF453A'    },
-          { label: 'HALF TOTAL',value: hqDenominator || '—',       color: '#FF9F0A'    },
-          { label: 'UP TO',     value: fmt(results.videoTime),      color: 'var(--p2)' },
-        ].map(s => (
-          <div key={s.label} style={{ display: 'flex', alignItems: 'baseline', gap: 5 }}>
-            <span style={{ fontFamily: 'Inter', fontWeight: 900, fontSize: 16, color: s.color }}>{s.value}</span>
-            <span style={{ fontSize: 9, fontWeight: 700, color: 'var(--t-3)', letterSpacing: 0.8 }}>{s.label}</span>
-          </div>
-        ))}
-        <div style={{ width: 1, height: 20, background: 'var(--b-2)', marginLeft: 4 }}/>
-        <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap', flex: 1 }}>
-          {Object.entries(types).map(([type, count]) => (
-            <span key={type} style={{ display: 'flex', alignItems: 'center', gap: 3 }}>
-              <AmendBadge type={type}/>
-              <span style={{ fontSize: 10, color: 'var(--t-3)' }}>×{count}</span>
-            </span>
-          ))}
-        </div>
-        <button className="btn-orange" style={{ padding: '8px 18px', fontSize: 12, flexShrink: 0 }} onClick={onFullReport}>
-          Full Report →
-        </button>
       </div>
-    </div>
-  )
-}
-
-// ── A/B/C Review group definitions ────────────────────────────────────────────
-const REVIEW_GROUPS = {
-  A: {
-    label: 'A - Review',
-    color: '#0A84FF',
-    match: (e, extras) => {
-      const n = e.name
-      const t = e.fields?.type || ''
-      if (['shot','own-goal-against','foul-committed','error','stoppage',
-           'end-stoppage','referee-ball-drop','end-shot','starting-xi',
-           'substitution','out','tactical-shift','player-off','player-on',
-           'card','offside','freeze-frame','shield'].includes(n)) return true
-      if (n === 'pass' && t !== 'recovery') return true
-      if (n === 'goal-keeper' && ['save','conceded-no-save'].includes(t)) return true
-      return false
-    }
-  },
-  B: {
-    label: 'B - Review',
-    color: '#30D158',
-    match: (e, extras) => {
-      const n = e.name
-      const t = e.fields?.type || ''
-      if (['clearance','interception','block','dribble','tackle',
-           'miscontrol','fifty-fifty'].includes(n)) return true
-      if (n === 'pass' && t === 'recovery') return true
-      if (n === 'goal-keeper' && !['save','conceded-no-save'].includes(t)) return true
-      return false
-    }
-  },
-  C: {
-    label: 'C - Review',
-    color: '#FFD60A',
-    match: (e, extras) => {
-      const n = e.name
-      if (['ball-recovery','pressure-start','pressure-end'].includes(n)) return true
-      // Aerial Losts — events with aerial-won in extras
-      if (['pass','shot','clearance','miscontrol'].includes(n) && extras?.includes('aerial-won')) return true
-      return false
-    }
+    )
   }
-}
 
-function filterAmendments(amendments, reviewerIds) {
-  // Count edits by ANY real reviewer (a match may be reviewed by more than one
-  // person / re-reviewed later). Everyone else is a collector — including the
-  // collector's own self-amendments — and is ignored. All edit types count.
-  const set = new Set((reviewerIds || []).map(Number))
-  if (set.size === 0) return []
-  return amendments.filter(a => set.has(Number(a.author)))
-}
-
-// Error events = reviewed events where a reviewer made a change, counted once
-// per event key:
-//   • a reviewer EDIT or DELETION  → amendment authored by a reviewer
-//   • reviewer-ADDED event         → only if the reviewer did NOT also collect
-//                                     that event (dual-role: reviewer also tagged
-//                                     some base events themselves — those are NOT
-//                                     errors, they are legitimate collection work)
-// This Set is the numerator behind every score.
-function computeErrorKeys(baseEvents, amendments, reviewerIds) {
-  const set = new Set((reviewerIds || []).map(Number))
-  const errs = new Set()
-  if (set.size === 0) return errs
-  // Reviewer-authored amendments = errors (they corrected someone else's event)
-  // BUT exclude amendments on events they ALSO collected (self-correction is not a review error)
-  const reviewerBaseKeys = new Set(
-    (baseEvents || []).filter(e => set.has(Number(e.author))).map(e => e.key)
-  )
-  ;(amendments || []).forEach(a => {
-    if (!set.has(Number(a.author))) return
-    // Skip if the reviewer also authored the base event (dual-role self-correction)
-    if (reviewerBaseKeys.has(a.key)) return
-    errs.add(a.key)
-  })
-  return errs
-}
-
-function calcGroupScore(group, baseEvents, amendments, refinements, reviewerIds) {
-  // Find base events belonging to this group
-  const groupBase = baseEvents.filter(e => {
-    const extras = refinements[e.key] || []
-    return group.match(e, extras)
-  })
-  if (groupBase.length === 0) return { score: null, reviewed: 0, edited: 0 }
-
-  const groupKeys = new Set(groupBase.map(e => e.key))
-  const errorKeys = computeErrorKeys(
-    groupBase,
-    amendments.filter(a => groupKeys.has(a.key)),
-    reviewerIds
-  )
-  const uniqueEdited = errorKeys.size
-  const score = Math.round(((groupBase.length - uniqueEdited) / groupBase.length) * 100)
-  return { score, reviewed: groupBase.length, edited: uniqueEdited }
-}
-
-// ── Per-event-type quality scores ───────────────────────────────────────────
-// e.g. "pass" had 20 total occurrences in this match, 10 were wrong → 50%.
-// Same numerator logic as calcGroupScore (computeErrorKeys), just grouped by
-// the event's own name instead of a module group. This is the true quality
-// score per event type — replaces the old "errors ÷ session count" rate,
-// which could exceed 100% since one event type can have more errors than
-// there are sessions.
-function calcEventTypeScores(baseEvents, amendments, reviewerIds) {
-  const byName = {}
-  ;(baseEvents || []).forEach(e => {
-    const name = e.name || 'unknown'
-    if (!byName[name]) byName[name] = []
-    byName[name].push(e)
-  })
-  const result = {}
-  for (const [name, events] of Object.entries(byName)) {
-    const keys = new Set(events.map(e => e.key))
-    const relatedAmends = (amendments || []).filter(a => keys.has(a.key))
-    const errorKeys = computeErrorKeys(events, relatedAmends, reviewerIds)
-    const total = events.length
-    const errors = errorKeys.size
-    result[name] = {
-      total,
-      errors,
-      score: total > 0 ? Math.round(((total - errors) / total) * 100) : null,
-    }
+  // ── Error type pill ───────────────────────────────────────────────────────
+  const ERROR_COLORS = {
+    'Wrong Player':    '#0A84FF', 'Wrong Location':  '#30D158',
+    'Wrong Extras':    '#FFD60A', 'Wrong Keeper':    '#0A84FF',
+    'Wrong Shooter':   '#0A84FF', 'Wrong Opponent':  '#BF5AF2',
+    'Wrong Team':      '#FF9F0A', 'Wrong Impact':    '#FFD60A',
+    'Wrong Goal Location': '#30D158', 'Added Player': '#BF5AF2',
+    'Deleted Player':  '#FF453A', 'Wrong Event':     '#FF9F0A',
+    'Deleted':         '#FF453A', 'Deleted+Added':   '#FF453A',
+    'Deleted+Edited':  '#FF9F0A', 'Added':           '#E8590C',
   }
-  return result
-}
+  const ErrorPill = ({ type }) => {
+    const col = ERROR_COLORS[type] || 'var(--t-3)'
+    return (
+      <span style={{
+        fontSize:9, fontWeight:800, padding:'2px 6px', borderRadius:4,
+        background:`${col}18`, color:col, border:`1px solid ${col}33`,
+        whiteSpace:'nowrap',
+      }}>{type}</span>
+    )
+  }
 
-// ── Amendments Table ──────────────────────────────────────────────────────────
-function ModuleScores({ moduleScores }) {
-  if (!moduleScores) return null
-  // Fixed display order; only show modules that have a denominator.
-  const ORDER = ['base', 'pressure', 'players', 'location', 'extras', 'freeze-frame']
-  const LABELS = { base:'Base', pressure:'Pressure', players:'Players', location:'Location', extras:'Extras', 'freeze-frame':'Freeze Frame' }
-  const items = ORDER
-    .map(k => ({ k, ...(moduleScores[k] || {}) }))
-    .filter(m => m.total && m.total > 0 && m.score != null)
-  if (!items.length) return null
+  // ── Module row (used in both main + secondary collector panels) ───────────
+  const ModuleRow = ({ label, color, spd, compact = false }) => {
+    if (!spd) return (
+      <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', padding: compact ? '3px 6px' : '5px 8px', background:'var(--bg-3)', borderRadius:5, opacity:0.4 }}>
+        <div style={{ display:'flex', alignItems:'center', gap:5 }}>
+          <div style={{ width: compact ? 2 : 3, height:11, borderRadius:2, background:color }}/>
+          <span style={{ fontSize: compact ? 10 : 11, fontWeight:600, color:'var(--t-2)' }}>{label}</span>
+        </div>
+        <span style={{ fontSize:9, color:'var(--t-3)' }}>—</span>
+      </div>
+    )
+    const { activeMs, totalEvents, speedPerHour, completionRate, scenario } = spd
+    return (
+      <div style={{ display:'flex', alignItems:'center', gap: compact ? 6 : 8, padding: compact ? '3px 6px' : '5px 8px', background:'var(--bg-3)', borderRadius:5 }}>
+        <div style={{ width: compact ? 2 : 3, height:11, borderRadius:2, background:color, flexShrink:0 }}/>
+        <span style={{ fontSize: compact ? 10 : 11, fontWeight:600, color: compact ? 'var(--t-2)' : 'var(--t-1)', width: compact ? 80 : 100, flexShrink:0 }}>{label}</span>
+        <span style={{ fontFamily:'JetBrains Mono,monospace', fontSize: compact ? 10 : 11, color:'var(--t-3)', width: compact ? 44 : 50, flexShrink:0 }}>{fmtDur(activeMs)}</span>
+        <span style={{ fontFamily:'JetBrains Mono,monospace', fontSize: compact ? 10 : 11, fontWeight:700, color:'var(--p2)', width: compact ? 44 : 50, flexShrink:0 }}>{speedPerHour ? `${speedPerHour}/hr` : '—'}</span>
+        {!compact && <span style={{ fontSize:9, color:'var(--t-3)', flex:1 }}>{totalEvents} evts</span>}
+        {completionRate && completionRate !== 'N/A' && (
+          <span style={{
+            fontSize:9, fontWeight:800, padding:'2px 5px', borderRadius:4,
+            background:`${completionColor(parseFloat(completionRate))}18`,
+            color:completionColor(parseFloat(completionRate)),
+            border:`1px solid ${completionColor(parseFloat(completionRate))}33`,
+            flexShrink:0,
+          }}>{completionRate}</span>
+        )}
+      </div>
+    )
+  }
 
-  const colorFor = s => s >= 90 ? '#30D158' : s >= 75 ? '#FFD60A' : '#FF453A'
+  // ── Build speed data per collector per module from speedData ──────────────
+  // speedData shape: { [collectorId]: { baseExtras, pressure, players, location, freezeFrame } }
+  // Each module: { activeMs, totalEvents, speedPerHour, completionRate, scenario }
+  const getSpd = (collId, mod) => speed?.[collId]?.[mod] ?? null
+
+  // ── Total active time across all modules for a collector ──────────────────
+  const totalActiveMs = (collId) => {
+    if (!speed?.[collId]) return null
+    return Object.values(speed[collId]).reduce((s, m) => s + (m?.activeMs || 0), 0)
+  }
+
+  const MODULE_DEFS = [
+    { key:'baseExtras',   label:'Base + Extras', color:'var(--p2)' },
+    { key:'pressure',     label:'Pressure',      color:'#FF453A'   },
+    { key:'players',      label:'Players',       color:'#0A84FF'   },
+    { key:'location',     label:'Location',      color:'#30D158'   },
+    { key:'freezeFrame',  label:'Freeze-frame',  color:'#BF5AF2'   },
+  ]
 
   return (
-    <div className="fade-in" style={{ marginTop: 14 }}>
-      <div style={{ fontSize:10, fontWeight:800, color:'var(--t-3)', letterSpacing:1.2, marginBottom:10 }}>
-        MODULE SCORES
-      </div>
-      <div style={{ display:'grid', gridTemplateColumns:`repeat(${Math.min(items.length, 6)}, 1fr)`, gap:10 }}>
-        {items.map(m => {
-          const col = colorFor(m.score)
+    <div className="scale-in" style={{ display:'flex', flexDirection:'column', gap:10 }}>
+
+      {/* ══ ROW 1: 6 Score Cards ══════════════════════════════════════════════ */}
+      <div style={{ display:'grid', gridTemplateColumns:'repeat(6,1fr)', gap:8 }}>
+
+        {[
+          { label:'Overall',      sc:overallScore, color:null,      err:overallErrors, rev:overallViewed, revLbl:'REVIEWED', isOverall:true },
+          { label:'Half Quality', sc:hqScore,      color:'#FF9F0A', err:hqErrors,      rev:hqDenom,       revLbl:'TOT EVTS', isOverall:true },
+          { label:'A — Review',   sc:getScore('A'),      color:'#0A84FF', err:getErrors('A'),      rev:getViewed('A'),      revLbl:'REVIEWED' },
+          { label:'B — Review',   sc:getScore('B'),      color:'#30D158', err:getErrors('B'),      rev:getViewed('B'),      revLbl:'REVIEWED' },
+          { label:'C — Review',   sc:getScore('C'),      color:'#FFD60A', err:getErrors('C'),      rev:getViewed('C'),      revLbl:'REVIEWED' },
+          { label:'Others',       sc:getScore('Others'), color:'#BF5AF2', err:getErrors('Others'), rev:getViewed('Others'), revLbl:'REVIEWED' },
+        ].map(({ label, sc, color, err, rev, revLbl, isOverall }) => {
+          const col = isOverall && sc !== null ? scoreColor(sc) : (color ?? 'var(--t-3)')
+          const circ = 2 * Math.PI * 26
+          const offset = circ - ((sc ?? 0) / 100) * circ
           return (
-            <div key={m.k} style={{
-              background:'var(--bg-2)', border:'1px solid var(--b-1)', borderRadius:12,
-              padding:'12px 10px', textAlign:'center',
+            <div key={label} style={{
+              background:'var(--bg-2)', border:`1px solid ${sc !== null ? col + '33' : 'var(--b-1)'}`,
+              borderRadius:10, padding:'12px 8px',
+              display:'flex', flexDirection:'column', alignItems:'center', gap:7,
+              position:'relative', overflow:'hidden',
+              opacity: sc === null ? 0.4 : 1,
+              transition:'all .3s var(--ease-out-expo)',
             }}>
-              <div style={{ fontSize:10, fontWeight:700, color:'var(--t-3)', letterSpacing:0.5, marginBottom:6, textTransform:'uppercase' }}>
-                {LABELS[m.k] || m.k}
+              {sc !== null && <div style={{ position:'absolute', top:0, left:'50%', transform:'translateX(-50%)', width:'50%', height:2, background:`linear-gradient(90deg,transparent,${col},transparent)` }}/>}
+              <span style={{ fontSize:9, fontWeight:800, color:col, letterSpacing:1.5, textTransform:'uppercase' }}>{label}</span>
+              <div style={{ position:'relative', width:68, height:68 }}>
+                <svg width="68" height="68" viewBox="0 0 68 68">
+                  <circle cx="34" cy="34" r="26" fill="none" stroke="var(--b-2)" strokeWidth="6"/>
+                  {sc !== null && (
+                    <circle cx="34" cy="34" r="26" fill="none" stroke={col} strokeWidth="6"
+                      strokeDasharray={circ} strokeDashoffset={offset} strokeLinecap="round"
+                      style={{ transform:'rotate(-90deg)', transformOrigin:'50% 50%', transition:'stroke-dashoffset 1.2s cubic-bezier(0.16,1,0.3,1)' }}
+                    />
+                  )}
+                </svg>
+                <div style={{ position:'absolute', inset:0, display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center' }}>
+                  <span style={{ fontFamily:'Inter', fontWeight:900, fontSize:17, color:col, lineHeight:1 }}>{sc !== null ? sc : '—'}</span>
+                  {sc !== null && <span style={{ fontSize:7, color:'var(--t-3)', fontWeight:700, letterSpacing:1 }}>%</span>}
+                </div>
               </div>
-              <div style={{ fontFamily:'Inter', fontWeight:800, fontSize:22, color:col, lineHeight:1 }}>
-                {m.score.toFixed(1)}<span style={{ fontSize:12, fontWeight:700 }}>%</span>
-              </div>
-              <div style={{ fontSize:10, color:'var(--t-3)', marginTop:5 }}>
-                {m.errors} err / {m.total}
-              </div>
-              {/* thin score bar */}
-              <div style={{ marginTop:7, height:3, borderRadius:2, background:'var(--b-1)', overflow:'hidden' }}>
-                <div style={{ height:'100%', width:`${m.score}%`, background:col, borderRadius:2 }}/>
-              </div>
+              {sc !== null && (
+                <div style={{ display:'flex', gap:6, alignItems:'center' }}>
+                  <div style={{ textAlign:'center' }}>
+                    <div style={{ fontFamily:'JetBrains Mono,monospace', fontSize:11, fontWeight:700, color:'#FF453A', lineHeight:1 }}>{err}</div>
+                    <div style={{ fontSize:8, color:'var(--t-3)', fontWeight:600, letterSpacing:0.8, marginTop:1 }}>ERR</div>
+                  </div>
+                  <div style={{ width:1, height:16, background:'var(--b-2)' }}/>
+                  <div style={{ textAlign:'center' }}>
+                    <div style={{ fontFamily:'JetBrains Mono,monospace', fontSize:11, fontWeight:700, color:'var(--t-2)', lineHeight:1 }}>{rev}</div>
+                    <div style={{ fontSize:8, color:'var(--t-3)', fontWeight:600, letterSpacing:0.8, marginTop:1 }}>{revLbl}</div>
+                  </div>
+                </div>
+              )}
             </div>
           )
         })}
       </div>
-      <div style={{ fontSize:10, color:'var(--t-3)', marginTop:8, lineHeight:1.5 }}>
-        Per-module quality of the collector's work, from the reviewer's edits. Denominator = reviewed events that have each module. An event can count in more than one module.
+
+      {/* ══ ROW 2: Main collector (large) + Secondary (compact) ═══════════════ */}
+      <div style={{ display:'grid', gridTemplateColumns: hasSecondary ? '1fr 280px' : '1fr', gap:10 }}>
+
+        {/* ── MAIN COLLECTOR ─────────────────────────────────────────────── */}
+        <div style={{ background:'var(--bg-2)', border:'1px solid var(--b-1)', borderRadius:10, padding:14 }}>
+          {/* Header */}
+          <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:12, paddingBottom:10, borderBottom:'1px solid var(--b-1)' }}>
+            <div style={{ display:'flex', alignItems:'center', gap:10 }}>
+              <div style={{ width:32, height:32, borderRadius:'50%', background:'rgba(232,89,12,0.12)', border:'1px solid rgba(232,89,12,0.3)', display:'flex', alignItems:'center', justifyContent:'center', fontSize:12, fontWeight:900, color:'var(--p2)', flexShrink:0 }}>M</div>
+              <div>
+                <div style={{ fontSize:13, fontWeight:700 }}>Collector {mainCollector} <span style={{ fontSize:10, fontWeight:500, color:'var(--t-3)' }}>— Main</span></div>
+                <div style={{ fontSize:9, color:'var(--t-3)', marginTop:1 }}>
+                  {speed?.[mainCollector]?.baseExtras?.windowMethod ?? 'half-start → half-end'}
+                </div>
+              </div>
+            </div>
+            <div style={{ textAlign:'right' }}>
+              <div style={{ fontFamily:'JetBrains Mono,monospace', fontSize:20, fontWeight:900, color:scoreColor(hq?.perCollector?.[mainCollector]?.score), lineHeight:1 }}>
+                {hq?.perCollector?.[mainCollector]?.score != null ? hq.perCollector[mainCollector].score + '%' : '—'}
+              </div>
+              <div style={{ fontSize:8, color:'var(--t-3)', letterSpacing:1 }}>HALF QUALITY</div>
+            </div>
+          </div>
+
+          {/* Total active time row */}
+          {speed && totalActiveMs(mainCollector) > 0 && (
+            <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', padding:'7px 10px', background:'rgba(232,89,12,0.06)', border:'1px solid rgba(232,89,12,0.15)', borderRadius:7, marginBottom:8 }}>
+              <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+                <span style={{ fontSize:11, fontWeight:700, color:'var(--p2)' }}>Total active time</span>
+                <span style={{ fontSize:9, color:'var(--t-3)' }}>all modules combined</span>
+              </div>
+              <span style={{ fontFamily:'JetBrains Mono,monospace', fontSize:17, fontWeight:900, color:'var(--p2)' }}>{fmtDur(totalActiveMs(mainCollector))}</span>
+            </div>
+          )}
+
+          {/* Module breakdown */}
+          <div style={{ display:'flex', flexDirection:'column', gap:5 }}>
+            <div style={{ fontSize:9, fontWeight:800, letterSpacing:1.2, color:'var(--t-3)', marginBottom:2 }}>MODULE BREAKDOWN</div>
+            {MODULE_DEFS.map(m => (
+              <ModuleRow key={m.key} label={m.label} color={m.color} spd={getSpd(mainCollector, m.key)} compact={false} />
+            ))}
+          </div>
+        </div>
+
+        {/* ── SECONDARY COLLECTOR (compact, de-emphasized) ─────────────── */}
+        {hasSecondary && secondaryIds.map(secId => (
+          <div key={secId} style={{ background:'var(--bg-2)', border:'1px solid var(--b-1)', borderRadius:10, padding:12, opacity:0.82 }}>
+            {/* Header */}
+            <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:8, paddingBottom:8, borderBottom:'1px solid var(--b-1)' }}>
+              <div style={{ display:'flex', alignItems:'center', gap:7 }}>
+                <div style={{ width:26, height:26, borderRadius:'50%', background:'var(--b-1)', border:'1px solid var(--b-2)', display:'flex', alignItems:'center', justifyContent:'center', fontSize:10, fontWeight:700, color:'var(--t-3)', flexShrink:0 }}>S</div>
+                <div>
+                  <div style={{ fontSize:12, fontWeight:600, color:'var(--t-2)' }}>Collector {secId} <span style={{ fontSize:9, color:'var(--t-3)' }}>— Secondary</span></div>
+                  <div style={{ fontSize:9, color:'var(--t-3)', marginTop:1 }}>
+                    {speed?.[secId]?.baseExtras?.windowMethod ?? 'first → last base'}
+                    {speed?.[secId]?.baseExtras?.multiDay ? ' · ⚠️ multi-day' : ''}
+                  </div>
+                </div>
+              </div>
+              <div style={{ fontFamily:'JetBrains Mono,monospace', fontSize:13, fontWeight:700, color:scoreColor(hq?.perCollector?.[secId]?.score) }}>
+                {hq?.perCollector?.[secId]?.score != null ? hq.perCollector[secId].score + '%' : '—'}
+              </div>
+            </div>
+
+            {/* Total active time compact */}
+            {speed && totalActiveMs(secId) > 0 && (
+              <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', padding:'5px 8px', background:'var(--bg-3)', border:'1px solid var(--b-1)', borderRadius:6, marginBottom:7 }}>
+                <span style={{ fontSize:10, color:'var(--t-3)' }}>Total active time</span>
+                <span style={{ fontFamily:'JetBrains Mono,monospace', fontSize:12, fontWeight:700, color:'var(--t-2)' }}>{fmtDur(totalActiveMs(secId))}</span>
+              </div>
+            )}
+
+            {/* Compact module rows */}
+            <div style={{ display:'flex', flexDirection:'column', gap:4 }}>
+              {MODULE_DEFS.map(m => (
+                <ModuleRow key={m.key} label={m.label} color={m.color} spd={getSpd(secId, m.key)} compact={true} />
+              ))}
+            </div>
+          </div>
+        ))}
       </div>
+
+      {/* ══ ROW 3: Errors table ══════════════════════════════════════════════ */}
+      <div style={{ background:'var(--bg-2)', border:'1px solid var(--b-1)', borderRadius:10, padding:14 }}>
+        <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:10 }}>
+          <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+            <div style={{ width:3, height:14, borderRadius:2, background:'#FF453A' }}/>
+            <span style={{ fontSize:11, fontWeight:700 }}>Errors</span>
+            <span style={{ fontSize:10, color:'var(--t-3)' }}>{allErrors.length} unique event keys</span>
+          </div>
+          {allErrors.length > 5 && (
+            <button onClick={() => setErrorsExpanded(e => !e)} style={{
+              padding:'4px 10px', borderRadius:5, background:'var(--b-1)',
+              border:'1px solid var(--b-2)', color:'var(--t-2)', fontSize:10,
+              cursor:'pointer', fontWeight:600,
+            }}>
+              {errorsExpanded ? 'Show less ↑' : `Show all ${allErrors.length} →`}
+            </button>
+          )}
+        </div>
+
+        {allErrors.length === 0 ? (
+          <div style={{ textAlign:'center', padding:'20px 0', color:'var(--t-3)', fontSize:12 }}>No errors found ✓</div>
+        ) : (
+          <table style={{ width:'100%', borderCollapse:'collapse', fontSize:11 }}>
+            <thead>
+              <tr style={{ borderBottom:'1px solid var(--b-1)' }}>
+                {['VIDEO TIME','EVENT','ERROR TYPE','MODULE','COLLECTOR','KEY'].map(h => (
+                  <th key={h} style={{ textAlign:'left', padding:'4px 8px', fontSize:9, fontWeight:700, color:'var(--t-3)', letterSpacing:1 }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {visibleErrors.map((err, i) => (
+                <tr key={i} style={{ borderBottom:'1px solid rgba(255,255,255,0.03)', cursor: onSeek ? 'pointer' : 'default' }}
+                  onClick={() => {
+                    if (onSeek && err.videoTimestampMs != null) onSeek(err.videoTimestampMs / 1000)
+                  }}
+                >
+                  <td style={{ padding:'5px 8px', fontFamily:'JetBrains Mono,monospace', fontSize:10, color:'var(--t-2)' }}>{err.timestamp || '—'}</td>
+                  <td style={{ padding:'5px 8px', fontWeight:600 }}>{err.eventName || '—'}</td>
+                  <td style={{ padding:'5px 8px' }}><ErrorPill type={err.errorType || '—'} /></td>
+                  <td style={{ padding:'5px 8px', color:'var(--t-3)' }}>{err.module || '—'}</td>
+                  <td style={{ padding:'5px 8px', fontFamily:'JetBrains Mono,monospace', color:'var(--t-3)', fontSize:10 }}>{err.collectorId ?? '—'}</td>
+                  <td style={{ padding:'5px 8px', fontFamily:'JetBrains Mono,monospace', fontSize:9, color:'var(--t-3)' }}>{err.key ? err.key.slice(0,8) + '…' : '—'}</td>
+                </tr>
+              ))}
+              {!errorsExpanded && allErrors.length > 5 && (
+                <tr>
+                  <td colSpan={6} style={{ padding:'6px 8px', textAlign:'center', color:'var(--t-3)', fontSize:10 }}>
+                    + {allErrors.length - 5} more errors
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      {/* ══ ROW 4: Stats bar ═════════════════════════════════════════════════ */}
+      <div style={{ display:'flex', alignItems:'center', gap:14, padding:'9px 14px', background:'var(--bg-2)', border:'1px solid var(--b-1)', borderRadius:8 }}>
+        {[
+          { lbl:'REVIEWED',         val:overallViewed,       color:'var(--t-1)' },
+          { lbl:'ERRORS',           val:uniqueEdited,        color:'#FF453A'    },
+          { lbl:'HALF TOTAL',       val:hqDenom || '—',      color:'#FF9F0A'    },
+          { lbl:'UP TO',            val:fmt(results.videoTime), color:'var(--p2)' },
+        ].map(s => (
+          <div key={s.lbl} style={{ display:'flex', alignItems:'baseline', gap:4 }}>
+            <span style={{ fontFamily:'JetBrains Mono,monospace', fontSize:14, fontWeight:700, color:s.color }}>{s.val}</span>
+            <span style={{ fontSize:8, fontWeight:700, color:'var(--t-3)', letterSpacing:0.8 }}>{s.lbl}</span>
+          </div>
+        ))}
+        <div style={{ width:1, height:18, background:'var(--b-2)', marginLeft:4 }}/>
+        <div style={{ display:'flex', gap:5, flexWrap:'wrap', flex:1 }}>
+          {Object.entries(types).map(([type, count]) => (
+            <span key={type} style={{ display:'flex', alignItems:'center', gap:3 }}>
+              <AmendBadge type={type}/>
+              <span style={{ fontSize:10, color:'var(--t-3)' }}>×{count}</span>
+            </span>
+          ))}
+        </div>
+        <button className="btn-orange" style={{ padding:'7px 16px', fontSize:12, flexShrink:0 }} onClick={onFullReport}>
+          Full Report →
+        </button>
+      </div>
+
     </div>
   )
 }
+
 
 function AmendmentsTable({ results, session, reviewerIds, identityMap, onSeek }) {
   const [activeFilter, setActiveFilter] = useState(null)
@@ -2788,11 +2844,14 @@ export default function AuditPage({ session, onBack, onFullReport, initialResult
 
           {results && score !== null && (
             <>
-              <QuickSummary
+              <AuditDashboard
                 results={results}
                 score={score}
                 abcScores={abcScores}
                 onFullReport={() => onFullReport(results, score, session)}
+                session={session}
+                identityMap={results.identityMap}
+                onSeek={seekToSeconds}
               />
               {resolvingIds && (
                 <div className="fade-in" style={{
@@ -2805,7 +2864,6 @@ export default function AuditPage({ session, onBack, onFullReport, initialResult
                   Resolving collector &amp; reviewer names…
                 </div>
               )}
-              <ModuleScores moduleScores={results.moduleScores} />
               <AmendmentsTable results={results} session={session} identityMap={results.identityMap} reviewerIds={results.reviewerIds || (results.reviewerId != null ? [results.reviewerId] : [])} onSeek={seekToSeconds} />
 
               {/* ── Export & Upload to Drive ── */}
