@@ -1,5 +1,5 @@
 (async function(){
-  const BRIDGE_VERSION = '7.8.13';
+  const BRIDGE_VERSION = '7.8.14';
   if(window.__MARK_BRIDGE_VERSION__ === BRIDGE_VERSION){console.log('[MARK] bridge already running (v' + BRIDGE_VERSION + ')');return;}
   if(window.__MARK_BRIDGE_STOP__) window.__MARK_BRIDGE_STOP__();
   window.__MARK_BRIDGE__ = true;
@@ -1424,11 +1424,11 @@
             });
 
             // ── Refinement map (collector) ────────────────────────────────────
-            const refMapE = {};
+            const refMapDT = {};
             dedupedEvents.forEach(v => {
               if ((v.category !== 'refinement' && v.category !== 'amendment') || reviewerSetE.has(Number(v.author))) return;
-              if (!refMapE[v.key]) refMapE[v.key] = new Set();
-              refMapE[v.key].add(v.type);
+              if (!refMapDT[v.key]) refMapDT[v.key] = new Set();
+              refMapDT[v.key].add(v.type);
             });
 
             // ── Per-error defect_type ─────────────────────────────────────────
@@ -1463,7 +1463,7 @@
               const revAmnd = revAmendMapE[k] && revAmendMapE[k]['base'];
               const revCls  = classifyEventDT(revAmnd && revAmnd.payload && revAmnd.payload.name || (base.payload && base.payload.name) || '', revAmnd && revAmnd.payload || base.payload || {});
               const dt      = mergeClassDT(collCls, revCls);
-              const refs    = refMapE[k] || new Set();
+              const refs    = refMapDT[k] || new Set();
               dtReviewed['base'][dt].add(k);
               ['players','location','extras','freeze-frame','goal-location','impact'].forEach(mod => {
                 if (refs.has(mod)) dtReviewed[mod][dt].add(k);
