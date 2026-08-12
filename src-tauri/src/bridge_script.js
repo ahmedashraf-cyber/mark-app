@@ -1,5 +1,5 @@
 (async function(){
-  const BRIDGE_VERSION = '7.8.12';
+  const BRIDGE_VERSION = '7.8.13';
   if(window.__MARK_BRIDGE_VERSION__ === BRIDGE_VERSION){console.log('[MARK] bridge already running (v' + BRIDGE_VERSION + ')');return;}
   if(window.__MARK_BRIDGE_STOP__) window.__MARK_BRIDGE_STOP__();
   window.__MARK_BRIDGE__ = true;
@@ -756,6 +756,17 @@
             amendment: amendmentCounts[a]||0, views: viewCounts[a]||0 })),
         };
 
+        // ── Base record lookup (shared across moduleScores + defect_type engine) ──
+        const baseRecByKeyShared = {};
+        Object.values(cache).forEach(v => {
+          if (v.__typename === 'Event' &&
+              (v.matchId === numMatchId || v.matchId === String(numMatchId)) &&
+              (!partId || v.partId === partId) &&
+              v.category === 'base') {
+            baseRecByKeyShared[v.key] = v;
+          }
+        });
+
         // ── Per-module scores (Update: module-level quality) ──────────────────
         // Validated method: for each module, denominator = events the reviewer(s)
         // VIEWED (telemetry/event-activation) that have that module; errors =
@@ -1423,7 +1434,7 @@
             // ── Per-error defect_type ─────────────────────────────────────────
             const errorDefectType = {};
             [...errorsE, ...ffErrorsE].forEach(err => {
-              const base      = baseRecByKey[err.key];
+              const base      = baseRecByKeyShared[err.key];
               const collCls   = classifyEventDT(base && base.payload && base.payload.name || '', base && base.payload || {});
               const revAmend  = revAmendMapE[err.key] && revAmendMapE[err.key]['base'];
               const revCls    = classifyEventDT(revAmend && revAmend.payload && revAmend.payload.name || (base && base.payload && base.payload.name) || '', revAmend && revAmend.payload || (base && base.payload) || {});
@@ -1447,7 +1458,7 @@
 
             // Bucket reviewed events
             viewedKeysNew.forEach(k => {
-              const base    = baseRecByKey[k]; if (!base) return;
+              const base    = baseRecByKeyShared[k]; if (!base) return;
               const collCls = classifyEventDT(base.payload && base.payload.name || '', base.payload || {});
               const revAmnd = revAmendMapE[k] && revAmendMapE[k]['base'];
               const revCls  = classifyEventDT(revAmnd && revAmnd.payload && revAmnd.payload.name || (base.payload && base.payload.name) || '', revAmnd && revAmnd.payload || base.payload || {});
