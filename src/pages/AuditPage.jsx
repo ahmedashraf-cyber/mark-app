@@ -528,9 +528,14 @@ function AuditDashboard({ results, score, abcScores, onFullReport, session, iden
 
   // ── Scores ────────────────────────────────────────────────────────────────
   const rg             = results.reviewGroupScores
-  const getScore       = k => rg ? (rg[k]?.score  ?? null) : (abcScores?.[k]?.score  ?? null)
-  const getViewed      = k => rg ? (rg[k]?.viewed  ?? 0)   : (abcScores?.[k]?.reviewed ?? 0)
-  const getErrors      = k => rg ? (rg[k]?.errors  ?? 0)   : (abcScores?.[k]?.edited   ?? 0)
+  const getScore       = k => rg ? (rg[k]?.score  ?? null) : null
+  const getViewed      = k => rg ? (rg[k]?.viewed  ?? 0)   : 0
+  const getErrors      = k => rg ? (rg[k]?.errors  ?? 0)   : 0
+
+  // Module scores from bridge defect_type engine
+  const moduleScoresDT    = rg?.moduleScoresDT    || null
+  const moduleDefectMatrix = rg?.moduleDefectMatrix || null
+  const standaloneAdded   = rg?.standaloneAdded   ?? 0
   const overallScore   = rg ? (rg.overall?.score  ?? score) : score
   const overallViewed  = rg ? (rg.overall?.viewed ?? results.baseEvents.length) : results.baseEvents.length
   const uniqueEdited   = computeErrorKeys(results.baseEvents, results.amendments, results.reviewerIds).size
@@ -691,15 +696,16 @@ function AuditDashboard({ results, score, abcScores, onFullReport, session, iden
     <div className="scale-in" style={{ display:'flex', flexDirection:'column', gap:10 }}>
 
       {/* ══ ROW 1: 6 Score Cards ══════════════════════════════════════════════ */}
-      <div style={{ display:'grid', gridTemplateColumns:'repeat(6,1fr)', gap:8 }}>
+      <div style={{ display:'grid', gridTemplateColumns:'repeat(7,1fr)', gap:8 }}>
 
         {[
           { label:'Overall',      sc:overallScore, color:null,      err:overallErrors, rev:overallViewed, revLbl:'REVIEWED', isOverall:true },
           { label:'Half Quality', sc:hqScore,      color:'#FF9F0A', err:hqErrors,      rev:hqDenom,       revLbl:'TOT EVTS', isOverall:true },
-          { label:'A — Review',   sc:getScore('A'),      color:'#0A84FF', err:getErrors('A'),      rev:getViewed('A'),      revLbl:'REVIEWED' },
-          { label:'B — Review',   sc:getScore('B'),      color:'#30D158', err:getErrors('B'),      rev:getViewed('B'),      revLbl:'REVIEWED' },
-          { label:'C — Review',   sc:getScore('C'),      color:'#FFD60A', err:getErrors('C'),      rev:getViewed('C'),      revLbl:'REVIEWED' },
-          { label:'Others',       sc:getScore('Others'), color:'#BF5AF2', err:getErrors('Others'), rev:getViewed('Others'), revLbl:'REVIEWED' },
+          { label:'A — Review',   sc:getScore('A'),  color:'#0A84FF', err:getErrors('A'),  rev:getViewed('A'),  revLbl:'REVIEWED' },
+          { label:'B — Review',   sc:getScore('B'),  color:'#30D158', err:getErrors('B'),  rev:getViewed('B'),  revLbl:'REVIEWED' },
+          { label:'C — Review',   sc:getScore('C'),  color:'#FFD60A', err:getErrors('C'),  rev:getViewed('C'),  revLbl:'REVIEWED' },
+          { label:'D — Review',   sc:getScore('D'),  color:'#FF9F0A', err:getErrors('D'),  rev:getViewed('D'),  revLbl:'REVIEWED' },
+          { label:'TO — Review',  sc:getScore('TO'), color:'#BF5AF2', err:getErrors('TO'), rev:getViewed('TO'), revLbl:'REVIEWED' },
         ].map(({ label, sc, color, err, rev, revLbl, isOverall }) => {
           const col = isOverall && sc !== null ? scoreColor(sc) : (color ?? 'var(--t-3)')
           const circ = 2 * Math.PI * 26
@@ -747,6 +753,36 @@ function AuditDashboard({ results, score, abcScores, onFullReport, session, iden
           )
         })}
       </div>
+
+      {/* ══ ROW 1.5: Module scores (if available) ════════════════════════════ */}
+      {moduleScoresDT && (
+        <div style={{ background:'var(--bg-2)', border:'1px solid var(--b-1)', borderRadius:10, padding:'12px 14px' }}>
+          <div style={{ fontSize:9, fontWeight:800, letterSpacing:1.2, color:'var(--t-3)', marginBottom:10, textTransform:'uppercase' }}>
+            Module Scores {standaloneAdded > 0 && <span style={{ color:'#FF9F0A' }}>· {standaloneAdded} added events in denominator</span>}
+          </div>
+          <div style={{ display:'grid', gridTemplateColumns:'repeat(7,1fr)', gap:6 }}>
+            {['base','players','location','extras','freeze-frame','goal-location','impact'].map(mod => {
+              const ms = moduleScoresDT[mod]
+              if (!ms) return (
+                <div key={mod} style={{ background:'var(--bg-3)', borderRadius:7, padding:'8px 6px', opacity:0.35, textAlign:'center' }}>
+                  <div style={{ fontSize:9, fontWeight:700, color:'var(--t-3)', marginBottom:4, textTransform:'uppercase' }}>{mod}</div>
+                  <div style={{ fontSize:13, fontWeight:900, color:'var(--t-3)', fontFamily:'Inter' }}>N/A</div>
+                </div>
+              )
+              const sc = ms.score
+              const col = sc === null ? 'var(--t-3)' : sc >= 90 ? '#30D158' : sc >= 75 ? '#FFD60A' : '#FF453A'
+              return (
+                <div key={mod} style={{ background:'var(--bg-3)', border:`1px solid ${col}22`, borderRadius:7, padding:'8px 6px', textAlign:'center' }}>
+                  <div style={{ fontSize:9, fontWeight:700, color:'var(--t-3)', marginBottom:4, textTransform:'uppercase', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{mod}</div>
+                  <div style={{ fontSize:15, fontWeight:900, color:col, fontFamily:'Inter', lineHeight:1 }}>{sc !== null ? sc : '—'}</div>
+                  {sc !== null && <div style={{ fontSize:8, color:'var(--t-3)', marginTop:2 }}>%</div>}
+                  {ms.errors > 0 && <div style={{ fontSize:9, fontWeight:700, color:'#FF453A', marginTop:3 }}>{ms.errors}↑</div>}
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      )}
 
       {/* ══ ROW 2: Main collector (large) + Secondary (compact) ═══════════════ */}
       <div style={{ display:'grid', gridTemplateColumns: hasSecondary ? '1fr 280px' : '1fr', gap:10 }}>

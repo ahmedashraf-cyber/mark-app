@@ -1,5 +1,5 @@
 (async function(){
-  const BRIDGE_VERSION = '7.8.11';
+  const BRIDGE_VERSION = '7.8.12';
   if(window.__MARK_BRIDGE_VERSION__ === BRIDGE_VERSION){console.log('[MARK] bridge already running (v' + BRIDGE_VERSION + ')');return;}
   if(window.__MARK_BRIDGE_STOP__) window.__MARK_BRIDGE_STOP__();
   window.__MARK_BRIDGE__ = true;
@@ -1335,10 +1335,9 @@
           computedErrors   = errorsE;
           computedFFErrors = ffErrorsE;
 
-          // ── Recalculate reviewGroupScores using accurate error keys ──────────
-          // Always recalculate — independent of whether tracker button was found.
-          // Uses 5-rule error keys as numerator, telemetry viewed keys as denominator.
-          // A/B/C grouping uses capturedCats if available, otherwise Overall only.
+          // ── Recalculate scores: defect_type (A/B/C/D/TO) × module ─────────────
+          // Python-compatible classification. Added events included in denominator.
+          // Confirmed via console testing 2026-08-08.
           try {
             const accurateErrorKeys = new Set([...errorsE, ...ffErrorsE].map(e => e.key));
 
@@ -1349,92 +1348,189 @@
                 viewedKeysNew.add(v.key);
             });
 
-            const ov = viewedKeysNew.size;
-            const oe = accurateErrorKeys.size;
-            const overallScore = ov > 0 ? Math.round(((ov - oe) / ov) * 100) : null;
+            // ── Classification lists ──────────────────────────────────────────
+            const DT_A_EVENTS  = new Set(['card','foul-committed','end-stoppage','stoppage','player-off','player-on',
+              'referee-ball-drop','shot','end-shot','substitution','tactical-shift','own-goal-against','starting-xi','error']);
+            const DT_B_EVENTS  = new Set(['fifty-fifty','clearance','dribble','interception','miscontrol','shield','block','tackle']);
+            const DT_C_EVENTS  = new Set(['pressure-start','pressure-end','ball-recovery']);
+            const DT_D_EVENTS  = new Set(['reception']);
+            const DT_TO_EVENTS = new Set(['hold-up-duel','leg-stretch-duel','positioning-duel','separation-duel']);
+            const DT_EXTRA_TO  = new Set(['launch','step-in','right-take-on','left-take-on','sliding','right','left','none']);
+            const DT_EXTRA_A   = new Set(['free-kick','kick-off','corner','through-ball','save','offside','conceded-no-save','save-attempt']);
+            const DT_EXTRA_B   = new Set(['interception','keeper-sweeper','smother','collected','punch','recovery']);
+            const DT_EXTRA_C   = new Set(['aerial-won']);
+            const DT_PASS_D    = new Set(['open-play','first-time']);
+            const DT_SEVERITY  = {'TO':0,'A':1,'B':2,'C':3,'D':4};
 
-            // Try A/B/C grouping from captured cats
-            const capturedCatsNew =
-              (reviewGroupScores && reviewGroupScores._capturedCats) ||
-              (window.__MARK_QRT__ && window.__MARK_QRT__.qualityCategorizationContext && window.__MARK_QRT__.qualityCategorizationContext.categorizedEvents);
+            const classifyEventDT = (name, payload) => {
+              const norm = v => Array.isArray(v) ? v[0]||'' : String(v||'').replace(/[\[\]']/g,'').trim();
+              const t = norm((payload && (payload.fields && payload.fields.type || payload.type)) || '');
+              const e = norm((payload && (payload.fields && payload.fields.extras || payload.extras)) || '');
+              const d = norm((payload && (payload.fields && payload.fields.direction || payload.direction)) || '');
+              const l = norm((payload && (payload.fields && payload.fields.launch || payload.launch)) || '');
+              if (DT_A_EVENTS.has(name))  return 'A';
+              if (DT_B_EVENTS.has(name))  return 'B';
+              if (DT_C_EVENTS.has(name))  return 'C';
+              if (DT_D_EVENTS.has(name))  return 'D';
+              if (DT_TO_EVENTS.has(name)) return 'TO';
+              if (DT_EXTRA_A.has(t) || DT_EXTRA_A.has(e)) return 'A';
+              if (DT_EXTRA_B.has(t) || DT_EXTRA_B.has(e)) return 'B';
+              if (DT_EXTRA_C.has(e))  return 'C';
+              if (DT_PASS_D.has(t))   return 'D';
+              if (DT_EXTRA_TO.has(e) || DT_EXTRA_TO.has(d) || DT_EXTRA_TO.has(l)) return 'TO';
+              return 'D';
+            };
 
-            if (capturedCatsNew && Object.keys(capturedCatsNew).length > 0) {
-              const A_CATS_N = ['lineupsAndFormation','substitutions','tacticalShifts','playerOff','playerOn','goals','keyPassesBeforeShots','ownGoals','cards','fouls','offside','freeKickPass','corners','errors','kickOffs','throughBalls','stoppage','freezeFrame','pressuresBeforeShots','refereeBallDrop','endShots','g.K.-Actions-shots'];
-              const B_CATS_N = ['Clearances','passRecoveries','interceptions','blocks','dribbles','tackles','miscontrols','g.K.-Actions-Other','shields','fiftyFifty'];
-              const C_CATS_N = ['ballRecovery','aerialLosts','pressures'];
+            const mergeClassDT = (c1, c2) => {
+              if (!c1) return c2 || 'D';
+              if (!c2) return c1 || 'D';
+              if (c1 === 'TO' || c2 === 'TO') return 'TO';
+              return DT_SEVERITY[c1] <= DT_SEVERITY[c2] ? c1 : c2;
+            };
 
-              const keyToGroupN = {};
-              const assignGroupN = (groupCats, groupName) => {
-                groupCats.forEach(cat => {
-                  if (!capturedCatsNew[cat] || !Array.isArray(capturedCatsNew[cat])) return;
-                  capturedCatsNew[cat].forEach(e => { if (!keyToGroupN[e.key]) keyToGroupN[e.key] = groupName; });
-                });
-              };
-              assignGroupN(A_CATS_N, 'A');
-              assignGroupN(B_CATS_N, 'B');
-              assignGroupN(C_CATS_N, 'C');
+            // ── Standalone added events (reviewer added, no paired deletion) ──
+            const reviewerAddedBaseE = Object.values(cache).filter(v =>
+              v.__typename === 'Event' && v.category === 'base' &&
+              reviewerSetE.has(Number(v.author)) && v.payload && v.payload.videoTimestamp != null
+            );
+            const reviewerDelTsE = dedupedEvents
+              .filter(v => v.category === 'amendment' && v.type === 'deletion' && reviewerSetE.has(Number(v.author)))
+              .map(v => { const b = Object.values(cache).find(b2 => b2.__typename==='Event' && b2.key===v.key && b2.category==='base'); return b && b.payload && b.payload.videoTimestamp; })
+              .filter(t => t != null);
 
-              const bucketsN = { A:{viewed:0,errors:0}, B:{viewed:0,errors:0}, C:{viewed:0,errors:0}, Others:{viewed:0,errors:0} };
-              viewedKeysNew.forEach(k => {
-                const g = keyToGroupN[k] || 'Others';
-                bucketsN[g].viewed++;
-                if (accurateErrorKeys.has(k)) bucketsN[g].errors++;
+            const standaloneAddedE = reviewerAddedBaseE.filter(v => {
+              const ts = v.payload.videoTimestamp || 0;
+              return !reviewerDelTsE.some(delTs => Math.abs(delTs - ts) <= 1000);
+            });
+
+            // ── Reviewer latest amendments map ────────────────────────────────
+            const revAmendMapE = {};
+            dedupedEvents.forEach(v => {
+              if (v.category !== 'amendment' || !reviewerSetE.has(Number(v.author))) return;
+              if (!revAmendMapE[v.key]) revAmendMapE[v.key] = {};
+              const ex = revAmendMapE[v.key][v.type];
+              if (!ex || (v.capturedTime||'') > (ex.capturedTime||'')) revAmendMapE[v.key][v.type] = v;
+            });
+
+            // ── Refinement map (collector) ────────────────────────────────────
+            const refMapE = {};
+            dedupedEvents.forEach(v => {
+              if ((v.category !== 'refinement' && v.category !== 'amendment') || reviewerSetE.has(Number(v.author))) return;
+              if (!refMapE[v.key]) refMapE[v.key] = new Set();
+              refMapE[v.key].add(v.type);
+            });
+
+            // ── Per-error defect_type ─────────────────────────────────────────
+            const errorDefectType = {};
+            [...errorsE, ...ffErrorsE].forEach(err => {
+              const base      = baseRecByKey[err.key];
+              const collCls   = classifyEventDT(base && base.payload && base.payload.name || '', base && base.payload || {});
+              const revAmend  = revAmendMapE[err.key] && revAmendMapE[err.key]['base'];
+              const revCls    = classifyEventDT(revAmend && revAmend.payload && revAmend.payload.name || (base && base.payload && base.payload.name) || '', revAmend && revAmend.payload || (base && base.payload) || {});
+              errorDefectType[err.key] = mergeClassDT(collCls, revCls);
+            });
+
+            // Added events → always classify by reviewer's event
+            standaloneAddedE.forEach(v => {
+              errorDefectType[v.key] = classifyEventDT(v.payload && v.payload.name || '', v.payload || {});
+            });
+
+            // ── Module × defect_type buckets ──────────────────────────────────
+            const DT_MODULES = ['base','players','location','extras','freeze-frame','goal-location','impact'];
+            const DT_TYPES   = ['A','B','C','D','TO'];
+
+            const dtReviewed = {}, dtErrors = {};
+            DT_MODULES.forEach(mod => {
+              dtReviewed[mod] = {A:new Set(),B:new Set(),C:new Set(),D:new Set(),TO:new Set()};
+              dtErrors[mod]   = {A:new Set(),B:new Set(),C:new Set(),D:new Set(),TO:new Set()};
+            });
+
+            // Bucket reviewed events
+            viewedKeysNew.forEach(k => {
+              const base    = baseRecByKey[k]; if (!base) return;
+              const collCls = classifyEventDT(base.payload && base.payload.name || '', base.payload || {});
+              const revAmnd = revAmendMapE[k] && revAmendMapE[k]['base'];
+              const revCls  = classifyEventDT(revAmnd && revAmnd.payload && revAmnd.payload.name || (base.payload && base.payload.name) || '', revAmnd && revAmnd.payload || base.payload || {});
+              const dt      = mergeClassDT(collCls, revCls);
+              const refs    = refMapE[k] || new Set();
+              dtReviewed['base'][dt].add(k);
+              ['players','location','extras','freeze-frame','goal-location','impact'].forEach(mod => {
+                if (refs.has(mod)) dtReviewed[mod][dt].add(k);
               });
+            });
 
-              const mkN = b => ({ viewed: b.viewed, errors: b.errors, score: b.viewed > 0 ? Math.round(((b.viewed - b.errors) / b.viewed) * 100) : null });
+            // Add standalone added events to base denominator
+            standaloneAddedE.forEach(v => {
+              const dt = errorDefectType[v.key] || 'D';
+              dtReviewed['base'][dt].add(v.key);
+            });
 
-              newReviewGroupScores = {
-                overall: { viewed: ov, errors: oe, score: overallScore },
-                A: mkN(bucketsN.A), B: mkN(bucketsN.B), C: mkN(bucketsN.C), Others: mkN(bucketsN.Others),
-                captureMs: reviewGroupScores ? reviewGroupScores.captureMs : 0,
-                recalculated: true,
-              };
-            } else {
-              // No categorizedEvents from tracker button (completed match) —
-              // fall back to static event name → group mapping.
-              // Confirmed 0 unmapped on match 1294780 (31 event types, all covered).
-              const STATIC_GROUP = {
-                // A — high-value / key actions
-                'shot': 'A', 'end-shot': 'A', 'goal-keeper': 'A', 'card': 'A',
-                'foul-committed': 'A', 'stoppage': 'A', 'end-stoppage': 'A',
-                'referee-ball-drop': 'A', 'out': 'A', 'camera-on': 'A', 'camera-off': 'A',
-                // B — defensive / duel actions
-                'clearance': 'B', 'interception': 'B', 'block': 'B', 'dribble': 'B',
-                'tackle': 'B', 'miscontrol': 'B', 'shield': 'B', 'fifty-fifty': 'B',
-                'hold-up-duel': 'B', 'positioning-duel': 'B', 'leg-stretch-duel': 'B',
-                'separation-duel': 'B',
-                // C — pressure / recovery
-                'ball-recovery': 'C', 'pressure-start': 'C', 'pressure-end': 'C',
-                // Others — pass flow (pass, reception, unknown-pass-end, anything else)
-              };
-              const EXCLUDED_STATIC = new Set(['starting-xi', 'half-start', 'half-end', 'squad']);
+            // Bucket errors
+            [...errorsE, ...ffErrorsE].forEach(err => {
+              const dt  = errorDefectType[err.key] || 'D';
+              const mod = (err.module === 'deletion' ? 'base' : err.module) || 'base';
+              if (dtErrors[mod] && dtErrors[mod][dt]) dtErrors[mod][dt].add(err.key);
+            });
+            standaloneAddedE.forEach(v => {
+              const dt = errorDefectType[v.key] || 'D';
+              dtErrors['base'][dt].add(v.key);
+            });
 
-              // Build name lookup from allBase (already available in this scope)
-              const nameByKeyS = {};
-              allBase.forEach(v => { if (v.payload && v.payload.name) nameByKeyS[v.key] = v.payload.name; });
+            // ── Compute scores ────────────────────────────────────────────────
+            const mkDT = (rev, err) => ({
+              viewed: rev, errors: err,
+              score: rev > 0 ? Math.round(((rev - err) / rev) * 100) : null,
+            });
 
-              // Bucket viewed keys by static group
-              const bucketsS = { A:{viewed:0,errors:0}, B:{viewed:0,errors:0}, C:{viewed:0,errors:0}, Others:{viewed:0,errors:0} };
-              viewedKeysNew.forEach(k => {
-                const name = nameByKeyS[k];
-                if (!name || EXCLUDED_STATIC.has(name)) return;
-                const g = STATIC_GROUP[name] || 'Others';
-                bucketsS[g].viewed++;
-                if (accurateErrorKeys.has(k)) bucketsS[g].errors++;
+            const totalReviewed = DT_TYPES.reduce((s,dt) => s + dtReviewed['base'][dt].size, 0);
+            const totalErrors   = accurateErrorKeys.size + standaloneAddedE.length;
+            const overallScore  = totalReviewed > 0 ? Math.round(((totalReviewed - totalErrors) / totalReviewed) * 100) : null;
+
+            // Per defect_type scores (base module as denominator)
+            const defectTypeScores = {};
+            DT_TYPES.forEach(dt => {
+              const rev = dtReviewed['base'][dt].size;
+              const err = dtErrors['base'][dt].size;
+              defectTypeScores[dt] = mkDT(rev, err);
+            });
+
+            // Per module scores (all defect_types combined)
+            const moduleScoresDT = {};
+            DT_MODULES.forEach(mod => {
+              const rev = DT_TYPES.reduce((s,dt) => s + dtReviewed[mod][dt].size, 0);
+              const err = DT_TYPES.reduce((s,dt) => s + dtErrors[mod][dt].size, 0);
+              if (rev > 0) moduleScoresDT[mod] = mkDT(rev, err);
+            });
+
+            // Per module × defect_type (full matrix)
+            const moduleDefectMatrix = {};
+            DT_MODULES.forEach(mod => {
+              moduleDefectMatrix[mod] = {};
+              DT_TYPES.forEach(dt => {
+                const rev = dtReviewed[mod][dt].size;
+                const err = dtErrors[mod][dt].size;
+                if (rev > 0) moduleDefectMatrix[mod][dt] = mkDT(rev, err);
               });
+            });
 
-              const mkS = b => ({ viewed: b.viewed, errors: b.errors, score: b.viewed > 0 ? Math.round(((b.viewed - b.errors) / b.viewed) * 100) : null });
-
-              newReviewGroupScores = {
-                overall: { viewed: ov, errors: oe, score: overallScore },
-                A: mkS(bucketsS.A), B: mkS(bucketsS.B), C: mkS(bucketsS.C), Others: mkS(bucketsS.Others),
-                captureMs: 0,
-                recalculated: true,
-                staticMapping: true,  // flag so UI can show "Static mapping" if needed
-              };
-              console.log('[MARK] A/B/C via static mapping (no capturedCats)');
-            }
-            console.log('[MARK] newReviewGroupScores:', JSON.stringify(newReviewGroupScores));
+            newReviewGroupScores = {
+              overall: { viewed: totalReviewed, errors: totalErrors, score: overallScore },
+              // defect_type scores (replaces A/B/C/Others)
+              A: defectTypeScores['A'],
+              B: defectTypeScores['B'],
+              C: defectTypeScores['C'],
+              D: defectTypeScores['D'],
+              TO: defectTypeScores['TO'],
+              // module scores
+              moduleScoresDT,
+              // full matrix
+              moduleDefectMatrix,
+              // metadata
+              standaloneAdded:  standaloneAddedE.length,
+              recalculated:     true,
+              defectTypeMethod: true,
+            };
+            console.log('[MARK] defect_type scores computed. Overall:', overallScore, '% | Added events:', standaloneAddedE.length);
           } catch(rgRecalcErr) {
             console.warn('[MARK] reviewGroupScores recalc failed:', rgRecalcErr && rgRecalcErr.message);
             newReviewGroupScores = reviewGroupScores;
