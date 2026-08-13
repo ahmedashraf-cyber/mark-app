@@ -754,33 +754,98 @@ function AuditDashboard({ results, score, abcScores, onFullReport, session, iden
         })}
       </div>
 
-      {/* ══ ROW 1.5: Module scores (if available) ════════════════════════════ */}
+      {/* ══ ROW 1.5: Module × defect_type score matrix ══════════════════════ */}
       {moduleScoresDT && (
         <div style={{ background:'var(--bg-2)', border:'1px solid var(--b-1)', borderRadius:10, padding:'12px 14px' }}>
-          <div style={{ fontSize:9, fontWeight:800, letterSpacing:1.2, color:'var(--t-3)', marginBottom:10, textTransform:'uppercase' }}>
-            Module Scores {standaloneAdded > 0 && <span style={{ color:'#FF9F0A' }}>· {standaloneAdded} added events in denominator</span>}
-          </div>
-          <div style={{ display:'grid', gridTemplateColumns:'repeat(7,1fr)', gap:6 }}>
-            {['base','players','location','extras','freeze-frame','goal-location','impact'].map(mod => {
-              const ms = moduleScoresDT[mod]
-              if (!ms) return (
-                <div key={mod} style={{ background:'var(--bg-3)', borderRadius:7, padding:'8px 6px', opacity:0.35, textAlign:'center' }}>
-                  <div style={{ fontSize:9, fontWeight:700, color:'var(--t-3)', marginBottom:4, textTransform:'uppercase' }}>{mod}</div>
-                  <div style={{ fontSize:13, fontWeight:900, color:'var(--t-3)', fontFamily:'Inter' }}>N/A</div>
+          {/* Header row */}
+          <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:10 }}>
+            <div style={{ fontSize:9, fontWeight:800, letterSpacing:1.2, color:'var(--t-3)', textTransform:'uppercase' }}>
+              Module Scores × Defect Type
+              {standaloneAdded > 0 && <span style={{ color:'#FF9F0A', marginLeft:6 }}>· {standaloneAdded} added events in denominator</span>}
+            </div>
+            <div style={{ display:'flex', gap:8 }}>
+              {[
+                { dt:'A', color:'#0A84FF' }, { dt:'B', color:'#30D158' }, { dt:'C', color:'#FFD60A' },
+                { dt:'D', color:'#FF9F0A' }, { dt:'TO', color:'#BF5AF2' },
+              ].map(({dt, color}) => (
+                <div key={dt} style={{ display:'flex', alignItems:'center', gap:3 }}>
+                  <div style={{ width:8, height:8, borderRadius:2, background:color, opacity:0.8 }} />
+                  <span style={{ fontSize:8, fontWeight:700, color:'var(--t-2)' }}>{dt}</span>
                 </div>
-              )
-              const sc = ms.score
-              const col = sc === null ? 'var(--t-3)' : sc >= 90 ? '#30D158' : sc >= 75 ? '#FFD60A' : '#FF453A'
-              return (
-                <div key={mod} style={{ background:'var(--bg-3)', border:`1px solid ${col}22`, borderRadius:7, padding:'8px 6px', textAlign:'center' }}>
-                  <div style={{ fontSize:9, fontWeight:700, color:'var(--t-3)', marginBottom:4, textTransform:'uppercase', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{mod}</div>
-                  <div style={{ fontSize:15, fontWeight:900, color:col, fontFamily:'Inter', lineHeight:1 }}>{sc !== null ? sc : '—'}</div>
-                  {sc !== null && <div style={{ fontSize:8, color:'var(--t-3)', marginTop:2 }}>%</div>}
-                  {ms.errors > 0 && <div style={{ fontSize:9, fontWeight:700, color:'#FF453A', marginTop:3 }}>{ms.errors}↑</div>}
-                </div>
-              )
-            })}
+              ))}
+            </div>
           </div>
+
+          {/* Matrix: modules as rows, defect_types as columns */}
+          {(() => {
+            const MODS   = ['base','players','location','extras','freeze-frame','goal-location','impact']
+            const DTS    = ['A','B','C','D','TO']
+            const DT_COL = { A:'#0A84FF', B:'#30D158', C:'#FFD60A', D:'#FF9F0A', TO:'#BF5AF2' }
+            const matrix = moduleDefectMatrix
+
+            return (
+              <div style={{ overflowX:'auto' }}>
+                <table style={{ width:'100%', borderCollapse:'collapse', fontSize:10 }}>
+                  <thead>
+                    <tr>
+                      <th style={{ textAlign:'left', padding:'4px 8px 4px 0', fontSize:8, fontWeight:800, letterSpacing:1, color:'var(--t-3)', textTransform:'uppercase', width:100 }}>Module</th>
+                      <th style={{ textAlign:'center', padding:'4px 6px', fontSize:8, fontWeight:700, color:'var(--t-3)', width:60 }}>Overall</th>
+                      {DTS.map(dt => (
+                        <th key={dt} style={{ textAlign:'center', padding:'4px 6px', fontSize:8, fontWeight:800, color:DT_COL[dt], width:72 }}>{dt}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {MODS.map((mod, i) => {
+                      const ms  = moduleScoresDT?.[mod]
+                      const msc = ms?.score ?? null
+                      const mscCol = msc === null ? 'var(--t-3)' : msc >= 95 ? '#30D158' : msc >= 85 ? '#FFD60A' : '#FF453A'
+                      return (
+                        <tr key={mod} style={{ borderTop: i > 0 ? '1px solid var(--b-1)' : 'none' }}>
+                          {/* Module label */}
+                          <td style={{ padding:'6px 8px 6px 0', fontSize:9, fontWeight:700, color:'var(--t-2)', textTransform:'uppercase', whiteSpace:'nowrap' }}>
+                            {mod}
+                          </td>
+                          {/* Overall score */}
+                          <td style={{ textAlign:'center', padding:'6px' }}>
+                            {ms ? (
+                              <div>
+                                <span style={{ fontFamily:'JetBrains Mono,monospace', fontSize:12, fontWeight:900, color:mscCol }}>{msc !== null ? msc : '—'}</span>
+                                {msc !== null && <span style={{ fontSize:8, color:'var(--t-3)' }}>%</span>}
+                                {ms.errors > 0 && <div style={{ fontSize:8, color:'#FF453A', lineHeight:1.2 }}>{ms.errors}↑</div>}
+                              </div>
+                            ) : <span style={{ color:'var(--t-3)', fontSize:9 }}>N/A</span>}
+                          </td>
+                          {/* Per defect_type cells */}
+                          {DTS.map(dt => {
+                            const cell = matrix?.[mod]?.[dt]
+                            if (!cell) return (
+                              <td key={dt} style={{ textAlign:'center', padding:'6px', opacity:0.25 }}>
+                                <span style={{ fontSize:9, color:'var(--t-3)' }}>—</span>
+                              </td>
+                            )
+                            const sc  = cell.score
+                            const col = sc === null ? 'var(--t-3)' : sc >= 95 ? '#30D158' : sc >= 85 ? '#FFD60A' : '#FF453A'
+                            return (
+                              <td key={dt} style={{ textAlign:'center', padding:'6px', background:`${DT_COL[dt]}08`, borderRadius:4 }}>
+                                <div style={{ fontFamily:'JetBrains Mono,monospace', fontSize:11, fontWeight:900, color:col, lineHeight:1 }}>
+                                  {sc !== null ? sc : '—'}{sc !== null && <span style={{ fontSize:7, color:'var(--t-3)' }}>%</span>}
+                                </div>
+                                <div style={{ fontSize:7, color:'var(--t-3)', marginTop:1 }}>
+                                  {cell.errors > 0 ? <span style={{ color:'#FF453A' }}>{cell.errors}↑</span> : null}
+                                  <span style={{ marginLeft: cell.errors > 0 ? 2 : 0 }}>{cell.viewed}</span>
+                                </div>
+                              </td>
+                            )
+                          })}
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )
+          })()}
         </div>
       )}
 
@@ -2559,6 +2624,10 @@ export default function AuditPage({ session, onBack, onFullReport, initialResult
         console.warn('[MARK] Could not clean previous sessions:', e.message)
       }
 
+      // totalBaseEvents = total collector base events (not reviewed count)
+      // collectorIds from bridge, sorted: main first then by base count
+      const allCollectorIds = data.collectorIds || (data.collectorId != null ? [data.collectorId] : [])
+
       await addDoc(collection(db, 'mark_audit_sessions'), {
         sessionId:          session.sessionId,
         matchId:            session.matchId,
@@ -2574,21 +2643,38 @@ export default function AuditPage({ session, onBack, onFullReport, initialResult
         operatorEmail:      profile.email,
         operatorName:       profile.displayName || profile.email.split('@')[0],
         collectorId:        data.collectorId,
-        collectorIds:       data.collectorIds || (data.collectorId != null ? [data.collectorId] : []),
+        collectorIds:       allCollectorIds,
         collectorHrCode,
         qaReviewerId:       data.reviewerId,
         qaReviewerIds:      reviewerIds,
         videoTime:          data.videoTime,
-        totalBaseEvents:    data.baseEvents.length,
+        // FIX: total collector base events (not reviewed count)
+        // data.baseEvents = reviewer-viewed events only
+        // halfQualityScores.combined.denominator = all collector base events excl deleted
+        totalBaseEvents:    data.halfQualityScores?.combined?.denominator ?? data.baseEvents.length,
+        totalReviewedEvents:data.baseEvents.length,
         totalAmendments:    reviewerAmends.length,
         uniqueEditedEvents: uniqueEdited,
         qualityScore:       q,
         qualityScoreA:      abc?.A?.score ?? null,
         qualityScoreB:      abc?.B?.score ?? null,
         qualityScoreC:      abc?.C?.score ?? null,
+        // New: A/B/C/D/TO defect_type scores
+        qualityScoreD:      abc?.D?.score  ?? null,
+        qualityScoreTO:     abc?.TO?.score ?? null,
+        // New: module × defect_type matrix
+        moduleScoresDT:     data.reviewGroupScores?.moduleScoresDT    ? JSON.stringify(data.reviewGroupScores.moduleScoresDT)    : null,
+        moduleDefectMatrix: data.reviewGroupScores?.moduleDefectMatrix ? JSON.stringify(data.reviewGroupScores.moduleDefectMatrix) : null,
+        // Legacy module scores
         moduleScores,
         eventTypeScores:    data.eventTypeScores || {},
         amendmentTypes:     types,
+        // New: half quality per collector
+        halfQualityScore:   data.halfQualityScores?.combined?.score   ?? null,
+        halfQualityDenom:   data.halfQualityScores?.combined?.denominator ?? null,
+        halfQualityErrors:  data.halfQualityScores?.combined?.errors  ?? null,
+        // New: standalone added events count
+        standaloneAddedEvents: data.reviewGroupScores?.standaloneAdded ?? 0,
         status:             'completed',
         completedAt:        serverTimestamp(),
       })

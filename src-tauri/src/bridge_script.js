@@ -1,5 +1,5 @@
 (async function(){
-  const BRIDGE_VERSION = '7.8.15';
+  const BRIDGE_VERSION = '7.8.16';
   if(window.__MARK_BRIDGE_VERSION__ === BRIDGE_VERSION){console.log('[MARK] bridge already running (v' + BRIDGE_VERSION + ')');return;}
   if(window.__MARK_BRIDGE_STOP__) window.__MARK_BRIDGE_STOP__();
   window.__MARK_BRIDGE__ = true;
@@ -1493,9 +1493,11 @@
             });
 
             const totalReviewed = DT_TYPES.reduce((s,dt) => s + dtReviewed['base'][dt].size, 0);
-            // accurateErrorKeys = unique(errorsE ∪ ffErrorsE) — already includes added events
-            // standaloneAddedE keys are a subset of errorsE keys, so no need to add them again
-            const totalErrors   = accurateErrorKeys.size;
+            // Overall errors = unique(errorsE ∪ ffErrorsE) + standaloneAddedE
+            // standaloneAddedE keys are in viewedKeysNew (reviewer viewed own added events)
+            // but are NOT in accurateErrorKeys (which only covers amendments on collector events)
+            // so they must be added separately for correct overall count
+            const totalErrors   = accurateErrorKeys.size + standaloneAddedE.length;
             const overallScore  = totalReviewed > 0 ? Math.round(((totalReviewed - totalErrors) / totalReviewed) * 100) : null;
 
             // Per defect_type scores (base module as denominator)
