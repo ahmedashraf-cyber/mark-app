@@ -1,5 +1,5 @@
 (async function(){
-  const BRIDGE_VERSION = '7.8.16';
+  const BRIDGE_VERSION = '7.8.17';
   if(window.__MARK_BRIDGE_VERSION__ === BRIDGE_VERSION){console.log('[MARK] bridge already running (v' + BRIDGE_VERSION + ')');return;}
   if(window.__MARK_BRIDGE_STOP__) window.__MARK_BRIDGE_STOP__();
   window.__MARK_BRIDGE__ = true;
@@ -1470,16 +1470,11 @@
               });
             });
 
-            // Add standalone added events to base denominator
-            // NOTE: standaloneAddedE keys are already in errorsE (bridge adds them in step 2)
-            // We only add them to dtReviewed here (they are NOT in viewedKeysNew)
-            standaloneAddedE.forEach(v => {
-              const dt = errorDefectType[v.key] || 'D';
-              dtReviewed['base'][dt].add(v.key);
-            });
+            // NOTE: standaloneAddedE keys ARE in viewedKeysNew (reviewer viewed their own added events)
+            // confirmed via console: all 6 standalone added keys show in viewedKeys
+            // DO NOT add them again to dtReviewed — already counted via viewedKeysNew.forEach above
 
             // Bucket errors — use errorsE + ffErrorsE only (already contains added events)
-            // DO NOT add standaloneAddedE again — they are already in errorsE
             [...errorsE, ...ffErrorsE].forEach(err => {
               const dt  = errorDefectType[err.key] || 'D';
               const mod = (err.module === 'deletion' ? 'base' : err.module) || 'base';
@@ -1497,7 +1492,9 @@
             // standaloneAddedE keys are in viewedKeysNew (reviewer viewed own added events)
             // but are NOT in accurateErrorKeys (which only covers amendments on collector events)
             // so they must be added separately for correct overall count
-            const totalErrors   = accurateErrorKeys.size + standaloneAddedE.length;
+            // accurateErrorKeys already contains standaloneAdded keys (bridge adds them in Rule B)
+            // DO NOT add standaloneAddedE.length again — confirmed double-count via console testing
+            const totalErrors   = accurateErrorKeys.size;
             const overallScore  = totalReviewed > 0 ? Math.round(((totalReviewed - totalErrors) / totalReviewed) * 100) : null;
 
             // Per defect_type scores (base module as denominator)
