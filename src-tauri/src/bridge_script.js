@@ -1,5 +1,5 @@
 (async function(){
-  const BRIDGE_VERSION = '7.8.14';
+  const BRIDGE_VERSION = '7.8.15';
   if(window.__MARK_BRIDGE_VERSION__ === BRIDGE_VERSION){console.log('[MARK] bridge already running (v' + BRIDGE_VERSION + ')');return;}
   if(window.__MARK_BRIDGE_STOP__) window.__MARK_BRIDGE_STOP__();
   window.__MARK_BRIDGE__ = true;
@@ -1471,20 +1471,19 @@
             });
 
             // Add standalone added events to base denominator
+            // NOTE: standaloneAddedE keys are already in errorsE (bridge adds them in step 2)
+            // We only add them to dtReviewed here (they are NOT in viewedKeysNew)
             standaloneAddedE.forEach(v => {
               const dt = errorDefectType[v.key] || 'D';
               dtReviewed['base'][dt].add(v.key);
             });
 
-            // Bucket errors
+            // Bucket errors — use errorsE + ffErrorsE only (already contains added events)
+            // DO NOT add standaloneAddedE again — they are already in errorsE
             [...errorsE, ...ffErrorsE].forEach(err => {
               const dt  = errorDefectType[err.key] || 'D';
               const mod = (err.module === 'deletion' ? 'base' : err.module) || 'base';
               if (dtErrors[mod] && dtErrors[mod][dt]) dtErrors[mod][dt].add(err.key);
-            });
-            standaloneAddedE.forEach(v => {
-              const dt = errorDefectType[v.key] || 'D';
-              dtErrors['base'][dt].add(v.key);
             });
 
             // ── Compute scores ────────────────────────────────────────────────
@@ -1494,7 +1493,9 @@
             });
 
             const totalReviewed = DT_TYPES.reduce((s,dt) => s + dtReviewed['base'][dt].size, 0);
-            const totalErrors   = accurateErrorKeys.size + standaloneAddedE.length;
+            // accurateErrorKeys = unique(errorsE ∪ ffErrorsE) — already includes added events
+            // standaloneAddedE keys are a subset of errorsE keys, so no need to add them again
+            const totalErrors   = accurateErrorKeys.size;
             const overallScore  = totalReviewed > 0 ? Math.round(((totalReviewed - totalErrors) / totalReviewed) * 100) : null;
 
             // Per defect_type scores (base module as denominator)
