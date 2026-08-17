@@ -144,10 +144,10 @@ export function useSync(onStatusChange, sessionId) {
 
           // Step 3: got event count — done
           if (msg.type === 'eventCountResponse' && msg.ts >= reqTs) {
-            console.log('[MARK] eventCountResponse count=', msg.count)
+            console.log('[MARK] eventCountResponse count=', msg.count, 'pressureCount=', msg.pressureCount)
             clearTimeout(timeout)
             ws.removeEventListener('message', handler)
-            resolve(msg.count)
+            resolve({ count: msg.count, pressureCount: msg.pressureCount ?? -1 })
           }
         } catch(e) {}
       }

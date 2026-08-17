@@ -1,5 +1,5 @@
 (async function(){
-  const BRIDGE_VERSION = '7.8.19';
+  const BRIDGE_VERSION = '7.8.20';
   if(window.__MARK_BRIDGE_VERSION__ === BRIDGE_VERSION){console.log('[MARK] bridge already running (v' + BRIDGE_VERSION + ')');return;}
   if(window.__MARK_BRIDGE_STOP__) window.__MARK_BRIDGE_STOP__();
   window.__MARK_BRIDGE__ = true;
@@ -94,34 +94,39 @@
   }
 
   // ── Event count helper ────────────────────────────────────────────────────
-  const EXCLUDED_TYPES = ['starting-xi', 'half-start', 'squad'];
+  const EXCLUDED_TYPES  = ['starting-xi', 'half-start', 'squad'];
+  const PRESSURE_TYPES  = new Set(['pressure-start', 'pressure-end']);
+
   function countEventsInRange(matchId, startTs, endTs) {
     try {
       // Read from React fiber baseList — this is the exact same list the timeline
       // displays, already filtered and deduplicated by the collection app itself.
       const timelineEl = document.querySelector('[class*="timeline"], [class*="Timeline"], [class*="event-list"], [class*="EventList"]');
-      if (!timelineEl) return -1;
+      if (!timelineEl) return { count: -1, pressureCount: -1 };
 
       const fiberKey = Object.keys(timelineEl).find(k => k.startsWith('__reactFiber'));
-      if (!fiberKey) return -1;
+      if (!fiberKey) return { count: -1, pressureCount: -1 };
 
       let fiber = timelineEl[fiberKey];
       let depth = 0;
       while (fiber && depth < 50) {
         const baseList = fiber.memoizedProps?.baseList;
         if (Array.isArray(baseList) && baseList.length > 0 && baseList[0]?.payload?.videoTimestamp !== undefined) {
-          return baseList.filter(e =>
+          const inRange = baseList.filter(e =>
             e.payload.videoTimestamp <= endTs &&
             !EXCLUDED_TYPES.includes(e.payload.name)
-          ).length;
+          );
+          const count         = inRange.length;
+          const pressureCount = inRange.filter(e => PRESSURE_TYPES.has(e.payload.name)).length;
+          return { count, pressureCount };
         }
         fiber = fiber.return;
         depth++;
       }
-      return -1;
+      return { count: -1, pressureCount: -1 };
     } catch(e) {
       console.error('[MARK] countEventsInRange error:', e);
-      return -1;
+      return { count: -1, pressureCount: -1 };
     }
   }
 
@@ -496,9 +501,14 @@
     }
 
     else if (msg.type === 'eventCountRequest') {
-      const count = countEventsInRange(msg.matchId, msg.startTs, msg.endTs);
+      const result = countEventsInRange(msg.matchId, msg.startTs, msg.endTs);
       if (ws && ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ type: 'eventCountResponse', count, ts: Date.now() }));
+        ws.send(JSON.stringify({
+          type:          'eventCountResponse',
+          count:         result.count,
+          pressureCount: result.pressureCount,
+          ts:            Date.now(),
+        }));
       }
     }
 

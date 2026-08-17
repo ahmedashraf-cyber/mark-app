@@ -40,7 +40,7 @@ import { formatHalf } from '../utils/half.js'
 
 export default function ReviewPage({ session, onDone, onBack, bridgeSyncStatus, onBridgeSyncStatus }) {
   const { profile } = useAuth()
-  const { syncNavigation, syncSetPlaying, syncSeek, requestEventCount, requestQAResults } = useSync(onBridgeSyncStatus, session.sessionId)
+  const { syncNavigation, syncSetPlaying, syncSeek, requestEventCount } = useSync(onBridgeSyncStatus, session.sessionId)
 
   const videoRef  = useRef(null)
   const rootRef   = useRef(null)
@@ -450,34 +450,22 @@ export default function ReviewPage({ session, onDone, onBack, bridgeSyncStatus, 
     setCountingEvents(true)
     setPressureReviewed(null)
 
-    // Try to get count + pressure data from bridge in parallel
     try {
-      const [count, qaData] = await Promise.all([
-        requestEventCount(session.matchId),
-        requestQAResults(session.matchId, session.half).catch(() => null),
-      ])
+      // requestEventCount now returns { count, pressureCount } from bridge
+      const result = await requestEventCount(session.matchId)
+      const count         = result?.count         ?? result ?? -1
+      const pressureCount = result?.pressureCount ?? -1
 
       if (count >= 0) {
-        console.log('[MARK] bridge returned event count:', count)
+        console.log('[MARK] bridge event count:', count, '| pressure:', pressureCount)
         setBridgeAvailable(true)
         setReviewedEvents(String(count))
+        if (pressureCount >= 0) setPressureReviewed(pressureCount)
       } else {
         console.log('[MARK] bridge not available, falling back to manual')
         setBridgeAvailable(false)
       }
 
-      // Extract pressure reviewed count from QA data
-      // = viewed keys where base event name is pressure-start or pressure-end
-      if (qaData && qaData.baseEvents) {
-        const PRESSURE_NAMES = new Set(['pressure-start', 'pressure-end'])
-        const pressureCount = qaData.baseEvents.filter(e =>
-          PRESSURE_NAMES.has(e.name || e.payload?.name || '')
-        ).length
-        if (pressureCount > 0) {
-          console.log('[MARK] pressure reviewed count:', pressureCount)
-          setPressureReviewed(pressureCount)
-        }
-      }
     } catch(e) {
       console.error('[MARK] event count request failed:', e)
       setBridgeAvailable(false)
