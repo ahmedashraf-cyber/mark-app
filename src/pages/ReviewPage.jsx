@@ -315,6 +315,84 @@ export default function ReviewPage({ session, onDone, onBack, bridgeSyncStatus, 
   // requestEventCount is now handled via WebSocket in useSync.js
   // bridge responds with video time + event count — zero Firebase usage
 
+  // ── Defect type classification (Python logic — same as MARK Audit) ────────
+  const DT_A_EVENTS  = new Set(['card','foul-committed','end-stoppage','stoppage','player-off','player-on',
+    'referee-ball-drop','shot','end-shot','substitution','tactical-shift','own-goal-against','starting-xi','error'])
+  const DT_B_EVENTS  = new Set(['fifty-fifty','clearance','dribble','interception','miscontrol','shield','block','tackle'])
+  const DT_C_EVENTS  = new Set(['pressure-start','pressure-end','ball-recovery','pressure'])
+  const DT_D_EVENTS  = new Set(['reception'])
+  const DT_TO_EVENTS = new Set(['hold-up-duel','leg-stretch-duel','positioning-duel','separation-duel'])
+  const DT_EXTRA_A   = new Set(['free-kick','kick-off','corner','through-ball','save','offside','conceded-no-save','save-attempt'])
+  const DT_EXTRA_B   = new Set(['interception','keeper-sweeper','smother','collected','punch','recovery'])
+  const DT_EXTRA_C   = new Set(['aerial-won'])
+  const DT_PASS_D    = new Set(['open-play','first-time'])
+  const DT_EXTRA_TO  = new Set(['launch','step-in','right-take-on','left-take-on','sliding','right','left','none'])
+  const DT_SEV       = { 'TO':0,'A':1,'B':2,'C':3,'D':4 }
+
+  // Normalize Scout underscore IDs to MARK Audit hyphen names
+  // e.g. 'foul_committed' → 'foul-committed', 'ball_recovery' → 'ball-recovery'
+  // Special cases: 'pressure' → 'pressure-start', 'pass_first_time' → 'pass' (D via type)
+  // 'pass_interception' → 'interception' (B), 'pass_recovery' → 'ball-recovery' (C)
+  const normalizeScoutId = (id) => {
+    if (!id) return ''
+    const map = {
+      'pressure':         'pressure-start',
+      'pass_first_time':  'pass',
+      'pass_interception':'interception',
+      'pass_recovery':    'ball-recovery',
+      'goal_keeper':      'goal-keeper',
+      'fifty_fifty':      'fifty-fifty',
+      'foul_committed':   'foul-committed',
+      'own_goal_against': 'own-goal-against',
+      'ball_recovery':    'ball-recovery',
+      'hold_up_duel':     'hold-up-duel',
+      'leg_stretch_duel': 'leg-stretch-duel',
+      'positioning_duel': 'positioning-duel',
+      'separation_duel':  'separation-duel',
+    }
+    return map[id] || id.replace(/_/g, '-')
+  }
+
+  const classifyScoutEvent = (triggeredEventId) => {
+    const name = normalizeScoutId(triggeredEventId)
+    if (DT_A_EVENTS.has(name))  return 'A'
+    if (DT_B_EVENTS.has(name))  return 'B'
+    if (DT_C_EVENTS.has(name))  return 'C'
+    if (DT_D_EVENTS.has(name))  return 'D'
+    if (DT_TO_EVENTS.has(name)) return 'TO'
+    // pass variants default to D
+    if (name === 'pass') return 'D'
+    return 'D'
+  }
+
+  const mergeClassDT = (c1, c2) => {
+    if (!c1) return c2 || 'D'
+    if (!c2) return c1 || 'D'
+    if (c1 === 'TO' || c2 === 'TO') return 'TO'
+    return DT_SEV[c1] <= DT_SEV[c2] ? c1 : c2
+  }
+
+  // Compute A/B/C/D/TO scores from tags + total reviewed count
+  const computeDefectTypeScores = (tagList, totalReviewed) => {
+    if (!totalReviewed || totalReviewed < 1) return null
+    const errorsByDT = { A:0, B:0, C:0, D:0, TO:0 }
+    tagList.forEach(tag => {
+      const dt = classifyScoutEvent(tag.triggeredEventId)
+      errorsByDT[dt] = (errorsByDT[dt] || 0) + 1
+    })
+    const scores = {}
+    const DTS = ['A','B','C','D','TO']
+    DTS.forEach(dt => {
+      const errors = errorsByDT[dt]
+      scores[dt] = {
+        errors,
+        reviewed: totalReviewed,
+        score: Math.round(((totalReviewed - errors) / totalReviewed) * 100),
+      }
+    })
+    return scores
+  }
+
   async function handleDoneSubmit(manualCount) {
     setSubmitting(true)
 
@@ -323,6 +401,7 @@ export default function ReviewPage({ session, onDone, onBack, bridgeSyncStatus, 
 
     const tagCount = tags.length
     const quality  = Math.round(100 - ((tagCount / Math.max(total, 1)) * 100))
+    const dtScores = computeDefectTypeScores(tags, total)
 
     try {
       await updateDoc(doc(db, 'mark_sessions', session.sessionId), {
@@ -330,6 +409,13 @@ export default function ReviewPage({ session, onDone, onBack, bridgeSyncStatus, 
         totalReviewedEvents: total,
         totalTaggedErrors: tagCount,
         qualityScore: quality,
+        // A/B/C/D/TO defect_type scores
+        qualityScoreA:  dtScores?.A?.score  ?? null,
+        qualityScoreB:  dtScores?.B?.score  ?? null,
+        qualityScoreC:  dtScores?.C?.score  ?? null,
+        qualityScoreD:  dtScores?.D?.score  ?? null,
+        qualityScoreTO: dtScores?.TO?.score ?? null,
+        defectTypeScores: dtScores ? JSON.stringify(dtScores) : null,
         completedAt: serverTimestamp(),
       })
 
@@ -341,7 +427,7 @@ export default function ReviewPage({ session, onDone, onBack, bridgeSyncStatus, 
       }
 
       setSubmitted(true)
-      setTimeout(() => onDone({ quality, tagCount, total, filePath }), 1500)
+      setTimeout(() => onDone({ quality, tagCount, total, filePath, dtScores }), 1500)
     } catch (e) {
       setSubmitting(false)
     }
@@ -598,6 +684,51 @@ export default function ReviewPage({ session, onDone, onBack, bridgeSyncStatus, 
                     <div style={{fontSize:11,color:'var(--t-3)'}}>Events Reviewed</div>
                   </div>
                 </div>
+
+                {/* A/B/C/D/TO defect_type scores */}
+                {(() => {
+                  const total = parseInt(reviewedEvents) || 0
+                  if (!total || tags.length === 0) return null
+                  const dtScores = computeDefectTypeScores(tags, total)
+                  const DT_CONFIG = [
+                    { dt:'A', color:'#0A84FF', label:'A' },
+                    { dt:'B', color:'#30D158', label:'B' },
+                    { dt:'C', color:'#FFD60A', label:'C' },
+                    { dt:'D', color:'#FF9F0A', label:'D' },
+                    { dt:'TO', color:'#BF5AF2', label:'TO' },
+                  ]
+                  return (
+                    <div style={{ marginBottom:16 }}>
+                      <div style={{ fontSize:9, fontWeight:800, letterSpacing:1.2, color:'var(--t-3)', textTransform:'uppercase', marginBottom:8 }}>
+                        Defect Type Scores
+                      </div>
+                      <div style={{ display:'grid', gridTemplateColumns:'repeat(5,1fr)', gap:6 }}>
+                        {DT_CONFIG.map(({ dt, color, label }) => {
+                          const d = dtScores?.[dt]
+                          if (!d) return null
+                          const sc = d.score
+                          const scColor = sc >= 95 ? '#30D158' : sc >= 85 ? '#FFD60A' : '#FF453A'
+                          return (
+                            <div key={dt} style={{
+                              background:'var(--bg-3)', border:`1px solid ${color}30`,
+                              borderRadius:8, padding:'8px 4px', textAlign:'center',
+                            }}>
+                              <div style={{ fontSize:8, fontWeight:800, color, marginBottom:4, letterSpacing:0.5 }}>{label}</div>
+                              <div style={{ fontSize:18, fontWeight:900, color:scColor, fontFamily:'Inter', lineHeight:1 }}>{sc}</div>
+                              <div style={{ fontSize:7, color:'var(--t-3)', marginTop:1 }}>%</div>
+                              {d.errors > 0 && (
+                                <div style={{ fontSize:8, color:'#FF453A', fontWeight:700, marginTop:2 }}>{d.errors}↑</div>
+                              )}
+                            </div>
+                          )
+                        })}
+                      </div>
+                      <div style={{ fontSize:9, color:'var(--t-3)', marginTop:6, textAlign:'center' }}>
+                        Denominator: {total} reviewed events for all groups
+                      </div>
+                    </div>
+                  )
+                })()}
 
                 {/* Auto-count status */}
                 {bridgeAvailable ? (
