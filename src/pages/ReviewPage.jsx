@@ -40,7 +40,7 @@ import { formatHalf } from '../utils/half.js'
 
 export default function ReviewPage({ session, onDone, onBack, bridgeSyncStatus, onBridgeSyncStatus }) {
   const { profile } = useAuth()
-  const { syncNavigation, syncSetPlaying, syncSeek, requestEventCount } = useSync(onBridgeSyncStatus, session.sessionId)
+  const { syncNavigation, syncSetPlaying, syncSeek, requestEventCount, requestQAResults } = useSync(onBridgeSyncStatus, session.sessionId)
 
   const videoRef  = useRef(null)
   const rootRef   = useRef(null)
@@ -403,6 +403,12 @@ export default function ReviewPage({ session, onDone, onBack, bridgeSyncStatus, 
     const quality  = Math.round(100 - ((tagCount / Math.max(total, 1)) * 100))
     const dtScores = computeDefectTypeScores(tags, total)
 
+    // Pressure module score (only when bridge provided pressure reviewed count)
+    const pressureErrors = tags.filter(t => normalizeScoutId(t.triggeredEventId) === 'pressure-start').length
+    const pressureScore  = pressureReviewed > 0
+      ? Math.round(((pressureReviewed - pressureErrors) / pressureReviewed) * 100)
+      : null
+
     try {
       await updateDoc(doc(db, 'mark_sessions', session.sessionId), {
         status: 'completed',
@@ -416,6 +422,10 @@ export default function ReviewPage({ session, onDone, onBack, bridgeSyncStatus, 
         qualityScoreD:  dtScores?.D?.score  ?? null,
         qualityScoreTO: dtScores?.TO?.score ?? null,
         defectTypeScores: dtScores ? JSON.stringify(dtScores) : null,
+        // Pressure module score (bridge-powered)
+        pressureReviewedCount: pressureReviewed ?? null,
+        pressureErrorCount:    pressureReviewed > 0 ? pressureErrors : null,
+        pressureScore:         pressureScore,
         completedAt: serverTimestamp(),
       })
 
@@ -427,19 +437,26 @@ export default function ReviewPage({ session, onDone, onBack, bridgeSyncStatus, 
       }
 
       setSubmitted(true)
-      setTimeout(() => onDone({ quality, tagCount, total, filePath, dtScores }), 1500)
+      setTimeout(() => onDone({ quality, tagCount, total, filePath, dtScores, pressureScore, pressureReviewed, pressureErrors }), 1500)
     } catch (e) {
       setSubmitting(false)
     }
   }
 
+  const [pressureReviewed, setPressureReviewed] = useState(null)
+
   async function handleDoneClick() {
     setShowDoneModal(true)
     setCountingEvents(true)
+    setPressureReviewed(null)
 
-    // Try to get count from bridge
+    // Try to get count + pressure data from bridge in parallel
     try {
-      const count = await requestEventCount(session.matchId)
+      const [count, qaData] = await Promise.all([
+        requestEventCount(session.matchId),
+        requestQAResults(session.matchId, session.half).catch(() => null),
+      ])
+
       if (count >= 0) {
         console.log('[MARK] bridge returned event count:', count)
         setBridgeAvailable(true)
@@ -447,6 +464,19 @@ export default function ReviewPage({ session, onDone, onBack, bridgeSyncStatus, 
       } else {
         console.log('[MARK] bridge not available, falling back to manual')
         setBridgeAvailable(false)
+      }
+
+      // Extract pressure reviewed count from QA data
+      // = viewed keys where base event name is pressure-start or pressure-end
+      if (qaData && qaData.baseEvents) {
+        const PRESSURE_NAMES = new Set(['pressure-start', 'pressure-end'])
+        const pressureCount = qaData.baseEvents.filter(e =>
+          PRESSURE_NAMES.has(e.name || e.payload?.name || '')
+        ).length
+        if (pressureCount > 0) {
+          console.log('[MARK] pressure reviewed count:', pressureCount)
+          setPressureReviewed(pressureCount)
+        }
       }
     } catch(e) {
       console.error('[MARK] event count request failed:', e)
@@ -725,6 +755,38 @@ export default function ReviewPage({ session, onDone, onBack, bridgeSyncStatus, 
                       </div>
                       <div style={{ fontSize:9, color:'var(--t-3)', marginTop:6, textAlign:'center' }}>
                         Denominator: {total} reviewed events for all groups
+                      </div>
+                    </div>
+                  )
+                })()}
+
+                {/* Pressure module score (bridge-powered) */}
+                {pressureReviewed > 0 && (() => {
+                  const pressureErrors = tags.filter(t => normalizeScoutId(t.triggeredEventId) === 'pressure-start').length
+                  const sc = Math.round(((pressureReviewed - pressureErrors) / pressureReviewed) * 100)
+                  const col = sc >= 95 ? '#30D158' : sc >= 85 ? '#FFD60A' : '#FF453A'
+                  return (
+                    <div style={{ marginBottom:16 }}>
+                      <div style={{ fontSize:9, fontWeight:800, letterSpacing:1.2, color:'var(--t-3)', textTransform:'uppercase', marginBottom:8 }}>
+                        Pressure Module
+                      </div>
+                      <div style={{ background:'var(--bg-3)', border:`1px solid ${col}30`, borderRadius:8, padding:'10px 14px', display:'flex', alignItems:'center', gap:16 }}>
+                        <div style={{ textAlign:'center', minWidth:60 }}>
+                          <div style={{ fontSize:24, fontWeight:900, color:col, fontFamily:'Inter', lineHeight:1 }}>{sc}</div>
+                          <div style={{ fontSize:8, color:'var(--t-3)', marginTop:1 }}>%</div>
+                        </div>
+                        <div style={{ width:1, height:36, background:'var(--b-1)' }} />
+                        <div style={{ display:'flex', gap:16, flex:1 }}>
+                          <div style={{ textAlign:'center' }}>
+                            <div style={{ fontSize:16, fontWeight:800, color:pressureErrors>0?'#FF453A':'var(--t-1)' }}>{pressureErrors}</div>
+                            <div style={{ fontSize:9, color:'var(--t-3)' }}>Errors</div>
+                          </div>
+                          <div style={{ textAlign:'center' }}>
+                            <div style={{ fontSize:16, fontWeight:800, color:'var(--t-1)' }}>{pressureReviewed}</div>
+                            <div style={{ fontSize:9, color:'var(--t-3)' }}>Reviewed</div>
+                          </div>
+                        </div>
+                        <div style={{ fontSize:9, color:'#30D158', fontWeight:600 }}>● Bridge</div>
                       </div>
                     </div>
                   )

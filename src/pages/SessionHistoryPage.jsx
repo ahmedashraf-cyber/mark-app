@@ -24,7 +24,7 @@
  */
 import { useState, useEffect, useRef } from 'react'
 import { db } from '../firebase/config'
-import { collection, query, where, getDocs } from 'firebase/firestore'
+import { collection, query, where, getDocs, doc, writeBatch } from 'firebase/firestore'
 import { useAuth } from '../hooks/useAuth.jsx'
 import { useAdmin } from '../hooks/useAdmin.js'
 import { invoke } from '@tauri-apps/api/core'
@@ -795,6 +795,90 @@ function SessionCard({ session, onReview, onExport, onExportSheets, loading, isA
   )
 }
 
+// ------ Defect Type Classification (same as ReviewPage) ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+const _DT_A  = new Set(['card','foul-committed','end-stoppage','stoppage','player-off','player-on','referee-ball-drop','shot','end-shot','substitution','tactical-shift','own-goal-against','starting-xi','error'])
+const _DT_B  = new Set(['fifty-fifty','clearance','dribble','interception','miscontrol','shield','block','tackle'])
+const _DT_C  = new Set(['pressure-start','pressure-end','ball-recovery','pressure'])
+const _DT_D  = new Set(['reception'])
+const _DT_TO = new Set(['hold-up-duel','leg-stretch-duel','positioning-duel','separation-duel'])
+const _DT_SEV = { TO:0, A:1, B:2, C:3, D:4 }
+
+const _normalizeScoutId = id => {
+  if (!id) return ''
+  const map = {
+    pressure:'pressure-start', pass_first_time:'pass', pass_interception:'interception',
+    pass_recovery:'ball-recovery', goal_keeper:'goal-keeper', fifty_fifty:'fifty-fifty',
+    foul_committed:'foul-committed', own_goal_against:'own-goal-against', ball_recovery:'ball-recovery',
+    hold_up_duel:'hold-up-duel', leg_stretch_duel:'leg-stretch-duel',
+    positioning_duel:'positioning-duel', separation_duel:'separation-duel',
+  }
+  return map[id] || id.replace(/_/g, '-')
+}
+
+const _classifyScoutEvent = id => {
+  const name = _normalizeScoutId(id)
+  if (_DT_A.has(name))  return 'A'
+  if (_DT_B.has(name))  return 'B'
+  if (_DT_C.has(name))  return 'C'
+  if (_DT_D.has(name))  return 'D'
+  if (_DT_TO.has(name)) return 'TO'
+  return 'D'
+}
+
+const _computeDTScores = (tagList, totalReviewed) => {
+  if (!totalReviewed || totalReviewed < 1) return null
+  const errByDT = { A:0, B:0, C:0, D:0, TO:0 }
+  tagList.forEach(t => { const dt = _classifyScoutEvent(t.triggeredEventId); errByDT[dt]++ })
+  const out = {}
+  const DTS = ['A','B','C','D','TO']
+  DTS.forEach(dt => {
+    out[dt] = { errors: errByDT[dt], reviewed: totalReviewed, score: Math.round(((totalReviewed - errByDT[dt]) / totalReviewed) * 100) }
+  })
+  return out
+}
+
+// Backfill: find Scout sessions missing qualityScoreA, fetch tags, recompute + batch update
+async function backfillDefectTypeScores(scoutList) {
+  const missing = scoutList.filter(s =>
+    s.qualityScoreA == null &&
+    s.totalReviewedEvents > 0 &&
+    s.status === 'completed' &&
+    s.sessionId
+  )
+  if (missing.length === 0) return
+  console.log(`[MARK] backfill: ${missing.length} Scout sessions missing A/B/C/D/TO scores`)
+
+  const batch = writeBatch(db)
+  let updated = 0
+
+  for (const session of missing) {
+    try {
+      const q = query(collection(db, 'mark_error_tags'), where('sessionId', '==', session.sessionId))
+      const snap = await getDocs(q)
+      const tags = snap.docs.map(d => d.data())
+      const dtScores = _computeDTScores(tags, session.totalReviewedEvents)
+      if (!dtScores) continue
+      const ref = doc(db, 'mark_sessions', session.id)
+      batch.update(ref, {
+        qualityScoreA:    dtScores.A.score,
+        qualityScoreB:    dtScores.B.score,
+        qualityScoreC:    dtScores.C.score,
+        qualityScoreD:    dtScores.D.score,
+        qualityScoreTO:   dtScores.TO.score,
+        defectTypeScores: JSON.stringify(dtScores),
+      })
+      updated++
+    } catch(e) {
+      console.warn('[MARK] backfill failed for session', session.sessionId, e)
+    }
+  }
+
+  if (updated > 0) {
+    await batch.commit()
+    console.log(`[MARK] backfill complete: ${updated} sessions updated`)
+  }
+}
+
 // ------ Main Page ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 export default function SessionHistoryPage({ onBack, initialSession }) {
   const { profile } = useAuth()
@@ -884,6 +968,10 @@ export default function SessionHistoryPage({ onBack, initialSession }) {
         }
 
         if (initialSession) handleReview(initialSession)
+
+        // ── Backfill: recompute A/B/C/D/TO scores for old Scout sessions ────
+        // Runs silently after load — only targets sessions missing qualityScoreA
+        backfillDefectTypeScores(scoutList).catch(e => console.warn('[MARK] backfill error:', e))
       } catch(e) {
         console.error('[MARK] load sessions:', e)
       } finally {
