@@ -35,7 +35,7 @@ import TagPanel from '../components/TagPanel'
 import TaggedEventsList from '../components/TaggedEventsList'
 import ErrorTimeline from '../components/ErrorTimeline'
 import EventsSidebar from '../components/EventsSidebar'
-import { exportSessionToXlsx } from '../utils/exportSession'
+import { exportScoutSession } from '../utils/exportScoutSession'
 import { formatHalf } from '../utils/half.js'
 
 export default function ReviewPage({ session, onDone, onBack, bridgeSyncStatus, onBridgeSyncStatus }) {
@@ -393,52 +393,65 @@ export default function ReviewPage({ session, onDone, onBack, bridgeSyncStatus, 
     return scores
   }
 
+  // Export pipeline state — drives the progress modal
+  const [exportState, setExportState] = useState(null)
+  // { phase, step, total, detail, driveLink, error }
+
   async function handleDoneSubmit(manualCount) {
     setSubmitting(true)
 
     let total = manualCount !== undefined ? manualCount : parseInt(reviewedEvents)
     if (!total || isNaN(total)) total = 1
 
-    const tagCount = tags.length
-    const quality  = Math.round(100 - ((tagCount / Math.max(total, 1)) * 100))
-    const dtScores = computeDefectTypeScores(tags, total)
-
-    // Pressure module score (only when bridge provided pressure reviewed count)
-    const pressureErrors = tags.filter(t => normalizeScoutId(t.triggeredEventId) === 'pressure-start').length
-    const pressureScore  = pressureReviewed > 0
+    const tagCount      = tags.length
+    const quality       = Math.round(100 - ((tagCount / Math.max(total, 1)) * 100))
+    const dtScores      = computeDefectTypeScores(tags, total)
+    const pressureErrors= tags.filter(t => normalizeScoutId(t.triggeredEventId) === 'pressure-start').length
+    const pressureScore = pressureReviewed > 0
       ? Math.round(((pressureReviewed - pressureErrors) / pressureReviewed) * 100)
       : null
 
     try {
       await updateDoc(doc(db, 'mark_sessions', session.sessionId), {
-        status: 'completed',
+        status:              'completed',
         totalReviewedEvents: total,
-        totalTaggedErrors: tagCount,
-        qualityScore: quality,
-        // A/B/C/D/TO defect_type scores
-        qualityScoreA:  dtScores?.A?.score  ?? null,
-        qualityScoreB:  dtScores?.B?.score  ?? null,
-        qualityScoreC:  dtScores?.C?.score  ?? null,
-        qualityScoreD:  dtScores?.D?.score  ?? null,
-        qualityScoreTO: dtScores?.TO?.score ?? null,
-        defectTypeScores: dtScores ? JSON.stringify(dtScores) : null,
-        // Pressure module score (bridge-powered)
+        totalTaggedErrors:   tagCount,
+        qualityScore:        quality,
+        qualityScoreA:       dtScores?.A?.score  ?? null,
+        qualityScoreB:       dtScores?.B?.score  ?? null,
+        qualityScoreC:       dtScores?.C?.score  ?? null,
+        qualityScoreD:       dtScores?.D?.score  ?? null,
+        qualityScoreTO:      dtScores?.TO?.score ?? null,
+        defectTypeScores:    dtScores ? JSON.stringify(dtScores) : null,
         pressureReviewedCount: pressureReviewed ?? null,
         pressureErrorCount:    pressureReviewed > 0 ? pressureErrors : null,
-        pressureScore:         pressureScore,
+        pressureScore,
         completedAt: serverTimestamp(),
       })
 
-      let filePath = null
-      try {
-        filePath = await exportSessionToXlsx({ session, tags, quality, tagCount, total, videoPath })
-      } catch (exportErr) {
-        console.error('[MARK] XLSX export failed:', exportErr)
-      }
+      setSubmitting(false)
+      setShowDoneModal(false)
+      // Open export progress modal immediately after session saved
+      setExportState({ phase:'starting', step:0, total:1, detail:'Preparing export…', driveLink:'', error:'' })
 
-      setSubmitted(true)
-      setTimeout(() => onDone({ quality, tagCount, total, filePath, dtScores, pressureScore, pressureReviewed, pressureErrors }), 1500)
-    } catch (e) {
+      // Run export pipeline
+      exportScoutSession({
+        session, tags, quality, tagCount, total,
+        dtScores, pressureScore, pressureReviewed, pressureErrors,
+        onProgress: ({ phase, step, total: tot, detail }) =>
+          setExportState(s => ({ ...s, phase, step, total: tot, detail: detail || '' })),
+      })
+      .then(({ folderUrl }) => {
+        setExportState(s => ({ ...s, phase:'done', driveLink: folderUrl, detail:'' }))
+        setTimeout(() => onDone({ quality, tagCount, total, dtScores, pressureScore, pressureReviewed, pressureErrors }), 800)
+      })
+      .catch(err => {
+        console.error('[MARK] Scout export failed:', err)
+        setExportState(s => ({ ...s, phase:'error', error: err?.message || String(err) }))
+      })
+
+    } catch(e) {
+      console.error('[MARK] session save failed:', e)
       setSubmitting(false)
     }
   }
@@ -826,6 +839,138 @@ export default function ReviewPage({ session, onDone, onBack, bridgeSyncStatus, 
                   </button>
                 </div>
               </>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ══ Export Progress Modal ════════════════════════════════════════════ */}
+      {exportState && (
+        <div style={{
+          position:'fixed', inset:0, background:'rgba(10,10,18,0.96)',
+          display:'flex', alignItems:'center', justifyContent:'center',
+          zIndex:9999, backdropFilter:'blur(12px)',
+        }}>
+          <div style={{
+            background:'#111120', border:'1px solid rgba(255,255,255,0.08)',
+            borderRadius:16, padding:'32px 36px', width:480, maxWidth:'90vw',
+          }}>
+            {/* Header */}
+            <div style={{ marginBottom:24 }}>
+              <div style={{ fontFamily:'Inter', fontWeight:800, fontSize:16, color:'rgba(255,255,255,0.95)', marginBottom:4 }}>
+                {exportState.phase === 'done'  ? '✅ Export Complete' :
+                 exportState.phase === 'error' ? '❌ Export Failed'   :
+                 '⏳ Exporting Session…'}
+              </div>
+              <div style={{ fontSize:11, color:'rgba(255,255,255,0.4)' }}>
+                {exportState.phase === 'done' ? 'All files saved and uploaded.' :
+                 exportState.phase === 'error' ? 'An error occurred during export.' :
+                 'Please keep MARK open until complete.'}
+              </div>
+            </div>
+
+            {/* Steps */}
+            {(() => {
+              const steps = [
+                { key:'token',    icon:'🔑', label:'Google Drive auth'     },
+                { key:'folder',   icon:'📁', label:'Creating Drive folder'  },
+                { key:'video',    icon:'🎬', label:'Locating video file'    },
+                { key:'xlsx',     icon:'📊', label:'Building spreadsheet'   },
+                { key:'cutting',  icon:'✂️', label:'Cutting video clips'    },
+                { key:'uploading',icon:'☁️', label:'Uploading to Drive'     },
+                { key:'done',     icon:'✅', label:'Done'                   },
+              ]
+              const ORDER = steps.map(s=>s.key)
+              const currentIdx = ORDER.indexOf(exportState.phase)
+              return (
+                <div style={{ marginBottom:20 }}>
+                  {steps.filter(s=>s.key!=='done').map((s, i) => {
+                    const idx   = ORDER.indexOf(s.key)
+                    const done  = currentIdx > idx || exportState.phase === 'done'
+                    const active= currentIdx === idx && exportState.phase !== 'done' && exportState.phase !== 'error'
+                    return (
+                      <div key={s.key} style={{
+                        display:'flex', alignItems:'center', gap:10,
+                        padding:'6px 0',
+                        opacity: done ? 1 : active ? 1 : 0.35,
+                      }}>
+                        <div style={{ fontSize:16, width:22, textAlign:'center' }}>
+                          {done ? '✅' : active ? s.icon : '○'}
+                        </div>
+                        <div style={{ flex:1 }}>
+                          <div style={{ fontSize:12, fontWeight:done||active?600:400, color:done?'#30D158':active?'rgba(255,255,255,0.95)':'rgba(255,255,255,0.4)' }}>
+                            {s.label}
+                            {active && exportState.detail && (
+                              <span style={{ fontWeight:400, color:'rgba(255,255,255,0.5)', marginLeft:6 }}>
+                                — {exportState.detail}
+                              </span>
+                            )}
+                          </div>
+                          {/* Per-step progress bar */}
+                          {active && exportState.total > 1 && (
+                            <div style={{ marginTop:4, height:3, borderRadius:2, background:'rgba(255,255,255,0.08)', overflow:'hidden' }}>
+                              <div style={{
+                                height:'100%', borderRadius:2,
+                                background: '#E8590C',
+                                width: `${Math.round((exportState.step / exportState.total) * 100)}%`,
+                                transition: 'width 0.3s ease',
+                              }} />
+                            </div>
+                          )}
+                        </div>
+                        {active && exportState.total > 1 && (
+                          <div style={{ fontSize:10, color:'rgba(255,255,255,0.4)', whiteSpace:'nowrap' }}>
+                            {exportState.step}/{exportState.total}
+                          </div>
+                        )}
+                      </div>
+                    )
+                  })}
+                </div>
+              )
+            })()}
+
+            {/* Overall progress bar */}
+            {exportState.phase !== 'done' && exportState.phase !== 'error' && (() => {
+              const ORDER = ['token','folder','video','xlsx','cutting','uploading']
+              const ci    = ORDER.indexOf(exportState.phase)
+              const pct   = ci < 0 ? 0 : Math.round(((ci + (exportState.total > 0 ? exportState.step/exportState.total : 0)) / ORDER.length) * 100)
+              return (
+                <div style={{ marginBottom:20 }}>
+                  <div style={{ display:'flex', justifyContent:'space-between', fontSize:10, color:'rgba(255,255,255,0.4)', marginBottom:4 }}>
+                    <span>Overall progress</span><span>{pct}%</span>
+                  </div>
+                  <div style={{ height:4, borderRadius:2, background:'rgba(255,255,255,0.08)', overflow:'hidden' }}>
+                    <div style={{ height:'100%', borderRadius:2, background:'linear-gradient(90deg,#E8590C,#FF9F0A)', width:`${pct}%`, transition:'width 0.4s ease' }} />
+                  </div>
+                </div>
+              )
+            })()}
+
+            {/* Error state */}
+            {exportState.phase === 'error' && (
+              <div style={{ background:'rgba(255,69,58,0.1)', border:'1px solid rgba(255,69,58,0.3)', borderRadius:8, padding:'10px 12px', marginBottom:16, fontSize:12, color:'#FF453A' }}>
+                {exportState.error}
+              </div>
+            )}
+
+            {/* Done — show Drive link */}
+            {exportState.phase === 'done' && exportState.driveLink && (
+              <div style={{ background:'rgba(48,209,88,0.08)', border:'1px solid rgba(48,209,88,0.2)', borderRadius:8, padding:'12px 14px', marginBottom:16 }}>
+                <div style={{ fontSize:11, color:'rgba(255,255,255,0.5)', marginBottom:4 }}>Drive folder</div>
+                <a href={exportState.driveLink} target="_blank" rel="noreferrer"
+                  style={{ fontSize:12, color:'#0A84FF', textDecoration:'none', wordBreak:'break-all' }}>
+                  {exportState.driveLink}
+                </a>
+              </div>
+            )}
+
+            {/* Action button — only show when done or error */}
+            {(exportState.phase === 'done' || exportState.phase === 'error') && (
+              <button className="btn-orange" style={{ width:'100%', padding:'10px 0', fontSize:13 }}
+                onClick={() => { setExportState(null) }}>
+                {exportState.phase === 'done' ? 'Close' : 'Dismiss'}
+              </button>
             )}
           </div>
         </div>
