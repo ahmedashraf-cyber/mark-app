@@ -533,9 +533,11 @@ function AuditDashboard({ results, score, abcScores, onFullReport, session, iden
   const getErrors      = k => rg ? (rg[k]?.errors  ?? 0)   : 0
 
   // Module scores from bridge defect_type engine
-  const moduleScoresDT    = rg?.moduleScoresDT    || null
+  const moduleScoresDT     = rg?.moduleScoresDT    || null
   const moduleDefectMatrix = rg?.moduleDefectMatrix || null
-  const standaloneAdded   = rg?.standaloneAdded   ?? 0
+  const standaloneAdded    = rg?.standaloneAdded   ?? 0
+  // Pressure module score — from bridge moduleScores.pressure (separate from defect_type matrix)
+  const pressureModScore   = results.moduleScores?.pressure ?? null
   const overallScore   = rg ? (rg.overall?.score  ?? score) : score
   const overallViewed  = rg ? (rg.overall?.viewed ?? results.baseEvents.length) : results.baseEvents.length
   const uniqueEdited   = computeErrorKeys(results.baseEvents, results.amendments, results.reviewerIds).size
@@ -782,7 +784,6 @@ function AuditDashboard({ results, score, abcScores, onFullReport, session, iden
             const DTS    = ['A','B','C','D','TO']
             const DT_COL = { A:'#0A84FF', B:'#30D158', C:'#FFD60A', D:'#FF9F0A', TO:'#BF5AF2' }
             const matrix = moduleDefectMatrix
-
             return (
               <div style={{ overflowX:'auto' }}>
                 <table style={{ width:'100%', borderCollapse:'collapse', fontSize:10 }}>
@@ -841,6 +842,35 @@ function AuditDashboard({ results, score, abcScores, onFullReport, session, iden
                         </tr>
                       )
                     })}
+                    {/* Pressure row — separate from defect_type matrix, uses bridge moduleScores.pressure */}
+                    {pressureModScore && (
+                      <tr style={{ borderTop:'1px solid var(--b-1)' }}>
+                        <td style={{ padding:'6px 8px 6px 0', fontSize:9, fontWeight:700, color:'#E8590C', textTransform:'uppercase', whiteSpace:'nowrap' }}>
+                          pressure
+                        </td>
+                        <td style={{ textAlign:'center', padding:'6px' }}>
+                          <div>
+                            <span style={{ fontFamily:'JetBrains Mono,monospace', fontSize:12, fontWeight:900, color: pressureModScore.score >= 95 ? '#30D158' : pressureModScore.score >= 85 ? '#FFD60A' : '#FF453A' }}>
+                              {pressureModScore.score}
+                            </span>
+                            <span style={{ fontSize:8, color:'var(--t-3)' }}>%</span>
+                            {pressureModScore.errors > 0 && <div style={{ fontSize:8, color:'#FF453A', lineHeight:1.2 }}>{pressureModScore.errors}↑</div>}
+                          </div>
+                        </td>
+                        {/* Pressure is C defect_type — show in C column, others N/A */}
+                        {DTS.map(dt => (
+                          <td key={dt} style={{ textAlign:'center', padding:'6px', opacity: dt==='C' ? 1 : 0.2 }}>
+                            {dt === 'C' ? (
+                              <div style={{ fontFamily:'JetBrains Mono,monospace', fontSize:11, fontWeight:900,
+                                color: pressureModScore.score >= 95 ? '#30D158' : pressureModScore.score >= 85 ? '#FFD60A' : '#FF453A',
+                                background:`${DT_COL['C']}08`, borderRadius:4, padding:'2px 4px' }}>
+                                {pressureModScore.score}<span style={{ fontSize:7, color:'var(--t-3)' }}>%</span>
+                              </div>
+                            ) : <span style={{ fontSize:9, color:'var(--t-3)' }}>—</span>}
+                          </td>
+                        ))}
+                      </tr>
+                    )}
                   </tbody>
                 </table>
               </div>
@@ -2590,14 +2620,16 @@ export default function AuditPage({ session, onBack, onFullReport, initialResult
       const resolvedReviewerEmail = primaryReviewerEntry?.email || profile.email
       const resolvedReviewerHrCode = primaryReviewerEntry?.hrcode || primaryReviewerEntry?.hrCode || null
 
-      // Per-module scores (abc keys: A=base, B=pressure, C=extras, D=players, E=location, F=freeze-frame)
+      // Per-module scores — from bridge moduleScores (accurate, telemetry-based)
+      // data.moduleScores = { base, pressure, players, location, extras, freeze-frame }
+      // each = { score, viewed, errors } | null
       const moduleScores = {
-        base:        abc?.A?.score ?? null,
-        pressure:    abc?.B?.score ?? null,
-        extras:      abc?.C?.score ?? null,
-        players:     abc?.D?.score ?? null,
-        location:    abc?.E?.score ?? null,
-        freezeFrame: abc?.F?.score ?? null,
+        base:        data.moduleScores?.base?.score        ?? abc?.A?.score ?? null,
+        pressure:    data.moduleScores?.pressure?.score    ?? null,
+        extras:      data.moduleScores?.extras?.score      ?? abc?.C?.score ?? null,
+        players:     data.moduleScores?.players?.score     ?? abc?.D?.score ?? null,
+        location:    data.moduleScores?.location?.score    ?? abc?.E?.score ?? null,
+        freezeFrame: data.moduleScores?.['freeze-frame']?.score ?? abc?.F?.score ?? null,
       }
 
       // ── Delete all previous sessions for this matchId+half by this reviewer ──
