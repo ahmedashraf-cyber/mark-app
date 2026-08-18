@@ -442,7 +442,7 @@ fn patch_one_shortcut(lnk_path: &std::path::Path) -> Result<bool, String> {
 // marker) does not match, so it gets stripped and replaced — that's what was
 // previously frozen by a fixed marker. Bump this whenever the embedded bridge
 // changes so existing installs re-embed the new version.
-const ASAR_MARKER: &str = "<!-- MARK_BRIDGE_INJECTED v7.8.22 -->";
+const ASAR_MARKER: &str = "<!-- MARK_BRIDGE_INJECTED v7.8.23 -->";
 
 #[command]
 fn patch_tag_once_asar() -> Result<String, String> {
@@ -2388,12 +2388,71 @@ async fn upload_csv_as_sheet(
 }
 
 #[command]
+// Upload an XLSX file to Drive, convert to Google Sheet, place in parent folder
+#[command]
+async fn upload_xlsx_as_sheet(
+    token: String,
+    file_path: String,
+    file_name: String,
+    parent_folder_id: String,
+) -> Result<String, String> {
+    let bytes = std::fs::read(&file_path)
+        .map_err(|e| format!("Could not read file {}: {}", file_path, e))?;
+    let client = reqwest::Client::new();
+    let boundary = "MARKxlsxboundary8b4d2e";
+    // Strip .xlsx suffix for the sheet name
+    let sheet_name = file_name.trim_end_matches(".xlsx");
+    let metadata = serde_json::json!({
+        "name": sheet_name,
+        "mimeType": "application/vnd.google-apps.spreadsheet",
+        "parents": [parent_folder_id]
+    });
+    let mut body: Vec<u8> = Vec::new();
+    body.extend_from_slice(format!("--{}\r\n", boundary).as_bytes());
+    body.extend_from_slice(b"Content-Type: application/json; charset=UTF-8\r\n\r\n");
+    body.extend_from_slice(metadata.to_string().as_bytes());
+    body.extend_from_slice(format!("\r\n--{}\r\n", boundary).as_bytes());
+    body.extend_from_slice(b"Content-Type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet\r\n\r\n");
+    body.extend_from_slice(&bytes);
+    body.extend_from_slice(format!("\r\n--{}--\r\n", boundary).as_bytes());
+    let resp: serde_json::Value = client
+        .post("https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&supportsAllDrives=true&fields=id,webViewLink")
+        .header("Authorization", format!("Bearer {}", token))
+        .header("Content-Type", format!("multipart/related; boundary={}", boundary))
+        .body(body)
+        .send()
+        .await
+        .map_err(|e| format!("XLSX sheet upload failed: {}", e))?
+        .json()
+        .await
+        .map_err(|e| format!("XLSX sheet upload parse failed: {}", e))?;
+    if let Some(err) = resp.get("error") {
+        return Err(format!("XLSX sheet upload error: {}", err));
+    }
+    let sheet_id  = resp["id"].as_str().unwrap_or("").to_string();
+    let web_link  = resp["webViewLink"].as_str().unwrap_or("").to_string();
+    if !sheet_id.is_empty() {
+        Ok(if !web_link.is_empty() { web_link } else { format!("https://docs.google.com/spreadsheets/d/{}", sheet_id) })
+    } else {
+        Ok(String::new())
+    }
+}
+
 fn save_text_file(path: String, content: String) -> Result<(), String> {
     // Ensure parent directory exists
     if let Some(parent) = std::path::Path::new(&path).parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
     std::fs::write(&path, content.as_bytes()).map_err(|e| e.to_string())
+}
+
+// Save binary data (e.g. XLSX) to an exact path without a dialog
+#[command]
+fn save_binary_file(path: String, data: Vec<u8>) -> Result<(), String> {
+    if let Some(parent) = std::path::Path::new(&path).parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    std::fs::write(&path, &data).map_err(|e| e.to_string())
 }
 
     tauri::Builder::default()
@@ -2419,6 +2478,8 @@ fn save_text_file(path: String, content: String) -> Result<(), String> {
             drive_upload_file,
             upload_csv_as_sheet,
             save_text_file,
+            save_binary_file,
+            upload_xlsx_as_sheet,
             get_google_access_token_cmd,
             get_userprofile,
             send_report_email,

@@ -347,24 +347,19 @@ export async function exportScoutSession({
   })
   const wbout = XLSX.write(wb, { bookType:'xlsx', type:'array', cellStyles:true })
 
-  // ── Step 4: Save XLSX locally ─────────────────────────────────────────────
+  // ── Step 4: Save XLSX locally (binary — no dialog) ───────────────────────
   report('xlsx', 1, 1, 'Saving spreadsheet locally…')
   let userprofile
   try { userprofile = await invoke('get_userprofile') } catch(e) { userprofile = '' }
   const localFolder = `${userprofile}\\Downloads\\${folderBase}`
   const xlsxPath    = `${localFolder}\\${xlsxName}`
+  const xlsxBytes   = Array.from(new Uint8Array(wbout))
   try {
-    await invoke('save_text_file', {
-      path: xlsxPath,
-      content: String.fromCharCode(...new Uint8Array(wbout)),
-    })
+    await invoke('save_binary_file', { path: xlsxPath, data: xlsxBytes })
   } catch(e) {
-    // Fallback: use save_xlsx_file with native dialog
+    console.warn('[MARK] Silent XLSX save failed, trying dialog:', e)
     try {
-      await invoke('save_xlsx_file', {
-        name: xlsxName,
-        data: Array.from(new Uint8Array(wbout)),
-      })
+      await invoke('save_xlsx_file', { name: xlsxName, data: xlsxBytes })
     } catch(e2) { console.warn('[MARK] XLSX local save failed:', e2) }
   }
 
@@ -394,11 +389,13 @@ export async function exportScoutSession({
     report('cutting', 0, 0, videoPath ? 'No errors to clip' : 'No video — skipping clips')
   }
 
-  // ── Step 6: Upload XLSX to Drive ──────────────────────────────────────────
+  // ── Step 6: Upload XLSX to Drive as Google Sheet ─────────────────────────
   report('uploading', 0, cutFiles.length + 1, 'Uploading spreadsheet to Drive…')
   let driveLink = ''
   try {
-    const sheetLink = await invoke('upload_csv_as_sheet', {
+    // upload_xlsx_as_sheet: correct XLSX MIME type → Drive converts to native Sheet
+    // Places directly in our subfolder
+    const sheetLink = await invoke('upload_xlsx_as_sheet', {
       token,
       filePath: xlsxPath,
       fileName: xlsxName,
@@ -408,7 +405,7 @@ export async function exportScoutSession({
     report('uploading', 1, cutFiles.length + 1, 'Sheet uploaded ✅')
   } catch(e) {
     console.warn('[MARK] sheet upload failed:', e)
-    report('uploading', 1, cutFiles.length + 1, `⚠️ Sheet upload failed`)
+    report('uploading', 1, cutFiles.length + 1, `⚠️ Sheet upload failed: ${e?.message||String(e)}`)
     driveLink = `https://drive.google.com/drive/folders/${subFolderId}`
   }
 
