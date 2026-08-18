@@ -442,7 +442,7 @@ fn patch_one_shortcut(lnk_path: &std::path::Path) -> Result<bool, String> {
 // marker) does not match, so it gets stripped and replaced — that's what was
 // previously frozen by a fixed marker. Bump this whenever the embedded bridge
 // changes so existing installs re-embed the new version.
-const ASAR_MARKER: &str = "<!-- MARK_BRIDGE_INJECTED v7.8.23 -->";
+const ASAR_MARKER: &str = "<!-- MARK_BRIDGE_INJECTED v7.8.24 -->";
 
 #[command]
 fn patch_tag_once_asar() -> Result<String, String> {
@@ -2388,8 +2388,6 @@ async fn upload_csv_as_sheet(
 }
 
 #[command]
-// Upload an XLSX file to Drive, convert to Google Sheet, place in parent folder
-#[command]
 async fn upload_xlsx_as_sheet(
     token: String,
     file_path: String,
@@ -2438,6 +2436,7 @@ async fn upload_xlsx_as_sheet(
     }
 }
 
+#[command]
 fn save_text_file(path: String, content: String) -> Result<(), String> {
     // Ensure parent directory exists
     if let Some(parent) = std::path::Path::new(&path).parent() {
