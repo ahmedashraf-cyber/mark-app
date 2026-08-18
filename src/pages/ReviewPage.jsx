@@ -395,6 +395,7 @@ export default function ReviewPage({ session, onDone, onBack, bridgeSyncStatus, 
 
   // Export pipeline state — drives the progress modal
   const [exportState, setExportState] = useState(null)
+  const [copied, setCopied] = useState(false)
   // { phase, step, total, detail, driveLink, error }
 
   async function handleDoneSubmit(manualCount) {
@@ -443,7 +444,10 @@ export default function ReviewPage({ session, onDone, onBack, bridgeSyncStatus, 
       })
       .then(({ folderUrl }) => {
         setExportState(s => ({ ...s, phase:'done', driveLink: folderUrl, detail:'' }))
-        setTimeout(() => onDone({ quality, tagCount, total, dtScores, pressureScore, pressureReviewed, pressureErrors }), 800)
+        // Save Drive link to Firestore for session history
+        updateDoc(doc(db, 'mark_sessions', session.sessionId), { driveLink: folderUrl })
+          .catch(e => console.warn('[MARK] driveLink save failed:', e))
+        // Do NOT auto-close — user must click Done after copying the Drive link
       })
       .catch(err => {
         console.error('[MARK] Scout export failed:', err)
@@ -954,13 +958,30 @@ export default function ReviewPage({ session, onDone, onBack, bridgeSyncStatus, 
               </div>
             )}
 
-            {/* Done — show Drive link */}
+            {/* Done — show Drive link with copy button */}
             {exportState.phase === 'done' && exportState.driveLink && (
               <div style={{ background:'rgba(48,209,88,0.08)', border:'1px solid rgba(48,209,88,0.2)', borderRadius:8, padding:'12px 14px', marginBottom:16 }}>
-                <div style={{ fontSize:11, color:'rgba(255,255,255,0.5)', marginBottom:4 }}>Drive folder</div>
+                <div style={{ fontSize:11, color:'rgba(255,255,255,0.5)', marginBottom:6 }}>Drive folder — click to copy</div>
+                <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+                  <input
+                    readOnly
+                    value={exportState.driveLink}
+                    onClick={e => { e.target.select(); document.execCommand('copy'); setCopied(true); setTimeout(()=>setCopied(false),2000); }}
+                    style={{
+                      flex:1, background:'rgba(255,255,255,0.05)', border:'1px solid rgba(255,255,255,0.1)',
+                      borderRadius:6, padding:'7px 10px', fontSize:11, color:'#0A84FF',
+                      cursor:'pointer', fontFamily:'JetBrains Mono,monospace', outline:'none',
+                    }}
+                  />
+                  <button
+                    onClick={() => { navigator.clipboard?.writeText(exportState.driveLink).catch(()=>{}); setCopied(true); setTimeout(()=>setCopied(false),2000); }}
+                    style={{ background: copied?'rgba(48,209,88,0.2)':'rgba(255,255,255,0.08)', border:'none', borderRadius:6, padding:'7px 12px', color: copied?'#30D158':'rgba(255,255,255,0.7)', cursor:'pointer', fontSize:11, whiteSpace:'nowrap' }}>
+                    {copied ? '✅ Copied' : '⧉ Copy'}
+                  </button>
+                </div>
                 <a href={exportState.driveLink} target="_blank" rel="noreferrer"
-                  style={{ fontSize:12, color:'#0A84FF', textDecoration:'none', wordBreak:'break-all' }}>
-                  {exportState.driveLink}
+                  style={{ display:'block', marginTop:6, fontSize:10, color:'rgba(255,255,255,0.35)', textDecoration:'none' }}>
+                  ↗ Open in browser
                 </a>
               </div>
             )}
@@ -968,8 +989,11 @@ export default function ReviewPage({ session, onDone, onBack, bridgeSyncStatus, 
             {/* Action button — only show when done or error */}
             {(exportState.phase === 'done' || exportState.phase === 'error') && (
               <button className="btn-orange" style={{ width:'100%', padding:'10px 0', fontSize:13 }}
-                onClick={() => { setExportState(null) }}>
-                {exportState.phase === 'done' ? 'Close' : 'Dismiss'}
+                onClick={() => {
+                  setExportState(null)
+                  if (exportState.phase === 'done') onDone({})
+                }}>
+                {exportState.phase === 'done' ? 'Done' : 'Dismiss'}
               </button>
             )}
           </div>

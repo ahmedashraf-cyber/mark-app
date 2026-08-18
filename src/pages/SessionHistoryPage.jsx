@@ -188,6 +188,51 @@ function StatsPanel({ session, tags }) {
         </div>
       </div>
 
+      {/* A/B/C/D/TO + Pressure scores */}
+      {(session.qualityScoreA != null || session.pressureScore != null) && (
+        <div style={{ padding:'14px 16px', borderBottom:'1px solid var(--b-1)' }}>
+          <div style={{ fontSize:9, fontWeight:800, color:'var(--t-3)', letterSpacing:1.2, marginBottom:10 }}>DEFECT TYPE SCORES</div>
+          <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:6, marginBottom:8 }}>
+            {[
+              { label:'A', score:session.qualityScoreA, color:'#0A84FF' },
+              { label:'B', score:session.qualityScoreB, color:'#30D158' },
+              { label:'C', score:session.qualityScoreC, color:'#FFD60A' },
+              { label:'D', score:session.qualityScoreD, color:'#FF9F0A' },
+              { label:'TO', score:session.qualityScoreTO, color:'#BF5AF2' },
+              { label:'Pressure', score:session.pressureScore, color:'#E8590C' },
+            ].map(({ label, score, color }) => score != null && (
+              <div key={label} style={{ background:'var(--bg-3)', borderRadius:6, padding:'7px 6px', textAlign:'center', border:`1px solid ${color}22` }}>
+                <div style={{ fontSize:8, fontWeight:800, color, marginBottom:2 }}>{label}</div>
+                <div style={{ fontSize:15, fontWeight:900, color: score>=95?'#30D158':score>=85?'#FFD60A':'#FF453A', fontFamily:'Inter' }}>{score}</div>
+                <div style={{ fontSize:7, color:'var(--t-3)' }}>%</div>
+              </div>
+            ))}
+          </div>
+          {session.pressureReviewedCount > 0 && (
+            <div style={{ fontSize:9, color:'var(--t-3)', textAlign:'center' }}>
+              Pressure: {session.pressureErrorCount ?? 0} errors / {session.pressureReviewedCount} reviewed
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Drive link */}
+      {session.driveLink && (
+        <div style={{ padding:'12px 16px', borderBottom:'1px solid var(--b-1)' }}>
+          <div style={{ fontSize:9, fontWeight:800, color:'var(--t-3)', letterSpacing:1.2, marginBottom:8 }}>DRIVE EXPORT</div>
+          <div style={{ display:'flex', alignItems:'center', gap:6 }}>
+            <input readOnly value={session.driveLink}
+              onClick={e => { e.target.select(); document.execCommand('copy') }}
+              style={{ flex:1, background:'rgba(255,255,255,0.05)', border:'1px solid rgba(255,255,255,0.08)', borderRadius:5, padding:'5px 8px', fontSize:9, color:'#0A84FF', cursor:'pointer', fontFamily:'JetBrains Mono,monospace', outline:'none' }}
+            />
+            <a href={session.driveLink} target="_blank" rel="noreferrer"
+              style={{ fontSize:11, color:'#0A84FF', textDecoration:'none', padding:'5px 8px', background:'rgba(10,132,255,0.1)', borderRadius:5, whiteSpace:'nowrap' }}>
+              ↗ Open
+            </a>
+          </div>
+        </div>
+      )}
+
       {/* Team split */}
       <div style={{ padding: '14px 16px', borderBottom: '1px solid var(--b-1)' }}>
         <div style={{ fontSize: 9, fontWeight: 800, color: 'var(--t-3)', letterSpacing: 1.2, marginBottom: 10 }}>TEAM SPLIT</div>
