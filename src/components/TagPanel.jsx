@@ -834,3 +834,15 @@ export const GK_EXTRAS = [
 ]
 
 export const GK_WRONG_EXTRAS = {}
+
+// ─── Shared extras API — consumed by Field mode (primary data collection) ──────
+// Field mode must call these to get the extras list for each event type.
+// This is the single source of truth — do NOT copy the logic into FieldPage.
+//
+// getFieldExtrasFor(eventId) → string[]   all promptable extras for this event
+// isFieldExtraRequired(eventId, label)    true if the extra appears in missing_extra
+//   (meaning the collector is expected to provide it — but Field treats all as optional)
+export { missingExtrasFor as getFieldExtrasFor }
+export function isFieldExtraRequired(eventId, label) {
+  return (getMissingExtrasList(eventId) || []).includes(label)
+}
