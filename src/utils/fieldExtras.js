@@ -1,0 +1,920 @@
+/**
+ * fieldExtras.js — FIELD mode complete data layer
+ * ============================================================================
+ * Built directly from the authoritative spec (App_Shortcuts_-_Sheet1.csv).
+ * This file is read ONLY by FieldPage.jsx and exportFieldSession.js.
+ * Scout mode, Audit mode, TagPanel.jsx, and tagging_scenarios.js are untouched.
+ *
+ * DESIGN:
+ *   optionCode  — globally stable stored value (e.g. 'BODY_RIGHT_FOOT')
+ *   label       — display text (can be renamed without touching stored data)
+ *   toggleKey   — the keypress shown to the collector, per-event, from spec verbatim
+ *
+ * Groups have selectType: 'single' | 'multi'
+ * Groups have required: true | false (false = has Skip/Enter in spec)
+ *
+ * Multi-block events (Pass, Shot, Goal keeper) use a variants array:
+ *   discriminatorGroupId — which group's selection drives branching
+ *   variants[].when      — option codes that select this branch
+ *   variants[].groups    — ordered group chain for this branch
+ *
+ * SCOPE RULES:
+ *   - Never import from TagPanel, tagging_scenarios, or Scout-related files
+ *   - All option labels trimmed of whitespace (spec had "Wronb ", "Low " etc.)
+ *   - "Lunch" is a known typo for "Launch"; new records use LAUNCH_LAUNCH;
+ *     old "Lunch" records are passed through as-is by export (see exportFieldSession.js)
+ */
+
+// ─── Option registry ──────────────────────────────────────────────────────────
+// Every distinct option. code is the stored value — never rename.
+// label is display text. toggleKey is per-group (set on the group option, not here).
+
+export const OPTIONS = {
+  // Body part
+  BODY_RIGHT_FOOT:    { code:'BODY_RIGHT_FOOT',    label:'Right foot'    },
+  BODY_LEFT_FOOT:     { code:'BODY_LEFT_FOOT',     label:'Left foot'     },
+  BODY_HEAD:          { code:'BODY_HEAD',           label:'Head'          },
+  BODY_OTHER:         { code:'BODY_OTHER',          label:'Other'         },
+  BODY_BOTH_HANDS:    { code:'BODY_BOTH_HANDS',     label:'Both hands'    },
+  BODY_RIGHT_HAND:    { code:'BODY_RIGHT_HAND',     label:'Right hand'    },
+  BODY_LEFT_HAND:     { code:'BODY_LEFT_HAND',      label:'Left hand'     },
+  BODY_CHEST:         { code:'BODY_CHEST',          label:'Chest'         },
+  BODY_KEEPER_ARM:    { code:'BODY_KEEPER_ARM',     label:'Keeper arm'    },
+  BODY_DROP_KICK:     { code:'BODY_DROP_KICK',      label:'Drop kick'     },
+  BODY_NO_TOUCH:      { code:'BODY_NO_TOUCH',       label:'No touch'      },
+
+  // Height
+  HEIGHT_GROUND:      { code:'HEIGHT_GROUND',       label:'Ground'        },
+  HEIGHT_LOW:         { code:'HEIGHT_LOW',           label:'Low'           },  // was "Wronb " in spec — corrected
+  HEIGHT_HIGH:        { code:'HEIGHT_HIGH',          label:'High'          },
+
+  // Technique — foot
+  TECH_NORMAL:        { code:'TECH_NORMAL',          label:'Normal'        },
+  TECH_VOLLEY:        { code:'TECH_VOLLEY',          label:'Volley'        },
+  TECH_HALF_VOLLEY:   { code:'TECH_HALF_VOLLEY',     label:'Half volley'   },
+  TECH_OVERHEAD_KICK: { code:'TECH_OVERHEAD_KICK',   label:'Overhead kick' },
+  TECH_LOB:           { code:'TECH_LOB',             label:'Lob'           },
+  TECH_BACKHEEL:      { code:'TECH_BACKHEEL',        label:'Backheel'      },
+  TECH_DIVING_HEADER: { code:'TECH_DIVING_HEADER',   label:'Diving header' },
+  // Corner technique
+  TECH_INSWINGING:    { code:'TECH_INSWINGING',      label:'Inswinging'    },
+  TECH_OUTSWINGING:   { code:'TECH_OUTSWINGING',     label:'Outswinging'   },
+  TECH_STRAIGHT:      { code:'TECH_STRAIGHT',        label:'Straight'      },
+  // GK technique
+  TECH_CLEAR:         { code:'TECH_CLEAR',           label:'Clear'         },
+  TECH_CLAIM:         { code:'TECH_CLAIM',           label:'Claim'         },
+
+  // Extras (multi-select additions on pass/shot/etc.)
+  EXTRA_THROUGH_BALL:      { code:'EXTRA_THROUGH_BALL',       label:'Through ball'       },
+  EXTRA_BACKHEEL:          { code:'EXTRA_BACKHEEL',           label:'Backheel'           },
+  EXTRA_INJURY_CLEARANCE:  { code:'EXTRA_INJURY_CLEARANCE',   label:'Injury clearance'   },
+  EXTRA_AERIAL_WON:        { code:'EXTRA_AERIAL_WON',         label:'Aerial won'         },
+  EXTRA_DEFLECTION:        { code:'EXTRA_DEFLECTION',         label:'Deflection'         },
+  EXTRA_SAVE:              { code:'EXTRA_SAVE',               label:'Save'               },
+  EXTRA_MISCOMMUNICATION:  { code:'EXTRA_MISCOMMUNICATION',   label:'Miscommunication'   },
+  EXTRA_STEP_IN:           { code:'EXTRA_STEP_IN',            label:'Step in'            },
+  EXTRA_OFF_TARGET:        { code:'EXTRA_OFF_TARGET',         label:'Off target'         },
+  EXTRA_TO_POST:           { code:'EXTRA_TO_POST',            label:'To post'            },
+  EXTRA_SLIDING_PRIMARY:   { code:'EXTRA_SLIDING_PRIMARY',    label:'Sliding primary player' },
+  EXTRA_SLIDING_SECONDARY: { code:'EXTRA_SLIDING_SECONDARY',  label:'Sliding secondary player' },
+  EXTRA_NO_TOUCH:          { code:'EXTRA_NO_TOUCH',           label:'No touch'           },
+  EXTRA_NUTMEG:            { code:'EXTRA_NUTMEG',             label:'Nutmeg'             },
+  EXTRA_SLIDING:           { code:'EXTRA_SLIDING',            label:'Sliding'            },
+  EXTRA_OVERRUN:           { code:'EXTRA_OVERRUN',            label:'Overrun'            },
+  EXTRA_GOAL_KICK:         { code:'EXTRA_GOAL_KICK',          label:'Goal kick'          },
+
+  // GK body state
+  GK_BODY_DIVING:     { code:'GK_BODY_DIVING',       label:'Diving'        },
+  GK_BODY_STANDING:   { code:'GK_BODY_STANDING',     label:'Standing'      },
+
+  // GK stance
+  GK_STANCE_SET:      { code:'GK_STANCE_SET',         label:'Set'           },
+  GK_STANCE_PRONE:    { code:'GK_STANCE_PRONE',       label:'Prone'         },
+  GK_STANCE_MOVING:   { code:'GK_STANCE_MOVING',      label:'Moving'        },
+
+  // Outcome / result
+  OUTCOME_WON:            { code:'OUTCOME_WON',            label:'Won'              },
+  OUTCOME_SUCCESS:        { code:'OUTCOME_SUCCESS',        label:'Success'          },
+  OUTCOME_FAIL:           { code:'OUTCOME_FAIL',           label:'Fail'             },
+  OUTCOME_SECOND_EFFORT:  { code:'OUTCOME_SECOND_EFFORT',  label:'Second effort'    },
+  OUTCOME_COMPLETE:       { code:'OUTCOME_COMPLETE',       label:'Complete'         },
+  OUTCOME_INCOMPLETE:     { code:'OUTCOME_INCOMPLETE',     label:'Fail'             },
+  OUTCOME_OPEN_PLAY:      { code:'OUTCOME_OPEN_PLAY',      label:'Open play'        },
+  OUTCOME_FIRST_TIME:     { code:'OUTCOME_FIRST_TIME',     label:'First time'       },
+  OUTCOME_DRIBBLE_ATT:    { code:'OUTCOME_DRIBBLE_ATT',    label:'Dribble attempted'},
+
+  // Foul outcome
+  FOUL_ADVANTAGE:     { code:'FOUL_ADVANTAGE',       label:'Advantage'     },
+  FOUL_PENALTY:       { code:'FOUL_PENALTY',         label:'Penalty'       },
+  FOUL_REGULAR:       { code:'FOUL_REGULAR',         label:'Regular'       },
+  FOUL_HANDBALL:      { code:'FOUL_HANDBALL',        label:'Handball'      },
+  FOUL_SIX_SEC:       { code:'FOUL_SIX_SEC',         label:'Six seconds'   },
+  FOUL_BACKPASS:      { code:'FOUL_BACKPASS',         label:'Backpass pick' },
+  FOUL_DANGEROUS:     { code:'FOUL_DANGEROUS',        label:'Dangerous play'},
+  FOUL_DIVE:          { code:'FOUL_DIVE',             label:'Dive'          },
+  FOUL_OFFSIDE:       { code:'FOUL_OFFSIDE',          label:'Offside'       },
+  FOUL_EIGHT_SEC:     { code:'FOUL_EIGHT_SEC',        label:'Eight seconds' },
+
+  // Card
+  CARD_NO_CARD:       { code:'CARD_NO_CARD',          label:'No card'       },
+  CARD_YELLOW:        { code:'CARD_YELLOW',            label:'Yellow card'   },
+  CARD_SECOND_YELLOW: { code:'CARD_SECOND_YELLOW',     label:'Second yellow' },
+  CARD_RED:           { code:'CARD_RED',               label:'Red card'      },
+
+  // Pass type (inferred)
+  TYPE_KICK_OFF:      { code:'TYPE_KICK_OFF',          label:'Kick off'      },
+  TYPE_THROW_IN:      { code:'TYPE_THROW_IN',          label:'Throw in'      },
+  TYPE_FREE_KICK:     { code:'TYPE_FREE_KICK',         label:'Free kick'     },
+  TYPE_CORNER:        { code:'TYPE_CORNER',            label:'Corner'        },
+  TYPE_GOAL_KICK:     { code:'TYPE_GOAL_KICK',         label:'Goal kick'     },
+  TYPE_OPEN_PLAY:     { code:'TYPE_OPEN_PLAY',         label:'Open play'     },
+  TYPE_GK_DIST:       { code:'TYPE_GK_DIST',           label:'GK distribution'},
+
+  // Side / direction
+  SIDE_RIGHT:         { code:'SIDE_RIGHT',             label:'Right'         },
+  SIDE_LEFT:          { code:'SIDE_LEFT',              label:'Left'          },
+  SIDE_RIGHT_TAKE_ON: { code:'SIDE_RIGHT_TAKE_ON',     label:'Right take on' },
+  SIDE_LEFT_TAKE_ON:  { code:'SIDE_LEFT_TAKE_ON',      label:'Left take on'  },
+  SIDE_NONE:          { code:'SIDE_NONE',              label:'None'          },
+
+  // Location (Out event)
+  LOC_SIDELINE:       { code:'LOC_SIDELINE',           label:'Sideline'      },
+  LOC_ENDLINE:        { code:'LOC_ENDLINE',            label:'Endline'       },
+
+  // Launch (GK distribution)
+  LAUNCH_LAUNCH:      { code:'LAUNCH_LAUNCH',           label:'Launch'        },
+
+  // End shot
+  END_SHOT_POST:      { code:'END_SHOT_POST',           label:'Post'          },
+  END_SHOT_WAYWARD:   { code:'END_SHOT_WAYWARD',        label:'Wayward'       },
+  END_SHOT_OUT_ENDLINE:{ code:'END_SHOT_OUT_ENDLINE',   label:'Out endline'   },
+  END_SHOT_REDIRECT:  { code:'END_SHOT_REDIRECT',       label:'Redirect'      },
+
+  // Stoppage type
+  STOP_INJURY:        { code:'STOP_INJURY',             label:'Injury'        },
+  STOP_REVIEW:        { code:'STOP_REVIEW',             label:'Review'        },
+  STOP_OTHER:         { code:'STOP_OTHER',              label:'Other'         },
+  STOP_ABANDONED:     { code:'STOP_ABANDONED',          label:'Abandoned'     },
+
+  // Stoppage paused
+  PAUSED_YES:         { code:'PAUSED_YES',              label:'Yes'           },
+  PAUSED_NO:          { code:'PAUSED_NO',               label:'No'            },
+
+  // Miscontrol type
+  MISC_REGULAR:       { code:'MISC_REGULAR',            label:'Regular'       },
+  MISC_AERIAL_WON:    { code:'MISC_AERIAL_WON',         label:'Aerial won'    },
+
+  // Half start attacking direction
+  ATK_LEFT_TO_RIGHT:  { code:'ATK_LEFT_TO_RIGHT',       label:'Left to right' },
+  ATK_RIGHT_TO_LEFT:  { code:'ATK_RIGHT_TO_LEFT',       label:'Right to left' },
+
+  // Half start video
+  VIDEO_LATE_START:   { code:'VIDEO_LATE_START',        label:'Late video start'},
+  VIDEO_SKIP:         { code:'VIDEO_SKIP',              label:'Skip'           },
+}
+
+const O = OPTIONS  // shorthand
+
+// ─── Group factory ────────────────────────────────────────────────────────────
+// Each option in a group has toggleKey (per spec, verbatim) + the option definition.
+function grp(id, label, selectType, required, opts) {
+  return { id, label, selectType, required, options: opts }
+}
+function opt(option, toggleKey) {
+  return { ...option, toggleKey }
+}
+
+// ─── Reusable group definitions ───────────────────────────────────────────────
+
+const BODY_PART_SHOT = grp('body_part', 'Body part', 'single', true, [
+  opt(O.BODY_OTHER,         '1'),
+  opt(O.BODY_RIGHT_FOOT,    '2'),
+  opt(O.BODY_LEFT_FOOT,     '3'),
+  opt(O.BODY_HEAD,          '4'),
+])
+
+const BODY_PART_PASS = grp('body_part', 'Body part', 'single', true, [
+  opt(O.BODY_RIGHT_FOOT,    '2'),
+  opt(O.BODY_LEFT_FOOT,     '3'),
+  opt(O.BODY_HEAD,          '4'),
+  opt(O.BODY_KEEPER_ARM,    '5'),
+  opt(O.BODY_DROP_KICK,     '6'),
+  opt(O.BODY_OTHER,         '1'),
+  opt(O.BODY_NO_TOUCH,      '7'),
+])
+
+const BODY_PART_GK = grp('body_part', 'Body part', 'single', true, [
+  opt(O.BODY_BOTH_HANDS,    '1'),
+  opt(O.BODY_RIGHT_FOOT,    '2'),
+  opt(O.BODY_LEFT_FOOT,     '3'),
+  opt(O.BODY_HEAD,          '4'),
+  opt(O.BODY_RIGHT_HAND,    '5'),
+  opt(O.BODY_LEFT_HAND,     '6'),
+  opt(O.BODY_CHEST,         '7'),
+])
+
+const HEIGHT_PASS = grp('height', 'Height', 'single', true, [
+  opt(O.HEIGHT_GROUND,      '1'),
+  opt(O.HEIGHT_LOW,         '2'),
+  opt(O.HEIGHT_HIGH,        '3'),
+])
+
+const HEIGHT_THROW_IN = grp('height', 'Height', 'single', true, [
+  opt(O.HEIGHT_LOW,         '1'),
+  opt(O.HEIGHT_HIGH,        '2'),
+])
+
+const EXTRAS_PASS = grp('extras', 'Extras', 'multi', false, [
+  opt(O.EXTRA_THROUGH_BALL,     '1'),
+  opt(O.EXTRA_BACKHEEL,         '2'),
+  opt(O.EXTRA_INJURY_CLEARANCE, '3'),
+])
+
+const EXTRAS_PASS_NOTOUCHTOO = grp('extras', 'Extras', 'multi', false, [
+  opt(O.EXTRA_THROUGH_BALL,     '1'),
+  opt(O.EXTRA_BACKHEEL,         '2'),
+  opt(O.EXTRA_INJURY_CLEARANCE, '3'),
+  opt(O.BODY_NO_TOUCH,          '7'),
+])
+
+const TECH_FOOT = grp('technique', 'Technique', 'single', true, [
+  opt(O.TECH_NORMAL,        '1'),
+  opt(O.TECH_VOLLEY,        '2'),
+  opt(O.TECH_HALF_VOLLEY,   '3'),
+  opt(O.TECH_OVERHEAD_KICK, '4'),
+  opt(O.TECH_LOB,           '5'),
+  opt(O.TECH_BACKHEEL,      '6'),
+])
+
+const TECH_HEAD = grp('technique', 'Technique', 'single', true, [
+  opt(O.TECH_NORMAL,        '1'),
+  opt(O.TECH_DIVING_HEADER, '2'),
+  opt(O.TECH_LOB,           '3'),
+])
+
+const TECH_OTHER_SHOT = grp('technique', 'Technique', 'single', true, [
+  opt(O.TECH_NORMAL,        '1'),
+  opt(O.TECH_OVERHEAD_KICK, '2'),
+  opt(O.TECH_LOB,           '3'),
+])
+
+const GK_BODY_STATE = grp('gk_body_state', 'GK body state', 'single', false, [
+  opt(O.GK_BODY_DIVING,     '1'),
+  opt(O.GK_BODY_STANDING,   '2'),
+])
+
+const GK_STANCE = grp('gk_stance', 'GK stance', 'single', true, [
+  opt(O.GK_STANCE_SET,      '1'),
+  opt(O.GK_STANCE_PRONE,    '2'),
+  opt(O.GK_STANCE_MOVING,   '3'),
+])
+
+const OUTCOME_SHOT = grp('outcome', 'Outcome', 'single', true, [
+  opt(O.OUTCOME_OPEN_PLAY,  '1'),
+  opt(O.OUTCOME_FIRST_TIME, '2'),
+])
+
+const EXTRAS_SHOT_HEAD = grp('extras', 'Extras', 'multi', false, [
+  opt(O.EXTRA_AERIAL_WON,   '1'),
+])
+
+const MISCOMMUNICATION = grp('miscommunication', 'Miscommunication', 'multi', false, [
+  opt(O.EXTRA_MISCOMMUNICATION, '1'),
+])
+
+const SIDE_DUEL = grp('side', 'Side', 'single', true, [
+  opt(O.SIDE_RIGHT,         '1'),
+  opt(O.SIDE_LEFT,          '2'),
+  opt(O.SIDE_RIGHT_TAKE_ON, '3'),
+  opt(O.SIDE_LEFT_TAKE_ON,  '4'),
+  opt(O.SIDE_NONE,          '5'),
+])
+
+const ACTION_SMOOTHER = grp('action', 'Action', 'single', false, [
+  opt(O.OUTCOME_DRIBBLE_ATT, '1'),
+])
+
+const EXTRAS_SMOOTHER = grp('extras', 'Extras', 'multi', false, [
+  opt(O.EXTRA_NO_TOUCH,  '1'),
+  opt(O.EXTRA_NUTMEG,    '2'),
+  opt(O.EXTRA_SLIDING,   '3'),
+])
+
+// ─── Event schema ─────────────────────────────────────────────────────────────
+// Each event: { id, label, hotkey, mouseOnly, groups | variants }
+// variants: { discriminatorGroupId, variants: [{ when:['OPTION_CODE',...], groups:[...] }] }
+// Team side is always added last by FieldPage — not in groups here.
+
+export const FIELD_EVENTS = [
+
+  // ── Half start ─────────────────────────────────────────────────────────────
+  {
+    id: 'half_start', label: 'Half start', hotkey: null, mouseOnly: false, key: 'S',
+    panel: 'Offense',
+    groups: [
+      grp('attacking_direction', 'Attacking direction', 'single', true, [
+        opt(O.ATK_LEFT_TO_RIGHT, '1'),
+        opt(O.ATK_RIGHT_TO_LEFT, '2'),
+      ]),
+      grp('video', 'Video', 'single', false, [
+        opt(O.VIDEO_LATE_START, '1'),
+        opt(O.VIDEO_SKIP,       'Enter'),
+      ]),
+    ],
+  },
+
+  // ── Pass ──────────────────────────────────────────────────────────────────
+  // Single event with type inferred then confirmed before attribute prompts.
+  // All type variants share team-side; attribute groups differ by type.
+  {
+    id: 'pass', label: 'Pass', hotkey: 'E', mouseOnly: false, panel: 'Offense',
+    typeInferred: true,
+    variants: {
+      discriminatorGroupId: 'type',  // synthetic group added by FieldPage from inference
+      variants: [
+        {
+          when: ['TYPE_KICK_OFF'],
+          groups: [HEIGHT_PASS, BODY_PART_PASS, EXTRAS_PASS],
+        },
+        {
+          when: ['TYPE_THROW_IN'],
+          groups: [HEIGHT_THROW_IN, EXTRAS_PASS],
+        },
+        {
+          when: ['TYPE_FREE_KICK'],
+          groups: [HEIGHT_PASS, BODY_PART_PASS, EXTRAS_PASS],
+        },
+        {
+          when: ['TYPE_CORNER'],
+          groups: [
+            HEIGHT_PASS, BODY_PART_PASS, EXTRAS_PASS,
+            grp('technique', 'Technique', 'single', true, [
+              opt(O.TECH_INSWINGING,  '1'),
+              opt(O.TECH_OUTSWINGING, '2'),
+              opt(O.TECH_STRAIGHT,    '3'),
+            ]),
+          ],
+        },
+        {
+          when: ['TYPE_GOAL_KICK'],
+          groups: [HEIGHT_PASS, BODY_PART_PASS, EXTRAS_PASS],
+        },
+        {
+          when: ['TYPE_GK_DIST'],
+          groups: [
+            BODY_PART_PASS,
+            EXTRAS_PASS,
+            grp('launch', 'Launch', 'single', false, [
+              opt(O.LAUNCH_LAUNCH, '1'),
+            ]),
+          ],
+        },
+        {
+          when: ['TYPE_OPEN_PLAY'],
+          groups: [HEIGHT_PASS, BODY_PART_PASS, EXTRAS_PASS_NOTOUCHTOO],
+        },
+      ],
+    },
+  },
+
+  // ── Shot ──────────────────────────────────────────────────────────────────
+  {
+    id: 'shot', label: 'Shot', hotkey: 'S', mouseOnly: false, panel: 'Offense',
+    openState: true,  // opens end_shot
+    variants: {
+      discriminatorGroupId: 'body_part',
+      variants: [
+        {
+          when: ['BODY_RIGHT_FOOT', 'BODY_LEFT_FOOT'],
+          groups: [BODY_PART_SHOT, TECH_FOOT, GK_BODY_STATE, OUTCOME_SHOT],
+        },
+        {
+          when: ['BODY_HEAD'],
+          groups: [BODY_PART_SHOT, EXTRAS_SHOT_HEAD, TECH_HEAD, GK_BODY_STATE, OUTCOME_SHOT],
+        },
+        {
+          when: ['BODY_OTHER'],
+          groups: [BODY_PART_SHOT, TECH_OTHER_SHOT, GK_BODY_STATE, OUTCOME_SHOT],
+        },
+      ],
+    },
+  },
+
+  // ── Foul committed ────────────────────────────────────────────────────────
+  {
+    id: 'foul_committed', label: 'Foul committed', hotkey: 'X', mouseOnly: false, panel: 'Offense',
+    groups: [
+      grp('outcome', 'Outcome', 'single', false, [
+        opt(O.FOUL_ADVANTAGE,  '1'),
+        opt(O.FOUL_PENALTY,    '2'),
+      ]),
+      grp('type', 'Type', 'single', true, [
+        opt(O.FOUL_REGULAR,    '1'),
+        opt(O.FOUL_HANDBALL,   '2'),
+        opt(O.FOUL_SIX_SEC,    '3'),
+        opt(O.FOUL_BACKPASS,   '4'),
+        opt(O.FOUL_DANGEROUS,  '5'),
+        opt(O.FOUL_DIVE,       '6'),
+        opt(O.FOUL_OFFSIDE,    '7'),
+        opt(O.FOUL_EIGHT_SEC,  '8'),
+      ]),
+      grp('kind', 'Card', 'single', true, [
+        opt(O.CARD_NO_CARD,       '1'),
+        opt(O.CARD_YELLOW,        '2'),
+        opt(O.CARD_SECOND_YELLOW, '3'),
+        opt(O.CARD_RED,           '4'),
+      ]),
+    ],
+  },
+
+  // ── Reception ─────────────────────────────────────────────────────────────
+  {
+    id: 'reception', label: 'Reception', hotkey: 'W', mouseOnly: false, panel: 'Offense',
+    groups: [],
+  },
+
+  // ── Miscontrol ────────────────────────────────────────────────────────────
+  {
+    id: 'miscontrol', label: 'Miscontrol', hotkey: 'T', mouseOnly: false, panel: 'Offense',
+    groups: [
+      grp('type', 'Type', 'single', true, [
+        opt(O.MISC_REGULAR,    '1'),
+        opt(O.MISC_AERIAL_WON, '2'),
+      ]),
+      grp('kind', 'Kind', 'single', true, [
+        opt(O.OUTCOME_FIRST_TIME, '1'),
+        opt(O.OUTCOME_OPEN_PLAY,  '2'),
+      ]),
+    ],
+  },
+
+  // ── Out ───────────────────────────────────────────────────────────────────
+  {
+    id: 'out', label: 'Out', hotkey: 'O', mouseOnly: false, panel: 'Offense',
+    groups: [
+      grp('location', 'Location', 'single', true, [
+        opt(O.LOC_SIDELINE, '1'),
+        opt(O.LOC_ENDLINE,  '2'),
+      ]),
+    ],
+  },
+
+  // ── Pass (First time) — same key E, label used in inference ───────────────
+  // Treated as a pass variant with forced TYPE_KICK_OFF extras tree in practice;
+  // but in FIELD it is a separate palette entry with its own attribute set.
+  {
+    id: 'pass_first_time', label: 'Pass (First time)', hotkey: 'Q', mouseOnly: false, panel: 'Offense',
+    typeInferred: false,
+    groups: [
+      HEIGHT_PASS,
+      grp('body_part', 'Body part', 'single', true, [
+        opt(O.BODY_RIGHT_FOOT,    '2'),
+        opt(O.BODY_LEFT_FOOT,     '3'),
+        opt(O.BODY_NO_TOUCH,      '7'),
+      ]),
+      EXTRAS_PASS,
+    ],
+  },
+
+  // ── Pass recovery ─────────────────────────────────────────────────────────
+  {
+    id: 'pass_recovery', label: 'Pass recovery', hotkey: 'P', mouseOnly: false, panel: 'Offense',
+    groups: [
+      HEIGHT_PASS,
+      grp('body_part', 'Body part', 'single', true, [
+        opt(O.BODY_RIGHT_FOOT,    '2'),
+        opt(O.BODY_LEFT_FOOT,     '3'),
+        opt(O.BODY_HEAD,          '4'),
+        opt(O.BODY_OTHER,         '1'),
+        opt(O.BODY_NO_TOUCH,      '7'),
+      ]),
+      EXTRAS_PASS,
+      MISCOMMUNICATION,
+      grp('launch', 'Launch', 'single', false, [
+        opt(O.LAUNCH_LAUNCH, '1'),
+      ]),
+    ],
+  },
+
+  // ── Dribble ───────────────────────────────────────────────────────────────
+  {
+    id: 'dribble', label: 'Dribble', hotkey: 'D', mouseOnly: false, panel: 'Offense',
+    groups: [
+      grp('extras', 'Extras', 'multi', false, [
+        opt(O.EXTRA_NO_TOUCH,  '1'),
+        opt(O.EXTRA_NUTMEG,    '2'),
+        opt(O.EXTRA_SLIDING,   '3'),
+      ]),
+      grp('outcome', 'Outcome', 'single', false, [
+        opt(O.EXTRA_OVERRUN,   '1'),
+      ]),
+      SIDE_DUEL,
+    ],
+  },
+
+  // ── Shield ────────────────────────────────────────────────────────────────
+  {
+    id: 'shield', label: 'Shield', hotkey: 'C', mouseOnly: false, panel: 'Offense',
+    groups: [],
+  },
+
+  // ── Mouse-only Offense events ─────────────────────────────────────────────
+  {
+    id: 'card', label: 'Card', hotkey: null, mouseOnly: true, panel: 'Offense',
+    groups: [
+      grp('kind', 'Card', 'single', true, [
+        opt(O.CARD_YELLOW,        '1'),
+        opt(O.CARD_SECOND_YELLOW, '2'),
+        opt(O.CARD_RED,           '3'),
+      ]),
+    ],
+  },
+  { id: 'error',            label: 'Error',            hotkey: null, mouseOnly: true, panel: 'Offense', groups: [] },
+  { id: 'own_goal_against', label: 'Own goal against', hotkey: null, mouseOnly: true, panel: 'Offense', groups: [] },
+  {
+    id: 'stoppage', label: 'Stoppage', hotkey: null, mouseOnly: true, panel: 'Offense',
+    openState: true,  // opens end_stoppage
+    groups: [
+      grp('type', 'Type', 'single', true, [
+        opt(O.STOP_INJURY,    '1'),
+        opt(O.STOP_REVIEW,    '2'),
+        opt(O.STOP_OTHER,     '3'),
+        opt(O.STOP_ABANDONED, '4'),
+      ]),
+      grp('paused', 'Paused', 'single', true, [
+        opt(O.PAUSED_YES, '1'),
+        opt(O.PAUSED_NO,  '2'),
+      ]),
+    ],
+  },
+  { id: 'substitution',   label: 'Substitution',   hotkey: null, mouseOnly: true, panel: 'Offense', groups: [] },
+  { id: 'tactical_shift', label: 'Tactical shift',  hotkey: null, mouseOnly: true, panel: 'Offense', groups: [] },
+  { id: 'formation',      label: 'Formation',       hotkey: null, mouseOnly: true, panel: 'Offense', groups: [] },
+  { id: 'camera_off',     label: 'Camera off',      hotkey: null, mouseOnly: true, panel: 'Offense', groups: [] },
+  { id: 'camera_on',      label: 'Camera on',       hotkey: null, mouseOnly: true, panel: 'Offense', groups: [] },
+  {
+    id: 'unknown_pass_end', label: 'Unknown pass end', hotkey: null, mouseOnly: true, panel: 'Offense',
+    groups: [ MISCOMMUNICATION ],
+  },
+  { id: 'half_end',  label: 'Half end',  hotkey: null, mouseOnly: true, panel: 'Offense', groups: [], forceClosesAll: true },
+  { id: 'fifty_fifty', label: 'Fifty fifty', hotkey: null, mouseOnly: true, panel: 'Offense',
+    groups: [
+      grp('extras', 'Extras', 'multi', false, [
+        opt(O.EXTRA_SLIDING_PRIMARY,   '1'),
+        opt(O.EXTRA_SLIDING_SECONDARY, '2'),
+      ]),
+      grp('outcome', 'Outcome', 'single', true, [
+        opt(O.OUTCOME_WON,     '1'),
+        opt(O.OUTCOME_SUCCESS, '2'),
+      ]),
+    ],
+  },
+
+  // ── Close events (synthetic — triggered by open-state engine) ─────────────
+  {
+    id: 'end_shot', label: 'End shot', hotkey: 'S', mouseOnly: false, panel: '_close',
+    closesEventId: 'shot',
+    groups: [
+      grp('outcome', 'Outcome', 'single', true, [
+        opt(O.END_SHOT_POST,        '1'),
+        opt(O.END_SHOT_WAYWARD,     '2'),
+        opt(O.END_SHOT_OUT_ENDLINE, '3'),
+        opt(O.END_SHOT_REDIRECT,    '4'),
+      ]),
+    ],
+  },
+  {
+    id: 'end_stoppage', label: 'End stoppage', hotkey: null, mouseOnly: true, panel: '_close',
+    closesEventId: 'stoppage',
+    groups: [],
+  },
+  {
+    id: 'pressure_end', label: 'Pressure end', hotkey: 'G', mouseOnly: false, panel: '_close',
+    closesEventId: 'pressure_start',
+    teamInherited: true,
+    groups: [],
+  },
+
+  // ── Defense events ─────────────────────────────────────────────────────────
+
+  {
+    id: 'block', label: 'Block', hotkey: 'B', mouseOnly: false, panel: 'Defense',
+    groups: [
+      grp('extras', 'Extras', 'multi', false, [
+        opt(O.EXTRA_DEFLECTION,      '1'),
+        opt(O.EXTRA_SAVE,            '2'),
+        opt(O.EXTRA_MISCOMMUNICATION,'3'),
+      ]),
+    ],
+  },
+
+  {
+    id: 'interception', label: 'Interception', hotkey: 'V', mouseOnly: false, panel: 'Defense',
+    groups: [
+      grp('extras', 'Extras', 'multi', false, [
+        opt(O.EXTRA_STEP_IN, '1'),
+      ]),
+      grp('outcome', 'Outcome', 'single', true, [
+        opt(O.OUTCOME_WON,     '1'),
+        opt(O.OUTCOME_SUCCESS, '2'),
+      ]),
+      MISCOMMUNICATION,
+    ],
+  },
+
+  {
+    id: 'tackle', label: 'Tackle', hotkey: 'A', mouseOnly: false, panel: 'Defense',
+    groups: [
+      grp('extras', 'Extras', 'multi', false, [
+        opt(O.EXTRA_NO_TOUCH,  '1'),
+        opt(O.EXTRA_NUTMEG,    '2'),
+        opt(O.EXTRA_SLIDING,   '3'),
+      ]),
+      grp('outcome', 'Outcome', 'single', true, [
+        opt(O.OUTCOME_WON,     '1'),
+        opt(O.OUTCOME_SUCCESS, '2'),
+      ]),
+      grp('action', 'Action', 'single', false, [
+        opt(O.OUTCOME_DRIBBLE_ATT, '1'),
+      ]),
+      SIDE_DUEL,
+    ],
+  },
+
+  {
+    id: 'ball_recovery', label: 'Ball recovery', hotkey: 'R', mouseOnly: false, panel: 'Defense',
+    groups: [
+      grp('outcome', 'Outcome', 'single', true, [
+        opt(O.OUTCOME_COMPLETE,   '1'),
+        opt(O.OUTCOME_INCOMPLETE, '2'),
+      ]),
+      MISCOMMUNICATION,
+    ],
+  },
+
+  {
+    id: 'clearance', label: 'Clearance', hotkey: 'F', mouseOnly: false, panel: 'Defense',
+    groups: [
+      HEIGHT_PASS,
+      grp('body_part', 'Body part', 'single', true, [
+        opt(O.BODY_RIGHT_FOOT, '2'),
+        opt(O.BODY_LEFT_FOOT,  '3'),
+        opt(O.BODY_HEAD,       '4'),
+        opt(O.BODY_OTHER,      '9'),
+      ]),
+      grp('type', 'Type', 'single', true, [
+        opt(O.MISC_REGULAR,    '1'),
+        opt(O.EXTRA_AERIAL_WON,'2'),
+      ]),
+      MISCOMMUNICATION,
+    ],
+  },
+
+  {
+    id: 'hold_up_duel', label: 'Hold up duel', hotkey: 'H', mouseOnly: false, panel: 'Defense',
+    groups: [],
+  },
+
+  {
+    id: 'positioning_duel', label: 'Positioning duel', hotkey: 'Y', mouseOnly: false, panel: 'Defense',
+    groups: [],
+  },
+
+  {
+    id: 'separation_duel', label: 'Separation duel', hotkey: 'J', mouseOnly: false, panel: 'Defense',
+    groups: [
+      grp('direction', 'Direction', 'single', true, [
+        opt(O.DIRECTION_RIGHT ?? O.SIDE_RIGHT, '1'),
+        opt(O.DIRECTION_LEFT  ?? O.SIDE_LEFT,  '2'),
+      ]),
+    ],
+  },
+
+  {
+    id: 'leg_stretch_duel', label: 'Leg stretch duel', hotkey: 'U', mouseOnly: false, panel: 'Defense',
+    groups: [],
+  },
+
+  {
+    id: 'goal_keeper', label: 'Goal Keeper', hotkey: 'K', mouseOnly: false, panel: 'Defense',
+    variants: {
+      discriminatorGroupId: 'type',
+      variants: [
+        {
+          when: ['GK_TYPE_COLLECTED'],
+          label: 'Collected',
+          groups: [
+            grp('outcome', 'Outcome', 'single', true, [
+              opt(O.OUTCOME_SUCCESS,       '3'),
+              opt(O.OUTCOME_FAIL,          '4'),
+              opt(O.OUTCOME_SECOND_EFFORT, '5'),
+            ]),
+            MISCOMMUNICATION,
+          ],
+        },
+        {
+          when: ['GK_TYPE_PUNCH'],
+          label: 'Punch',
+          groups: [
+            grp('outcome', 'Outcome', 'single', true, [
+              opt(O.OUTCOME_SUCCESS,       '3'),
+              opt(O.OUTCOME_FAIL,          '4'),
+            ]),
+            MISCOMMUNICATION,
+          ],
+        },
+        {
+          when: ['GK_TYPE_KEEPER_SWEEPER'],
+          label: 'Keeper sweeper',
+          groups: [
+            BODY_PART_GK,
+            grp('technique', 'Technique', 'single', true, [
+              opt(O.TECH_CLEAR, '7'),
+              opt(O.TECH_CLAIM, '8'),
+            ]),
+            MISCOMMUNICATION,
+          ],
+        },
+        {
+          when: ['GK_TYPE_SAVE_WON'],
+          label: 'Save (Won)',
+          groups: [
+            BODY_PART_GK,
+            grp('extras', 'Extras', 'multi', false, [
+              opt(O.EXTRA_OFF_TARGET, '1'),
+            ]),
+            GK_BODY_STATE,
+            GK_STANCE,
+            grp('outcome', 'Outcome', 'single', true, [
+              opt(O.OUTCOME_WON,           '1'),
+              opt(O.OUTCOME_SUCCESS,       '3'),
+              opt(O.OUTCOME_SECOND_EFFORT, '5'),
+            ]),
+            MISCOMMUNICATION,
+          ],
+        },
+        {
+          when: ['GK_TYPE_SAVE_SUCCESS'],
+          label: 'Save (Success / SE)',
+          groups: [
+            BODY_PART_GK,
+            grp('extras', 'Extras', 'multi', false, [
+              opt(O.EXTRA_TO_POST,    '1'),
+              opt(O.EXTRA_OFF_TARGET, '2'),
+            ]),
+            GK_BODY_STATE,
+            GK_STANCE,
+            grp('outcome', 'Outcome', 'single', true, [
+              opt(O.OUTCOME_WON,           '1'),
+              opt(O.OUTCOME_SUCCESS,       '3'),
+              opt(O.OUTCOME_SECOND_EFFORT, '5'),
+            ]),
+            MISCOMMUNICATION,
+          ],
+        },
+      ],
+    },
+    // Type discriminator group (shown first)
+    typeGroup: grp('type', 'GK type', 'single', true, [
+      opt({ code:'GK_TYPE_COLLECTED',      label:'Collected'          }, '1'),
+      opt({ code:'GK_TYPE_PUNCH',          label:'Punch'              }, '2'),
+      opt({ code:'GK_TYPE_KEEPER_SWEEPER', label:'Keeper sweeper'     }, '3'),
+      opt({ code:'GK_TYPE_SAVE_WON',       label:'Save (Won)'         }, '4'),
+      opt({ code:'GK_TYPE_SAVE_SUCCESS',   label:'Save (Success / SE)'}, '5'),
+    ]),
+  },
+
+  {
+    id: 'goal_keeper_smoother', label: 'GK Smoother', hotkey: 'K', mouseOnly: false, panel: 'Defense',
+    note: 'GK duel — engages attacker with feet (like Tackle). Key K cycles: idle→goal_keeper→smoother',
+    groups: [ EXTRAS_SMOOTHER, ACTION_SMOOTHER, SIDE_DUEL ],
+  },
+
+  {
+    id: 'pressure_start', label: 'Pressure start', hotkey: 'G', mouseOnly: false, panel: 'Defense',
+    openState: true,
+    groups: [],  // Team Side asked by FieldPage (as on all events)
+  },
+
+  {
+    id: 'pass_interception', label: 'Pass interception', hotkey: 'I', mouseOnly: false, panel: 'Defense',
+    groups: [
+      HEIGHT_PASS,
+      grp('body_part', 'Body part', 'single', true, [
+        opt(O.BODY_RIGHT_FOOT, '2'),
+        opt(O.BODY_LEFT_FOOT,  '3'),
+        opt(O.BODY_HEAD,       '4'),
+        opt(O.BODY_OTHER,      '1'),
+        opt(O.BODY_NO_TOUCH,   '7'),
+      ]),
+      grp('extras', 'Extras', 'multi', false, [
+        opt(O.EXTRA_THROUGH_BALL,     '1'),
+        opt(O.EXTRA_BACKHEEL,         '2'),
+        opt(O.EXTRA_INJURY_CLEARANCE, '3'),
+        opt(O.EXTRA_STEP_IN,          '4'),
+      ]),
+      MISCOMMUNICATION,
+      grp('launch', 'Launch', 'single', false, [
+        opt(O.LAUNCH_LAUNCH, '1'),
+      ]),
+    ],
+  },
+]
+
+// ─── Lookup maps ──────────────────────────────────────────────────────────────
+export const EVENT_BY_ID  = Object.fromEntries(FIELD_EVENTS.map(e => [e.id, e]))
+export const EVENT_BY_KEY = (() => {
+  const m = {}
+  FIELD_EVENTS.forEach(e => {
+    if (e.hotkey && !e.closesEventId) {
+      if (!m[e.hotkey]) m[e.hotkey] = []
+      m[e.hotkey].push(e)
+    }
+  })
+  return m
+})()
+
+// ─── Open-state registry ──────────────────────────────────────────────────────
+export const OPEN_STATE_PAIRS = [
+  { openId: 'shot',        closeId: 'end_shot',      closeKey: 'S', teamInherited: false, mandatory: true  },
+  { openId: 'stoppage',    closeId: 'end_stoppage',  closeKey: null, teamInherited: false, mandatory: false },
+  { openId: 'pressure_start', closeId: 'pressure_end', closeKey: 'G', teamInherited: true,  mandatory: false },
+]
+
+// ─── Transparent events (don't break look-back inference chain) ───────────────
+export const TRANSPARENT_EVENT_IDS = new Set([
+  'card', 'substitution', 'tactical_shift', 'formation',
+  'camera_off', 'camera_on', 'stoppage', 'end_stoppage', 'unknown_pass_end',
+])
+
+// ─── Pass type inference ──────────────────────────────────────────────────────
+// Returns { type: OPTIONS.TYPE_*, label, defaulted }
+// recentEvents: array of stored field events, newest-last
+export function inferPassType(recentEvents) {
+  if (!recentEvents || recentEvents.length === 0)
+    return { type: OPTIONS.TYPE_KICK_OFF, defaulted: true }
+
+  // Walk backwards, skipping transparent events
+  for (let i = recentEvents.length - 1; i >= 0; i--) {
+    const ev = recentEvents[i]
+    if (TRANSPARENT_EVENT_IDS.has(ev.eventId)) continue
+
+    // Half start or own goal → Kick off
+    if (ev.eventId === 'half_start' || ev.eventId === 'own_goal_against')
+      return { type: OPTIONS.TYPE_KICK_OFF, defaulted: false }
+
+    // Out event
+    if (ev.eventId === 'out') {
+      const locGroup = ev.groups?.find(g => g.groupId === 'location')
+      const locCode  = locGroup?.selections?.[0]?.code
+      if (locCode === 'LOC_SIDELINE')
+        return { type: OPTIONS.TYPE_THROW_IN, defaulted: false }
+      if (locCode === 'LOC_ENDLINE') {
+        // team = team that put ball out (last touch)
+        // attacking team put it out → Goal kick (defending GK restarts)
+        // defending team put it out → Corner (attacking team restarts)
+        // We use the pass team to infer: if the out team === pass team, it was a corner
+        // (attacking team last touched, defending team restarts? No — corner = attacking restarts)
+        // Correct: attacking team last touch → Goal kick; defending last touch → Corner
+        // We don't know which is which from ev.team alone without match context.
+        // Default to Corner (more common inference); collector can override.
+        return { type: OPTIONS.TYPE_CORNER, defaulted: true }
+        // Full inference would need "was ev.team the defending or attacking team?" context.
+        // Stored as defaulted:true so typeSource = 'manual' after collector override.
+      }
+    }
+
+    // Foul committed (not Penalty, not Advantage) → Free kick
+    if (ev.eventId === 'foul_committed') {
+      const outGroup = ev.groups?.find(g => g.groupId === 'outcome')
+      const outCode  = outGroup?.selections?.[0]?.code
+      if (outCode !== 'FOUL_PENALTY' && outCode !== 'FOUL_ADVANTAGE')
+        return { type: OPTIONS.TYPE_FREE_KICK, defaulted: false }
+    }
+
+    // Goal keeper (Collected/Claim/Save) → GK distribution
+    if (ev.eventId === 'goal_keeper') {
+      const typeGroup = ev.groups?.find(g => g.groupId === 'type')
+      const typeCode  = typeGroup?.selections?.[0]?.code
+      if (['GK_TYPE_COLLECTED','GK_TYPE_SAVE_WON','GK_TYPE_SAVE_SUCCESS'].includes(typeCode))
+        return { type: OPTIONS.TYPE_GK_DIST, defaulted: false }
+    }
+
+    // Any other non-transparent event → Open play
+    return { type: OPTIONS.TYPE_OPEN_PLAY, defaulted: false }
+  }
+
+  // No non-transparent events found → default Kick off
+  return { type: OPTIONS.TYPE_KICK_OFF, defaulted: true }
+}
+
+// ─── All pass type options for confirmation step ───────────────────────────────
+export const PASS_TYPE_OPTIONS = [
+  opt(O.TYPE_KICK_OFF,   'K'),
+  opt(O.TYPE_THROW_IN,   'T'),
+  opt(O.TYPE_FREE_KICK,  'F'),
+  opt(O.TYPE_CORNER,     'C'),
+  opt(O.TYPE_GOAL_KICK,  'G'),
+  opt(O.TYPE_GK_DIST,    'D'),
+  opt(O.TYPE_OPEN_PLAY,  'O'),
+]

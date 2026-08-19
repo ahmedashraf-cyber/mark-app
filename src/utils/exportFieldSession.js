@@ -30,27 +30,30 @@ const COLUMNS = [
   // Event identity
   'event_id',
   'event_label',
-  // Timing — both formats, clearly named
+  // Pass type inference
+  'inferred_type',
+  'type_source',
+  // Timing
   'video_time_ms',
   'video_time_readable',
   // Context
   'team',
   'half',
-  // Extras — up to 5 slots (sparse: empty string when not used)
+  // Extras — up to 5 slots (sparse)
   'extra_1',
   'extra_2',
   'extra_3',
   'extra_4',
   'extra_5',
-  // Wall-clock capture time of this specific event
+  // Wall-clock capture time
   'wall_clock_captured_iso',
-  // Session metadata (repeated on every row)
+  // Session metadata (repeated every row)
   'video_filename',
   'video_duration_sec',
   'collector_email',
   'export_timestamp_iso',
   'mark_version',
-  // Collection timing (item 4)
+  // Collection timing
   'collection_start_wall_iso',
   'collection_end_wall_iso',
   'collection_elapsed_raw_ms',
@@ -134,21 +137,33 @@ export function buildFieldCsv(session, events) {
   // ── Build rows ─────────────────────────────────────────────────────────────
   const rows = sorted.map(ev => {
     const videoMs  = Math.round((ev.videoTimeSec || 0) * 1000)
-    const extras   = ev.extras || []
+    // Extras: flatten from groups structure (v3) OR legacy flat extras array (v1/v2)
+    // Legacy "Lunch" values are passed through as-is — no exception, no silent rename.
+    let extrasFlat = []
+    if (ev.groups && ev.groups.length > 0) {
+      extrasFlat = ev.groups.flatMap(g => (g.selections || []).map(s => s.label || s.code || ''))
+    } else {
+      extrasFlat = (ev.extras || []).map(x => {
+        // Passthrough: unrecognised values (including legacy "Lunch") preserved verbatim
+        return String(x)
+      })
+    }
 
     return {
       schema_version:              SCHEMA_VERSION,
       event_id:                    ev.eventId   || '',
       event_label:                 ev.eventLabel || '',
+      inferred_type:               ev.type?.label || ev.type?.code || '',
+      type_source:                 ev.typeSource  || '',
       video_time_ms:               videoMs,
       video_time_readable:         msToReadable(videoMs),
       team:                        ev.team || '',
       half,
-      extra_1:                     extras[0] || '',
-      extra_2:                     extras[1] || '',
-      extra_3:                     extras[2] || '',
-      extra_4:                     extras[3] || '',
-      extra_5:                     extras[4] || '',
+      extra_1:                     extrasFlat[0] || '',
+      extra_2:                     extrasFlat[1] || '',
+      extra_3:                     extrasFlat[2] || '',
+      extra_4:                     extrasFlat[3] || '',
+      extra_5:                     extrasFlat[4] || '',
       wall_clock_captured_iso:     isoOrEmpty(ev.timestamp),
       video_filename:              videoFilename,
       video_duration_sec:          videoDurSec,
