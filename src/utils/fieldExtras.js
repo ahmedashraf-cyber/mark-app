@@ -848,9 +848,10 @@ export const TRANSPARENT_EVENT_IDS = new Set([
 ])
 
 // ─── Pass type inference ──────────────────────────────────────────────────────
-// Returns { type: OPTIONS.TYPE_*, label, defaulted }
+// Returns { type: OPTIONS.TYPE_*, defaulted: boolean }
 // recentEvents: array of stored field events, newest-last
-export function inferPassType(recentEvents) {
+// currentPossession: { team: 'home'|'away'|null, certain: boolean } — current possession state
+export function inferPassType(recentEvents, currentPossession) {
   if (!recentEvents || recentEvents.length === 0)
     return { type: OPTIONS.TYPE_KICK_OFF, defaulted: true }
 
@@ -870,17 +871,31 @@ export function inferPassType(recentEvents) {
       if (locCode === 'LOC_SIDELINE')
         return { type: OPTIONS.TYPE_THROW_IN, defaulted: false }
       if (locCode === 'LOC_ENDLINE') {
-        // team = team that put ball out (last touch)
-        // attacking team put it out → Goal kick (defending GK restarts)
-        // defending team put it out → Corner (attacking team restarts)
-        // We use the pass team to infer: if the out team === pass team, it was a corner
-        // (attacking team last touched, defending team restarts? No — corner = attacking restarts)
-        // Correct: attacking team last touch → Goal kick; defending last touch → Corner
-        // We don't know which is which from ev.team alone without match context.
-        // Default to Corner (more common inference); collector can override.
+        // ev.team = team that last touched the ball (put it out)
+        // Attacking team last touch → Goal kick (defending GK restarts)
+        // Defending team last touch → Corner (attacking team restarts)
+        //
+        // "Attacking" = the team currently in possession (or was in possession before Out)
+        // ev.team was resolved from possession at Out commit time
+        const outTeam     = ev.team  // team that put ball out
+        const passingTeam = currentPossession?.team  // team about to take the restart
+
+        if (outTeam && passingTeam) {
+          if (outTeam === passingTeam) {
+            // Same team put it out AND is taking the restart → Corner
+            // (attacking team put it out → defending team/GK restarts; but here passingTeam===outTeam
+            //  means we're the attacking team restarting → Corner)
+            // Actually: outTeam = attacking → Goal kick (GK restarts for defending)
+            //           outTeam = defending → Corner (attacking restarts)
+            // passingTeam is about to restart; if passingTeam === outTeam then same team → Goal kick
+            // if passingTeam !== outTeam then opposite → Corner
+            return { type: OPTIONS.TYPE_GOAL_KICK, defaulted: false }
+          } else {
+            return { type: OPTIONS.TYPE_CORNER, defaulted: false }
+          }
+        }
+        // Possession unknown — default Corner, mark as defaulted
         return { type: OPTIONS.TYPE_CORNER, defaulted: true }
-        // Full inference would need "was ev.team the defending or attacking team?" context.
-        // Stored as defaulted:true so typeSource = 'manual' after collector override.
       }
     }
 
@@ -918,3 +933,184 @@ export const PASS_TYPE_OPTIONS = [
   opt(O.TYPE_GK_DIST,    'D'),
   opt(O.TYPE_OPEN_PLAY,  'O'),
 ]
+
+// ─── Possession rules per event ───────────────────────────────────────────────
+//
+// performedBy: 'possessing' | 'non-possessing' | 'explicit'
+//   possessing     → team field = current possessing team (no prompt)
+//   non-possessing → team field = the OTHER team (no prompt)
+//   explicit       → still show team prompt for this event (player-based, not possession-based)
+//
+// flip: 'never' | 'always' | 'on_outcome' | 'uncertain' | 'deferred' | 'resets'
+//   never         → possession stays with possessing team after this event
+//   always        → possession flips to the other team
+//   on_outcome    → flip only when certain Outcome codes are selected
+//   uncertain     → ball destination unknown; mark possessionCertain=false, don't flip
+//   deferred      → Out event: flip handled by next pass type inference
+//   resets        → Half end: clears possession state entirely
+//   explicit      → flip depends on a prompt answer (Fifty Fifty winner)
+//
+// flipOutcomes: outcome codes that trigger a flip (only used when flip='on_outcome')
+// miscommunicationTeam: 'opponent' when Miscommunication belongs to the OTHER team
+//
+// Events with no possession rule default to { performedBy:'possessing', flip:'never' }
+
+export const POSSESSION_RULES = {
+  half_start:          { performedBy:'explicit',        flip:'never'      },  // sets initial state via Team Side prompt
+  pass:                { performedBy:'possessing',       flip:'never'      },
+  pass_first_time:     { performedBy:'possessing',       flip:'never'      },
+  pass_recovery:       { performedBy:'non-possessing',   flip:'always',    miscommunicationTeam:'opponent' },
+  pass_interception:   { performedBy:'non-possessing',   flip:'always',    miscommunicationTeam:'opponent' },
+  shot:                { performedBy:'possessing',       flip:'never'      },
+  end_shot:            { performedBy:'possessing',       flip:'uncertain'  },  // ball gone, destination unknown
+  foul_committed:      { performedBy:'possessing',       flip:'on_outcome',
+                         flipOutcomes:['FOUL_REGULAR','FOUL_HANDBALL','FOUL_SIX_SEC','FOUL_BACKPASS',
+                                       'FOUL_DANGEROUS','FOUL_DIVE','FOUL_OFFSIDE','FOUL_EIGHT_SEC'],
+                         flipUncertain:['FOUL_ADVANTAGE'],
+                         flipExplicit: ['FOUL_PENALTY'],  // prompt for penalty restart team
+                       },
+  reception:           { performedBy:'possessing',       flip:'never'      },
+  miscontrol:          { performedBy:'possessing',       flip:'uncertain'  },  // ball loose
+  out:                 { performedBy:'possessing',       flip:'deferred'   },  // handled by pass type inference
+  dribble:             { performedBy:'possessing',       flip:'never'      },
+  shield:              { performedBy:'possessing',       flip:'never'      },
+  block:               { performedBy:'non-possessing',   flip:'uncertain'  },  // deflection destination unknown
+  interception:        { performedBy:'non-possessing',   flip:'on_outcome',
+                         flipOutcomes:['OUTCOME_WON','OUTCOME_SUCCESS'],
+                         miscommunicationTeam:'opponent' },
+  ball_recovery:       { performedBy:'non-possessing',   flip:'on_outcome',
+                         flipOutcomes:['OUTCOME_COMPLETE'],
+                         miscommunicationTeam:'opponent' },
+  clearance:           { performedBy:'non-possessing',   flip:'uncertain'  },
+  tackle:              { performedBy:'non-possessing',   flip:'on_outcome',
+                         flipOutcomes:['OUTCOME_WON','OUTCOME_SUCCESS'] },
+  hold_up_duel:        { performedBy:'possessing',       flip:'never'      },
+  positioning_duel:    { performedBy:'possessing',       flip:'never'      },
+  separation_duel:     { performedBy:'possessing',       flip:'never'      },
+  leg_stretch_duel:    { performedBy:'possessing',       flip:'never'      },
+  goal_keeper:         { performedBy:'possessing',       flip:'on_outcome',
+                         // flip depends on GK type: Collected/Claim/SaveWon/SaveSuccess = no flip
+                         // Punch = uncertain; KeeperSweeper Clear = uncertain, Claim = no flip
+                         flipByGkType: {
+                           GK_TYPE_COLLECTED:    'never',
+                           GK_TYPE_PUNCH:        'uncertain',
+                           GK_TYPE_KEEPER_SWEEPER: 'by_technique',  // Clear=uncertain, Claim=never
+                           GK_TYPE_SAVE_WON:     'never',
+                           GK_TYPE_SAVE_SUCCESS: 'never',
+                         },
+                       },
+  goal_keeper_smoother:{ performedBy:'possessing',       flip:'uncertain'  },  // GK duel, destination unclear
+  pressure_start:      { performedBy:'non-possessing',   flip:'never'      },
+  pressure_end:        { performedBy:'non-possessing',   flip:'never'      },
+  card:                { performedBy:'explicit',         flip:'never'      },
+  substitution:        { performedBy:'explicit',         flip:'never'      },
+  tactical_shift:      { performedBy:'explicit',         flip:'never'      },
+  formation:           { performedBy:'explicit',         flip:'never'      },
+  fifty_fifty:         { performedBy:'explicit',         flip:'explicit'   },  // prompt: which team won?
+  own_goal_against:    { performedBy:'non-possessing',   flip:'never'      },  // possessing team retains
+  error:               { performedBy:'possessing',       flip:'uncertain'  },
+  stoppage:            { performedBy:null,               flip:'never'      },  // team not meaningful
+  end_stoppage:        { performedBy:null,               flip:'never'      },
+  camera_off:          { performedBy:null,               flip:'never'      },
+  camera_on:           { performedBy:null,               flip:'never'      },
+  half_end:            { performedBy:null,               flip:'resets'     },
+  unknown_pass_end:    { performedBy:'possessing',       flip:'never'      },
+}
+
+// ─── Possession engine ────────────────────────────────────────────────────────
+//
+// possessionState: { team: 'home'|'away'|null, certain: boolean }
+//
+// resolveTeam(eventId, possessionState) → team for this event ('home'|'away'|null)
+export function resolveTeam(eventId, possessionState) {
+  const rule = POSSESSION_RULES[eventId]
+  if (!rule || rule.performedBy === null) return null  // team not meaningful
+  if (rule.performedBy === 'explicit') return null     // will be prompted
+  if (!possessionState?.team) return null              // possession unknown
+  if (rule.performedBy === 'possessing')     return possessionState.team
+  if (rule.performedBy === 'non-possessing') return possessionState.team === 'home' ? 'away' : 'home'
+  return null
+}
+
+// applyFlip(eventId, committedEvent, possessionState) → new possessionState
+// committedEvent: the event just saved (with groups, team, etc.)
+export function applyFlip(eventId, committedEvent, possessionState) {
+  const rule = POSSESSION_RULES[eventId]
+  if (!rule || !possessionState) return possessionState
+
+  if (rule.flip === 'resets') return { team: null, certain: false }
+  if (rule.flip === 'never')  return possessionState
+  if (rule.flip === 'deferred') return possessionState  // handled by pass type inference
+
+  if (rule.flip === 'always') {
+    const flipped = possessionState.team === 'home' ? 'away' : 'home'
+    return { team: flipped, certain: true }
+  }
+
+  if (rule.flip === 'uncertain') {
+    return { team: possessionState.team, certain: false }
+  }
+
+  if (rule.flip === 'on_outcome') {
+    // Find outcome code from committedEvent.groups
+    const outcomeGroup = committedEvent.groups?.find(g =>
+      g.groupId === 'outcome' || g.groupId === 'type'
+    )
+    const selectedCode = outcomeGroup?.selections?.[0]?.code
+
+    // GK special handling
+    if (rule.flipByGkType && eventId === 'goal_keeper') {
+      const typeGroup = committedEvent.groups?.find(g => g.groupId === 'type')
+      const gkType    = typeGroup?.selections?.[0]?.code
+      const gkFlip    = rule.flipByGkType?.[gkType] || 'uncertain'
+      if (gkFlip === 'never')    return possessionState
+      if (gkFlip === 'uncertain') return { team: possessionState.team, certain: false }
+      if (gkFlip === 'by_technique') {
+        const techGroup = committedEvent.groups?.find(g => g.groupId === 'technique')
+        const techCode  = techGroup?.selections?.[0]?.code
+        if (techCode === 'TECH_CLAIM') return possessionState
+        return { team: possessionState.team, certain: false }  // Clear or unknown
+      }
+    }
+
+    // Foul committed special handling
+    if (eventId === 'foul_committed') {
+      if (rule.flipUncertain?.includes(selectedCode))
+        return { team: possessionState.team, certain: false }
+      if (rule.flipExplicit?.includes(selectedCode))
+        return { team: possessionState.team, certain: false }  // Penalty: explicit prompt resolves this
+      if (rule.flipOutcomes?.includes(selectedCode)) {
+        const flipped = possessionState.team === 'home' ? 'away' : 'home'
+        return { team: flipped, certain: true }
+      }
+      return possessionState
+    }
+
+    // Standard on_outcome
+    if (rule.flipOutcomes?.includes(selectedCode)) {
+      const flipped = possessionState.team === 'home' ? 'away' : 'home'
+      return { team: flipped, certain: true }
+    }
+    return possessionState
+  }
+
+  return possessionState
+}
+
+// needsExplicitTeam(eventId) → true if this event keeps the team prompt
+export function needsExplicitTeam(eventId) {
+  const rule = POSSESSION_RULES[eventId]
+  return rule?.performedBy === 'explicit' || rule?.flip === 'explicit'
+}
+
+// teamNotMeaningful(eventId) → true if team is N/A for this event
+export function teamNotMeaningful(eventId) {
+  const rule = POSSESSION_RULES[eventId]
+  return rule?.performedBy === null
+}
+
+// getMiscommunicationTeam(eventId) → 'opponent' | null
+// When 'opponent', the Miscommunication extra belongs to the OTHER team
+export function getMiscommunicationTeam(eventId) {
+  return POSSESSION_RULES[eventId]?.miscommunicationTeam || null
+}

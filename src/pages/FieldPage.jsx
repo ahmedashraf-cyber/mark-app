@@ -1,19 +1,20 @@
 /**
  * FieldPage.jsx — FIELD mode data collection
  * ============================================================================
- * v3 — complete capture engine: group-by-group prompting, type inference,
- *      open-state tracker (pressure/shot/stoppage), Pressure start/end toggle,
- *      variant branching (Shot body part, GK type, Pass inferred type).
+ * v4 — possession engine: team inferred from possession state, not prompted.
+ *      Manual override: key 0 flips possession. teamSource stored on every event.
+ *      Explicit team prompt kept only for: Half start, Card, Substitution,
+ *      Tactical Shift, Formation, Fifty Fifty.
  *
  * FILES MODIFIED (Scout/Audit untouched):
- *   src/utils/fieldExtras.js   — new, FIELD-only
+ *   src/utils/fieldExtras.js   — possession rules added
  *   src/pages/FieldPage.jsx    — this file
- *   src/utils/exportFieldSession.js — typeSource column
+ *   src/utils/exportFieldSession.js — team_source, possession columns
  *
  * DATA: writes to mark_collected_events (never mark_error_tags).
  *   mode:'field', source:'field' on every document.
  */
-import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { db } from '../firebase/config'
 import { collection, addDoc, updateDoc, doc, setDoc,
@@ -27,6 +28,8 @@ import {
   FIELD_EVENTS, EVENT_BY_ID, EVENT_BY_KEY,
   OPEN_STATE_PAIRS, TRANSPARENT_EVENT_IDS,
   OPTIONS, PASS_TYPE_OPTIONS, inferPassType,
+  POSSESSION_RULES, resolveTeam, applyFlip,
+  needsExplicitTeam, teamNotMeaningful, getMiscommunicationTeam,
 } from '../utils/fieldExtras'
 
 // ─── Session helpers ──────────────────────────────────────────────────────────
@@ -94,18 +97,27 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
   const [session,      setSession]      = useState(initialSession || null)
   const [events,       setEvents]       = useState([])  // committed events
 
+  // ── Possession state ───────────────────────────────────────────────────────
+  // { team: 'home'|'away'|null, certain: boolean }
+  // null = not yet set (before first Half start)
+  // certain=false = uncertain (Block/Clearance/Punch/Miscontrol etc.)
+  const [possession,   setPossession]   = useState({ team: null, certain: false })
+
   // ── Capture state machine ──────────────────────────────────────────────────
   // step: 'idle' | 'type_confirm' | 'group' | 'team'
   const [captureStep,      setCaptureStep]      = useState('idle')
-  const [pendingEvent,     setPendingEvent]      = useState(null)   // eventDef
+  const [pendingEvent,     setPendingEvent]      = useState(null)
   const [pendingVideoTime, setPendingVideoTime]  = useState(0)
-  const [pendingType,      setPendingType]       = useState(null)   // OPTIONS.TYPE_* for pass
-  const [pendingTypeSource,setPendingTypeSource] = useState(null)   // 'inferred'|'manual'
-  const [resolvedVariant,  setResolvedVariant]   = useState(null)   // chosen variant branch
-  const [groupIndex,       setGroupIndex]        = useState(0)      // current group in chain
-  const [groupChain,       setGroupChain]        = useState([])     // ordered groups for this capture
-  const [collectedGroups,  setCollectedGroups]   = useState([])     // [{groupId, selections:[]}]
-  const [currentSelections,setCurrentSelections] = useState([])     // selections in progress for current group
+  const [pendingType,      setPendingType]       = useState(null)
+  const [pendingTypeSource,setPendingTypeSource] = useState(null)
+  const [resolvedVariant,  setResolvedVariant]   = useState(null)
+  const [groupIndex,       setGroupIndex]        = useState(0)
+  const [groupChain,       setGroupChain]        = useState([])
+  const [collectedGroups,  setCollectedGroups]   = useState([])
+  const [currentSelections,setCurrentSelections] = useState([])
+  // Team resolved from possession (shown in panel, used at commit)
+  const [pendingTeam,      setPendingTeam]       = useState(null)
+  const [pendingTeamSource,setPendingTeamSource] = useState(null)
 
   // ── Open states ────────────────────────────────────────────────────────────
   // { eventId → { event, team, videoTimeSec } }
@@ -204,7 +216,7 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
     if (eventDef.forceClosesAll) {
       Object.keys(openStates).forEach(oid => {
         const pair = OPEN_STATE_PAIRS.find(p=>p.openId===oid)
-        if (pair) commitEvent(EVENT_BY_ID[pair.closeId],vt,null,[],null,null,openStates[oid]?.team,true)
+        if (pair) commitEvent(EVENT_BY_ID[pair.closeId],vt,null,[],null,null,openStates[oid]?.team,'inferred',true)
       })
       setOpenStates({})
     }
@@ -224,9 +236,15 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
     setCollectedGroups([])
     setCurrentSelections([])
 
+    // Resolve team from possession (or keep null for explicit/n/a events)
+    const resolvedTeam = resolveTeam(eventDef.id, possession)
+    const teamSrc = resolvedTeam !== null ? 'inferred' : null
+    setPendingTeam(resolvedTeam)
+    setPendingTeamSource(teamSrc)
+
     // Pass type inference
     if (eventDef.id === 'pass') {
-      const { type, defaulted } = inferPassType(events)
+      const { type, defaulted } = inferPassType(events, possession)
       setPendingType(type)
       setPendingTypeSource(defaulted ? 'inferred_default' : 'inferred')
       setCaptureStep('type_confirm')
@@ -255,8 +273,7 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
       if (chain.length > 0) {
         setCaptureStep('group')
       } else {
-        // commit directly with inherited team
-        commitEvent(eventDef, vt, null, [], null, null, inheritedTeam)
+        commitEvent(eventDef, vt, null, [], null, null, inheritedTeam, 'inherited')
       }
       return
     }
@@ -266,8 +283,15 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
     setGroupChain(chain)
     if (chain.length > 0) {
       setCaptureStep('group')
-    } else {
+    } else if (needsExplicitTeam(eventDef.id)) {
+      // Keep team prompt for explicit events
       setCaptureStep('team')
+    } else if (teamNotMeaningful(eventDef.id)) {
+      // No team — commit directly
+      commitEvent(eventDef, vt, null, [], null, null, null, null)
+    } else {
+      // Team inferred from possession — skip prompt, commit
+      commitEvent(eventDef, vt, null, [], null, null, resolvedTeam, teamSrc)
     }
   }
 
@@ -289,6 +313,18 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
     const saved = [...collectedGroups, { groupId: group.id, groupLabel: group.label, selections }]
     setCollectedGroups(saved)
 
+    function routeAfterGroups(chain) {
+      if (chain.length > 0) {
+        setCaptureStep('group')
+      } else if (needsExplicitTeam(pendingEvent?.id)) {
+        setCaptureStep('team')
+      } else if (teamNotMeaningful(pendingEvent?.id)) {
+        commitEvent(null, undefined, null, saved, null, null, null, null)
+      } else {
+        commitEvent(null, undefined, null, saved, null, null, pendingTeam, pendingTeamSource)
+      }
+    }
+
     // If this group is the discriminator for variants, resolve branch
     if (pendingEvent?.variants && group.id === pendingEvent.variants.discriminatorGroupId) {
       const selectedCodes = selections.map(s=>s.code)
@@ -300,11 +336,7 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
       setGroupChain(remainingChain)
       setGroupIndex(0)
       setCurrentSelections([])
-      if (remainingChain.length > 0) {
-        setCaptureStep('group')
-      } else {
-        setCaptureStep('team')
-      }
+      routeAfterGroups(remainingChain)
       return
     }
 
@@ -318,11 +350,7 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
       setGroupChain(remainingChain)
       setGroupIndex(0)
       setCurrentSelections([])
-      if (remainingChain.length > 0) {
-        setCaptureStep('group')
-      } else {
-        setCaptureStep('team')
-      }
+      routeAfterGroups(remainingChain)
       return
     }
 
@@ -332,15 +360,23 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
       setGroupIndex(nextIdx)
       setCurrentSelections([])
     } else {
-      setCaptureStep('team')
+      // All groups collected — route based on possession rule
+      if (needsExplicitTeam(pendingEvent?.id)) {
+        setCaptureStep('team')
+      } else if (teamNotMeaningful(pendingEvent?.id)) {
+        commitEvent(null, undefined, null, saved, null, null, null, null)
+      } else {
+        commitEvent(null, undefined, null, saved, null, null, pendingTeam, pendingTeamSource)
+      }
     }
   }
 
   // ── Commit the full event ──────────────────────────────────────────────────
-  async function commitEvent(eventDef, vt, type, groups, typeSource, variant, team, forceClose=false) {
-    const realDef = eventDef || pendingEvent
-    const realVt  = vt  !== undefined ? vt  : pendingVideoTime
-    const realTeam= team !== undefined ? team : null
+  async function commitEvent(eventDef, vt, type, groups, typeSource, variant, team, teamSrc, forceClose=false) {
+    const realDef  = eventDef || pendingEvent
+    const realVt   = vt   !== undefined ? vt   : pendingVideoTime
+    const realTeam = team !== undefined ? team : pendingTeam
+    const realTeamSrc = teamSrc !== undefined ? teamSrc : pendingTeamSource
 
     // If this closes an open state, remove it
     if (realDef.closesEventId) {
@@ -351,6 +387,17 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
       setOpenStates(prev => ({ ...prev, [realDef.id]: { team:realTeam, videoTimeSec:realVt } }))
     }
 
+    const finalGroups = groups || collectedGroups
+
+    // If Half start: set initial possession from the Team Side selection
+    if (realDef.id === 'half_start') {
+      const teamGroup = finalGroups.find(g => g.groupId === 'team_side')
+      const teamSel   = teamGroup?.selections?.[0]?.code
+      const newPoss = teamSel === 'TEAM_HOME' ? 'home'
+                    : teamSel === 'TEAM_AWAY' ? 'away' : realTeam
+      if (newPoss) setPossession({ team: newPoss, certain: true })
+    }
+
     const id = `field_${Date.now()}_${Math.random().toString(36).slice(2,7)}`
     const ev = {
       id, sessionId:session.sessionId,
@@ -358,15 +405,27 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
       videoTimeSec: realVt,
       eventId:    realDef.id,
       eventLabel: realDef.label,
-      groups:     groups||collectedGroups,
-      // Legacy extras field — flat array of selected labels (for TaggedEventsList display)
-      extras: (groups||collectedGroups).flatMap(g => g.selections?.map(s=>s.label)||[]),
+      groups:     finalGroups,
+      extras: finalGroups.flatMap(g => g.selections?.map(s=>s.label)||[]),
       team: realTeam||null,
+      teamSource: realTeamSrc||null,
+      possessionCertain: possession.certain,
+      miscommunicationTeam: getMiscommunicationTeam(realDef.id) || null,
       type: type||pendingType||null,
       typeSource: typeSource||pendingTypeSource||null,
       source:'field', mode:'field',
       collectorId:profile.uid, collectorEmail:profile.email,
       timestamp:Date.now(),
+    }
+
+    // Apply possession flip AFTER building the event (uses the committed groups)
+    const newPossession = applyFlip(realDef.id, ev, possession)
+
+    // For Half start: set possession from Team Side explicit prompt result
+    if (realDef.id === 'half_start' && realTeam) {
+      setPossession({ team: realTeam, certain: true })
+    } else {
+      setPossession(newPossession)
     }
 
     try {
@@ -381,11 +440,11 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
       updateDoc(doc(db,'mark_field_sessions',session.sessionId),{totalEvents:newTotal,collectionStartWallMs:updated.collectionStartWallMs}).catch(()=>{})
     } catch(e) { console.error('[MARK Field] commit:',e) }
 
-    // Reset capture state
     if (!forceClose) {
       setPendingEvent(null); setCaptureStep('idle')
       setCollectedGroups([]); setCurrentSelections([]); setGroupChain([])
       setPendingType(null); setPendingTypeSource(null); setResolvedVariant(null); setGroupIndex(0)
+      setPendingTeam(null); setPendingTeamSource(null)
     }
   }
 
@@ -393,6 +452,7 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
     setPendingEvent(null); setCaptureStep('idle')
     setCollectedGroups([]); setCurrentSelections([]); setGroupChain([])
     setPendingType(null); setPendingTypeSource(null); setResolvedVariant(null); setGroupIndex(0)
+    setPendingTeam(null); setPendingTeamSource(null)
   }
 
   // ── Delete event ───────────────────────────────────────────────────────────
@@ -476,14 +536,26 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
       // ── Team step ────────────────────────────────────────────────────────
       if (captureStep==='team') {
         if (key==='Escape') { abandonCapture(); return }
-        if (key==='1') { commitEvent(null,undefined,null,null,null,null,'home'); return }
-        if (key==='2') { commitEvent(null,undefined,null,null,null,null,'away'); return }
-        if (key==='Enter') { commitEvent(null,undefined,null,null,null,null,null); return }
+        if (key==='1') { commitEvent(null,undefined,null,null,null,null,'home','explicit'); return }
+        if (key==='2') { commitEvent(null,undefined,null,null,null,null,'away','explicit'); return }
+        if (key==='Enter') { commitEvent(null,undefined,null,null,null,null,null,null); return }
         return
       }
 
       // ── Idle — transport and event capture ───────────────────────────────
       if (!videoLoaded||showDoneModal) return
+
+      // Key 0 = manual possession flip
+      if (key==='0') {
+        e.preventDefault()
+        setPossession(prev => {
+          const flipped = prev.team === 'home' ? 'away' : prev.team === 'away' ? 'home' : null
+          return { team: flipped, certain: true }
+        })
+        setFlashEvent(possession.team === 'home' ? '← Possession: Away' : possession.team === 'away' ? '→ Possession: Home' : 'Possession unknown')
+        setTimeout(()=>setFlashEvent(null),1200)
+        return
+      }
 
       if (key==='ArrowUp')   { e.preventDefault(); togglePlay(); return }
       if (key==='ArrowRight'||key==='ArrowLeft') {
@@ -593,11 +665,40 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
         {/* Open state badges */}
         {openBadges.map(p=>(
           <div key={p.openId} style={{display:'flex',alignItems:'center',gap:6,background:'rgba(232,89,12,0.12)',border:'1px solid rgba(232,89,12,0.3)',borderRadius:6,padding:'2px 8px'}}>
-            <div style={{width:6,height:6,borderRadius:'50%',background:'#E8590C',animation:'pulse 1s infinite'}}/>
+            <div style={{width:6,height:6,borderRadius:'50%',background:'#E8590C'}}/>
             <span style={{fontSize:10,fontWeight:700,color:'#E8590C'}}>{EVENT_BY_ID[p.openId]?.label}</span>
             {p.closeKey&&<span style={{fontSize:9,color:'var(--t-3)'}}>→ {p.closeKey} to end</span>}
           </div>
         ))}
+
+        {/* Possession indicator */}
+        <div
+          title="Press 0 to flip possession manually"
+          style={{
+            display:'flex', alignItems:'center', gap:6, padding:'3px 10px',
+            borderRadius:7, cursor:'pointer',
+            background: !possession.team ? 'rgba(100,100,100,0.15)'
+              : possession.certain ? (possession.team==='home' ? 'rgba(10,132,255,0.15)' : 'rgba(232,89,12,0.15)')
+              : 'rgba(255,149,0,0.15)',
+            border: `1px solid ${!possession.team ? 'rgba(100,100,100,0.3)'
+              : possession.certain ? (possession.team==='home' ? 'rgba(10,132,255,0.4)' : 'rgba(232,89,12,0.4)')
+              : 'rgba(255,149,0,0.4)'}`,
+          }}
+          onClick={() => {
+            setPossession(prev => {
+              const f = prev.team==='home'?'away':prev.team==='away'?'home':null
+              return {team:f,certain:true}
+            })
+          }}
+        >
+          <div style={{width:7,height:7,borderRadius:'50%',
+            background:!possession.team?'#636366':possession.certain?(possession.team==='home'?'#0A84FF':'#E8590C'):'#FF9500'}}/>
+          <span style={{fontSize:10,fontWeight:700,
+            color:!possession.team?'var(--t-3)':possession.certain?(possession.team==='home'?'#0A84FF':'#E8590C'):'#FF9500'}}>
+            {!possession.team ? '? Possession' : (possession.certain ? '' : '≈ ')}{possession.team==='home'?'Home':possession.team==='away'?'Away':'unknown'}
+          </span>
+          <span style={{fontSize:8,color:'var(--t-3)'}}>0</span>
+        </div>
 
         <div style={{fontSize:11,color:'var(--t-3)'}}><span style={{color:'#30D158',fontWeight:700}}>{events.length}</span> collected</div>
         {flashEvent&&<div style={{fontSize:11,fontWeight:700,color:'#30D158',background:'rgba(48,209,88,0.15)',padding:'3px 10px',borderRadius:6}}>✓ {flashEvent}</div>}

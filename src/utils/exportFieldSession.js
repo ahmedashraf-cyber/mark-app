@@ -33,6 +33,10 @@ const COLUMNS = [
   // Pass type inference
   'inferred_type',
   'type_source',
+  // Team attribution
+  'team_source',
+  'possession_certain',
+  'miscommunication_team',
   // Timing
   'video_time_ms',
   'video_time_readable',
@@ -155,6 +159,9 @@ export function buildFieldCsv(session, events) {
       event_label:                 ev.eventLabel || '',
       inferred_type:               ev.type?.label || ev.type?.code || '',
       type_source:                 ev.typeSource  || '',
+      team_source:                 ev.teamSource  || '',
+      possession_certain:          ev.possessionCertain === false ? '0' : ev.possessionCertain === true ? '1' : '',
+      miscommunication_team:       ev.miscommunicationTeam || '',
       video_time_ms:               videoMs,
       video_time_readable:         msToReadable(videoMs),
       team:                        ev.team || '',
