@@ -1017,6 +1017,14 @@ export default function SessionHistoryPage({ onBack, initialSession }) {
         // ── Backfill: recompute A/B/C/D/TO scores for old Scout sessions ────
         // Runs silently after load — only targets sessions missing qualityScoreA
         backfillDefectTypeScores(scoutList).catch(e => console.warn('[MARK] backfill error:', e))
+
+        // ── Migration: obsolete missing_pressure/extra_pressure → missing_event/extra_event ──
+        // Idempotent — safe to re-run. Logs count before migrating.
+        import('../utils/migratePressureErrorTypes').then(({ migratePressureErrorTypes }) =>
+          migratePressureErrorTypes(db).then(({ found, migrated }) => {
+            if (found > 0) console.log(`[MARK] pressure migration: found=${found} migrated=${migrated}`)
+          })
+        ).catch(e => console.warn('[MARK] pressure migration error:', e))
       } catch(e) {
         console.error('[MARK] load sessions:', e)
       } finally {

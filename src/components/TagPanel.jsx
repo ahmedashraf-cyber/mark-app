@@ -215,38 +215,36 @@ const ERROR_TYPES = [
   { key:'8', id:'wrong_side',        label:'Wrong side',        autoSave:false },
   { key:'9', id:'wrong_player',      label:'Wrong player',      autoSave:false },
   { key:'0', id:'wrong_location',    label:'Wrong location',    autoSave:false },
-  // Pressure-specific error types (only shown when eventId === 'pressure')
-  { key:'M', id:'missing_pressure',  label:'Missing Pressure',  autoSave:false, pressureOnly:true },
-  { key:'X', id:'extra_pressure',    label:'Extra Pressure',    autoSave:false, pressureOnly:true },
 ]
 
 // ── Pressure shape sub-classification ─────────────────────────────────────
 // Codes are the persisted values — labels can be renamed without touching stored data.
-// IMPORTANT: MP codes are ONLY valid with missing_pressure;
-//            OP codes are ONLY valid with extra_pressure.
-//            This is enforced at the data layer in doSave(), not just by hiding UI options.
+// Shape step fires when isPressureEvent AND error type is missing_event or extra_event.
+// MP codes are ONLY valid with missing_event on a pressure event.
+// OP codes are ONLY valid with extra_event on a pressure event.
+// Enforced at the data layer in doSave(), not just by hiding UI options.
 export const PRESSURE_SHAPES = {
-  missing_pressure: [
+  missing_event: [
     { key:'1', code:'MP1', label:'Shooter Pressure',      desc:'pressure on the shooter' },
     { key:'2', code:'MP2', label:'Keeper Pressure',       desc:'pressure on the goalkeeper' },
     { key:'3', code:'MP3', label:'Pre-Duel Pressure',     desc:'pressure before foul, tackle, dribble or block' },
     { key:'4', code:'MP4', label:'Clear Pressure',        desc:'direct, unambiguous pressure on the ball carrier' },
     { key:'5', code:'MP5', label:'Pre-Receive Pressure',  desc:'defender tight/behind receiver before he gets the ball' },
   ],
-  extra_pressure: [
+  extra_event: [
     { key:'1', code:'OP1', label:'Static Defender',  desc:'defender holds position with no closing movement' },
     { key:'2', code:'OP2', label:'Space Cover',       desc:'defender covers area or shuts passing lane' },
   ],
 }
 
-// Validation map: which codes are valid for which error type
+// Validation map: which shape codes are valid for which error type (pressure events only)
 const VALID_SHAPE_FOR_TYPE = {
-  missing_pressure: new Set(['MP1','MP2','MP3','MP4','MP5']),
-  extra_pressure:   new Set(['OP1','OP2']),
+  missing_event: new Set(['MP1','MP2','MP3','MP4','MP5']),
+  extra_event:   new Set(['OP1','OP2']),
 }
 
-// Types that trigger the pressure_shape step
-const PRESSURE_ERROR_TYPES = new Set(['missing_pressure','extra_pressure'])
+// Error types that trigger the pressure_shape step (only when isPressureEvent)
+const PRESSURE_ERROR_TYPES = new Set(['missing_event','extra_event'])
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
 const fmt = (s) => {
@@ -515,16 +513,15 @@ export default function TagPanel({ pendingTag, onSave, onCancel, editTag, onEdit
       if (step === 'error_type') {
         const et = ERROR_TYPES.find(x => x.key?.toUpperCase() === k)
         if (!et) return
-        // Pressure-only types hidden for non-pressure events
-        if (et.pressureOnly && !isPressureEvent) return
         setErrorTypeId(et.id)
         setPressureShape(null) // explicit reset when error type changes
         if      (et.id === 'wrong_event') {
           if (!isGK) setStep('wrong_event')
           else { const ent = gkEntry(gkSubType?.id); setStep(ent.correctEvents.length ? 'gk_wrong_event' : (ent.extras.length ? 'gk_extra' : 'team')) }
         }
-        else if (et.id === 'missing_event')    setStep('team')
-        else if (et.id === 'extra_event')      setStep('team')
+        // missing_event/extra_event on pressure → show shape step first
+        else if (et.id === 'missing_event')    setStep(isPressureEvent ? 'pressure_shape' : 'team')
+        else if (et.id === 'extra_event')      setStep(isPressureEvent ? 'pressure_shape' : 'team')
         else if (et.id === 'wrong_timestamp')  setStep('team')
         else if (et.id === 'wrong_side')       setStep('team')
         else if (et.id === 'wrong_player')     setStep('team')
@@ -532,8 +529,6 @@ export default function TagPanel({ pendingTag, onSave, onCancel, editTag, onEdit
         else if (et.id === 'missing_extra')    setStep('missing_extra')
         else if (et.id === 'not_needed_extra') setStep('not_needed_extra')
         else if (et.id === 'wrong_extra')      setStep('wrong_extra_pick')
-        // Pressure-specific types → pressure_shape step
-        else if (PRESSURE_ERROR_TYPES.has(et.id)) setStep('pressure_shape')
         return
       }
 
@@ -619,7 +614,7 @@ export default function TagPanel({ pendingTag, onSave, onCancel, editTag, onEdit
   if (gkSubType)     crumbs.push(gkSubType.label)
   if (errorTypeId)   crumbs.push(ERROR_TYPES.find(x => x.id === errorTypeId)?.label || '')
   if (pressureShape) {
-    const allShapes = [...(PRESSURE_SHAPES.missing_pressure || []), ...(PRESSURE_SHAPES.extra_pressure || [])]
+    const allShapes = [...(PRESSURE_SHAPES.missing_event || []), ...(PRESSURE_SHAPES.extra_event || [])]
     crumbs.push(allShapes.find(s => s.code === pressureShape)?.label || pressureShape)
   }
   if (selectedExtra) crumbs.push(selectedExtra)
@@ -674,13 +669,11 @@ export default function TagPanel({ pendingTag, onSave, onCancel, editTag, onEdit
                 if (et.id === 'not_needed_extra' && missingList.length    === 0) return null
                 if (et.id === 'wrong_extra'      && wrongExtraKeysFull.length === 0) return null
                 if (et.id === 'wrong_event'      && wrongEventList.length === 0 && !isGK) return null
-                // Pressure-only types: only show for pressure event
-                if (et.pressureOnly && !isPressureEvent) return null
-                // For pressure event: hide generic extras steps (pressure has no extras)
+                // For pressure event: hide extras steps (pressure has no extras)
                 if (isPressureEvent && (et.id === 'missing_extra' || et.id === 'not_needed_extra' || et.id === 'wrong_extra')) return null
                 return (
                   <PillBtn key={et.id} label={et.label} shortcut={et.key} active={false}
-                    color={et.pressureOnly ? '#30D158' : et.autoSave ? '#30D158' : 'var(--p2)'} autoSave={et.autoSave}
+                    color={et.autoSave ? '#30D158' : 'var(--p2)'} autoSave={et.autoSave}
                     onClick={() => {
                       setErrorTypeId(et.id)
                       setPressureShape(null) // explicit reset when error type changes
@@ -688,8 +681,9 @@ export default function TagPanel({ pendingTag, onSave, onCancel, editTag, onEdit
                         if (!isGK) setStep('wrong_event')
                         else setStep(gkEnt.correctEvents.length ? 'gk_wrong_event' : (gkEnt.extras.length ? 'gk_extra' : 'team'))
                       }
-                      else if (et.id === 'missing_event')    setStep('team')
-                      else if (et.id === 'extra_event')      setStep('team')
+                      // missing_event/extra_event on pressure → shape step
+                      else if (et.id === 'missing_event')    setStep(isPressureEvent ? 'pressure_shape' : 'team')
+                      else if (et.id === 'extra_event')      setStep(isPressureEvent ? 'pressure_shape' : 'team')
                       else if (et.id === 'wrong_timestamp')  setStep('team')
                       else if (et.id === 'wrong_side')       setStep('team')
                       else if (et.id === 'wrong_player')     setStep('team')
@@ -697,7 +691,6 @@ export default function TagPanel({ pendingTag, onSave, onCancel, editTag, onEdit
                       else if (et.id === 'missing_extra')    setStep('missing_extra')
                       else if (et.id === 'not_needed_extra') setStep('not_needed_extra')
                       else if (et.id === 'wrong_extra')      setStep('wrong_extra_pick')
-                      else if (PRESSURE_ERROR_TYPES.has(et.id)) setStep('pressure_shape')
                     }}
                   />
                 )
@@ -709,7 +702,7 @@ export default function TagPanel({ pendingTag, onSave, onCancel, editTag, onEdit
         {/* Pressure shape — sub-classification of missing/extra pressure errors */}
         {step === 'pressure_shape' && (() => {
           const shapes = PRESSURE_SHAPES[errorTypeId] || []
-          const shapeColor = errorTypeId === 'missing_pressure' ? '#BF5AF2' : '#FF9F0A'
+          const shapeColor = errorTypeId === 'missing_event' ? '#BF5AF2' : '#FF9F0A'
           return (
             <>
               <StepLabel text="pressure shape (optional — Enter to skip)" color={shapeColor} />
