@@ -1,5 +1,5 @@
 (async function(){
-  const BRIDGE_VERSION = '7.8.25';
+  const BRIDGE_VERSION = '7.8.26';
   if(window.__MARK_BRIDGE_VERSION__ === BRIDGE_VERSION){console.log('[MARK] bridge already running (v' + BRIDGE_VERSION + ')');return;}
   if(window.__MARK_BRIDGE_STOP__) window.__MARK_BRIDGE_STOP__();
   window.__MARK_BRIDGE__ = true;
@@ -1638,10 +1638,10 @@
           const PRESSURE_N    = new Set(['pressure-start','pressure-end']);
           const FF_TYPES_SPD  = new Set(['freeze-frame','goal-location','impact']);
 
-          // Refinement/completion maps
+          // Refinement/completion maps — filtered to current match/half only
           const refinementMapSPD = {};
           Object.values(cache).forEach(v => {
-            if (v.__typename === 'Event' && v.category === 'refinement') {
+            if (v.__typename === 'Event' && v.category === 'refinement' && inMatch(v)) {
               if (!refinementMapSPD[v.key]) refinementMapSPD[v.key] = new Set();
               refinementMapSPD[v.key].add(v.type);
             }
@@ -1673,8 +1673,12 @@
           speedData = {};
 
           collectorIds.forEach(function(cId) {
+            // CRITICAL: filter by inMatch — only events from current match+half
+            // Without this, when match B is loaded while match A is still in cache,
+            // speed computation picks up match A's events and half-start/end anchors.
             const allByColl = Object.values(cache).filter(v =>
               v.__typename === 'Event' && v.author === cId && v.capturedTime &&
+              inMatch(v) &&
               (v.category === 'base' || v.category === 'refinement' || v.category === 'amendment')
             );
 
@@ -1695,8 +1699,8 @@
             };
             const beEvents = allByColl.filter(isBaseExtrasEv).sort((a,b)=>(a.capturedTime||'').localeCompare(b.capturedTime||''));
             let beWindowStart = null, beWindowEnd = null, beWindowMethod = 'first → last base', beMultiDay = false;
-            const hsEv = Object.values(cache).find(v => v.__typename==='Event' && v.category==='base' && v.author===cId && v.payload && v.payload.name==='half-start');
-            const heEv = Object.values(cache).find(v => v.__typename==='Event' && v.category==='base' && v.author===cId && v.payload && v.payload.name==='half-end');
+            const hsEv = Object.values(cache).find(v => v.__typename==='Event' && inMatch(v) && v.category==='base' && v.author===cId && v.payload && v.payload.name==='half-start');
+            const heEv = Object.values(cache).find(v => v.__typename==='Event' && inMatch(v) && v.category==='base' && v.author===cId && v.payload && v.payload.name==='half-end');
             if (hsEv && heEv) {
               beWindowStart = new Date(hsEv.capturedTime).getTime();
               beWindowEnd   = new Date(heEv.capturedTime).getTime();
