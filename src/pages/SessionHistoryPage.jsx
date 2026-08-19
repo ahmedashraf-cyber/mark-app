@@ -961,7 +961,10 @@ export default function SessionHistoryPage({ onBack, initialSession }) {
           where('status', '==', 'completed')
         )
         const snap = await getDocs(q)
-        const scoutList = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+        // Exclude Field mode sessions — they live in mark_field_sessions, not here
+        const scoutList = snap.docs
+          .map(d => ({ id: d.id, ...d.data() }))
+          .filter(s => (s.mode || 'scout') !== 'field')
 
         // Own Audit sessions — read from Sheet (latest per matchId+half), fallback to Firestore
         // Admin loads ALL sessions regardless of reviewer

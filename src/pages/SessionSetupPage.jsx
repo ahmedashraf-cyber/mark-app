@@ -473,9 +473,33 @@ export default function SessionSetupPage({ onSessionStart, lastResult, onShowHis
                   desc:'Edit events directly in the collection app. MARK reads your corrections and calculates quality scores.',
                   steps:['Open match in collection app','Edit events as you review','Get results in MARK instantly'],
                 },
+                {
+                  mode:'field',
+                  color:'#30D158',
+                  glyph: (
+                    <svg width="32" height="32" viewBox="0 0 32 32" fill="none">
+                      <circle cx="16" cy="16" r="12" stroke="#30D158" strokeWidth="2"/>
+                      <line x1="16" y1="4" x2="16" y2="28" stroke="#30D158" strokeWidth="1.5" strokeDasharray="2 3" opacity="0.5"/>
+                      <line x1="4" y1="16" x2="28" y2="16" stroke="#30D158" strokeWidth="1.5" strokeDasharray="2 3" opacity="0.5"/>
+                      <circle cx="16" cy="16" r="3.5" fill="#30D158"/>
+                      <circle cx="16" cy="16" r="6.5" stroke="#30D158" strokeWidth="1.5" opacity="0.4"/>
+                    </svg>
+                  ),
+                  title:'Field',
+                  sub:'Collect events as primary data',
+                  desc:'Open any video and tag events directly — no match ID needed, no error types. Pure data collection.',
+                  steps:['Open any local video file','Tag events with keyboard shortcuts','Export collected data'],
+                },
               ].map(m => (
                 <div key={m.mode}
-                  onClick={() => setReviewMode(m.mode)}
+                  onClick={() => {
+                    // Field mode: start immediately — no match/half needed
+                    if (m.mode === 'field') {
+                      onSessionStart({ mode: 'field', sessionId: null })
+                      return
+                    }
+                    setReviewMode(m.mode)
+                  }}
                   style={{
                     background:'var(--bg-2)', borderRadius:14, padding:'22px 20px',
                     border:`1px solid rgba(255,255,255,0.06)`,

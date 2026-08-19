@@ -5,6 +5,7 @@ import { checkForUpdate } from './hooks/useUpdateCheck.js'
 import LoginPage from './pages/LoginPage'
 import SessionSetupPage from './pages/SessionSetupPage'
 import ReviewPage from './pages/ReviewPage'
+import FieldPage from './pages/FieldPage'
 import SessionHistoryPage from './pages/SessionHistoryPage'
 import AuditPage from './pages/AuditPage'
 import AuditReportPage from './pages/AuditReportPage'
@@ -205,7 +206,7 @@ function AppInner() {
     </PageTransition>
   )
 
-  const pageId = observingSession ? `observer-${observingSession.sessionId}` : showAuditReport ? 'audit-report' : session?.mode === 'audit' ? `audit-${session.sessionId}` : session ? `review-${session.sessionId}` : showHistory ? 'history' : 'setup'
+  const pageId = observingSession ? `observer-${observingSession.sessionId}` : showAuditReport ? 'audit-report' : session?.mode === 'audit' ? `audit-${session.sessionId}` : session?.mode === 'field' ? `field-${Date.now()}` : session ? `review-${session.sessionId}` : showHistory ? 'history' : 'setup'
 
   return (
     <>
@@ -234,6 +235,12 @@ function AppInner() {
               setAuditScore(score)
               setShowAuditReport(true)
             }}
+          />
+        ) : session?.mode === 'field' ? (
+          <FieldPage
+            session={session}
+            onDone={() => setSession(null)}
+            onBack={() => setSession(null)}
           />
         ) : session ? (
           <ReviewPage
