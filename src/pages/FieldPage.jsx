@@ -29,8 +29,8 @@ import { useAuth } from '../hooks/useAuth.jsx'
 import { KEY_TO_EVENT, SPEED_MIN, SPEED_MAX, SPEED_STEP } from '../data/shortcuts'
 import EventsSidebar from '../components/EventsSidebar'
 import TaggedEventsList from '../components/TaggedEventsList'
-import FieldTimeline from '../components/FieldTimeline'
 import { getFieldExtrasFor } from '../components/TagPanel'
+import ErrorTimeline from '../components/ErrorTimeline'
 import { downloadFieldCsv } from '../utils/exportFieldSession'
 
 // ── Stable video path hash ────────────────────────────────────────────────────
@@ -634,30 +634,33 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
         )}
       </div>
 
-      {/* ── Field Timeline (Home/Away lanes) ─────────────────────────────────── */}
+      {/* ── Scrub bar (standard ErrorTimeline) ───────────────────────────────── */}
       <div style={{ flexShrink:0, background:'var(--bg-2)',
-        borderTop:'1px solid var(--b-1)', padding:'4px 16px 6px' }}>
-        <FieldTimeline
-          events={events}
+        borderTop:'1px solid var(--b-1)', padding:'4px 16px 8px' }}>
+        <ErrorTimeline
+          errors={events}
           videoDuration={duration}
           videoRef={videoRef}
           currentTime={currentTime}
           playing={playing}
           muted={muted}
           onSeek={seekTo}
+          onSyncSeek={seekTo}
           onTogglePlay={togglePlay}
           onToggleMute={toggleMute}
-          onSelect={(ev) => {/* inspect — TaggedEventsList handles detail panel */}}
           onDragStart={() => { isDraggingRef.current = true }}
         />
       </div>
 
-      {/* ── Events list ──────────────────────────────────────────────────────── */}
+      {/* ── Events list — Home/Away lanes (same component as Scout) ─────────── */}
+      {/* matchName="Home vs Away" so TaggedEventsList parses lane labels correctly.
+          In Scout it gets the real match name ("Team A vs Team B"); here we pass a
+          fixed string since Field sessions have no match metadata. */}
       <TaggedEventsList
         tags={events}
         videoDuration={duration}
         currentTime={currentTime}
-        matchName={videoName}
+        matchName="Home vs Away"
         onEdit={null}
         onDelete={deleteEvent}
       />
