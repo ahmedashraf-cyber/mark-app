@@ -163,6 +163,7 @@ export function buildScoutWorkbook({ session, tags, quality, tagCount, total,
   const HEADERS = [
     'Match ID', 'Match Name', 'Half', 'Reviewer', 'Video Time',
     'Event Type', 'Defect Type', 'Error Type',
+    'Pressure Shape', 'Pressure Code',
     'Extra 1', 'Extra 2', 'Extra 3', 'Extra 4', 'Extra 5',
     'Team', 'Clip File',
   ]
@@ -179,18 +180,23 @@ export function buildScoutWorkbook({ session, tags, quality, tagCount, total,
     const team    = tag.team === 'home' ? home : tag.team === 'away' ? away : (tag.team || '')
     const clip    = videoPath ? clipName(folderBase, tag, dt) : ''
     const errType = extras[0] || ''
+    // Pressure shape — code stored, label looked up for display
+    const psCode  = tag.pressureShape || ''
+    const allShapes = [
+      {code:'MP1',label:'Shooter Pressure'}, {code:'MP2',label:'Keeper Pressure'},
+      {code:'MP3',label:'Pre-Duel Pressure'}, {code:'MP4',label:'Clear Pressure'},
+      {code:'MP5',label:'Pre-Receive Pressure'}, {code:'OP1',label:'Static Defender'},
+      {code:'OP2',label:'Space Cover'},
+    ]
+    const psLabel = psCode ? (allShapes.find(s=>s.code===psCode)?.label || psCode) : ''
     return [
-      matchId,
-      matchName,
-      half,
-      reviewer,
+      matchId, matchName, half, reviewer,
       fmtTime(tag.videoTimeSec),
       tag.triggeredEventLabel || normId(tag.triggeredEventId) || '',
-      dt,
-      errType,
+      dt, errType,
+      psLabel, psCode,   // Pressure Shape label + code
       extras[0] || '', extras[1] || '', extras[2] || '', extras[3] || '', extras[4] || '',
-      team,
-      clip,
+      team, clip,
     ]
   })
   // Sort by video time
@@ -211,6 +217,7 @@ export function buildScoutWorkbook({ session, tags, quality, tagCount, total,
   ws['!cols'] = [
     { wch:14 }, { wch:28 }, { wch:12 }, { wch:22 }, { wch:14 },
     { wch:20 }, { wch:12 }, { wch:22 },
+    { wch:20 }, { wch:12 }, // Pressure Shape label + code
     { wch:18 }, { wch:18 }, { wch:18 }, { wch:18 }, { wch:18 },
     { wch:14 }, { wch:42 },
   ]

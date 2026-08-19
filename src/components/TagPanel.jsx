@@ -204,18 +204,49 @@ const GK_SUBTYPES = [
 
 // ─── error types ──────────────────────────────────────────────────────────────
 const ERROR_TYPES = [
-  { key:'1', id:'wrong_event',      label:'Wrong event',      autoSave:false },
-  { key:'2', id:'missing_event',    label:'Missing event',    autoSave:false },
-  { key:'3', id:'extra_event',      label:'Extra event',      autoSave:false },
-  { key:'4', id:'missing_extra',    label:'Missing extra',    autoSave:false },
-  { key:'5', id:'wrong_extra',      label:'Wrong extra',      autoSave:false },
-  { key:'6', id:'not_needed_extra', label:'Not needed extra', autoSave:false },
-  { key:'7', id:'wrong_timestamp',  label:'Wrong timestamp',  autoSave:false },
+  { key:'1', id:'wrong_event',       label:'Wrong event',       autoSave:false },
+  { key:'2', id:'missing_event',     label:'Missing event',     autoSave:false },
+  { key:'3', id:'extra_event',       label:'Extra event',       autoSave:false },
+  { key:'4', id:'missing_extra',     label:'Missing extra',     autoSave:false },
+  { key:'5', id:'wrong_extra',       label:'Wrong extra',       autoSave:false },
+  { key:'6', id:'not_needed_extra',  label:'Not needed extra',  autoSave:false },
+  { key:'7', id:'wrong_timestamp',   label:'Wrong timestamp',   autoSave:false },
   // Global attribute errors — available for ANY event, recorded straight to team.
-  { key:'8', id:'wrong_side',       label:'Wrong side',       autoSave:false },
-  { key:'9', id:'wrong_player',     label:'Wrong player',     autoSave:false },
-  { key:'0', id:'wrong_location',   label:'Wrong location',   autoSave:false },
+  { key:'8', id:'wrong_side',        label:'Wrong side',        autoSave:false },
+  { key:'9', id:'wrong_player',      label:'Wrong player',      autoSave:false },
+  { key:'0', id:'wrong_location',    label:'Wrong location',    autoSave:false },
+  // Pressure-specific error types (only shown when eventId === 'pressure')
+  { key:'M', id:'missing_pressure',  label:'Missing Pressure',  autoSave:false, pressureOnly:true },
+  { key:'X', id:'extra_pressure',    label:'Extra Pressure',    autoSave:false, pressureOnly:true },
 ]
+
+// ── Pressure shape sub-classification ─────────────────────────────────────
+// Codes are the persisted values — labels can be renamed without touching stored data.
+// IMPORTANT: MP codes are ONLY valid with missing_pressure;
+//            OP codes are ONLY valid with extra_pressure.
+//            This is enforced at the data layer in doSave(), not just by hiding UI options.
+export const PRESSURE_SHAPES = {
+  missing_pressure: [
+    { key:'1', code:'MP1', label:'Shooter Pressure',      desc:'pressure on the shooter' },
+    { key:'2', code:'MP2', label:'Keeper Pressure',       desc:'pressure on the goalkeeper' },
+    { key:'3', code:'MP3', label:'Pre-Duel Pressure',     desc:'pressure before foul, tackle, dribble or block' },
+    { key:'4', code:'MP4', label:'Clear Pressure',        desc:'direct, unambiguous pressure on the ball carrier' },
+    { key:'5', code:'MP5', label:'Pre-Receive Pressure',  desc:'defender tight/behind receiver before he gets the ball' },
+  ],
+  extra_pressure: [
+    { key:'1', code:'OP1', label:'Static Defender',  desc:'defender holds position with no closing movement' },
+    { key:'2', code:'OP2', label:'Space Cover',       desc:'defender covers area or shuts passing lane' },
+  ],
+}
+
+// Validation map: which codes are valid for which error type
+const VALID_SHAPE_FOR_TYPE = {
+  missing_pressure: new Set(['MP1','MP2','MP3','MP4','MP5']),
+  extra_pressure:   new Set(['OP1','OP2']),
+}
+
+// Types that trigger the pressure_shape step
+const PRESSURE_ERROR_TYPES = new Set(['missing_pressure','extra_pressure'])
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
 const fmt = (s) => {
@@ -418,6 +449,7 @@ export default function TagPanel({ pendingTag, onSave, onCancel, editTag, onEdit
   const [gkSubType,     setGkSubType]     = useState(null)
   const [selectedExtra, setSelectedExtra] = useState(null)
   const [correction,    setCorrection]    = useState(null)
+  const [pressureShape, setPressureShape] = useState(null) // code e.g. 'MP1', 'OP2', or null
 
   const event    = pendingTag
     ? (TORNADO_EVENTS.find(e => e.key?.toUpperCase() === pendingTag.key?.toUpperCase())
@@ -426,6 +458,7 @@ export default function TagPanel({ pendingTag, onSave, onCancel, editTag, onEdit
   const isMissing = pendingTag?.isMissing
   const isGK      = event?.id === 'goal_keeper'
   const eventId   = event?.id || ''
+  const isPressureEvent = eventId === 'pressure'
 
   // reset on new tag
   useEffect(() => {
@@ -434,9 +467,19 @@ export default function TagPanel({ pendingTag, onSave, onCancel, editTag, onEdit
     setGkSubType(null)
     setSelectedExtra(null)
     setCorrection(null)
+    setPressureShape(null)
   }, [pendingTag?.key, pendingTag?.videoTime])
 
   function doSave(extras, team) {
+    // ── Data-layer enforcement: reject invalid type/shape combos ─────────────
+    // This runs regardless of UI state — an invalid pairing is always rejected.
+    if (pressureShape && errorTypeId) {
+      const validSet = VALID_SHAPE_FOR_TYPE[errorTypeId]
+      if (validSet && !validSet.has(pressureShape)) {
+        console.error(`[MARK] Rejected invalid pressure shape: ${pressureShape} for error type: ${errorTypeId}`)
+        return // silently reject — UI should never produce this but guard at data layer
+      }
+    }
     onSave({
       triggeredKey:        pendingTag.key,
       triggeredEventId:    eventId,
@@ -446,6 +489,9 @@ export default function TagPanel({ pendingTag, onSave, onCancel, editTag, onEdit
       videoTimeSec:        pendingTag.videoTime,
       timestamp:           Date.now(),
       isMissing:           !!isMissing,
+      // Pressure shape — null for non-pressure events or when reviewer skipped
+      // 'not_classified' is never stored; null means "not set" for legacy compatibility
+      pressureShape:       pressureShape || null,
     })
   }
 
@@ -467,9 +513,12 @@ export default function TagPanel({ pendingTag, onSave, onCancel, editTag, onEdit
       }
 
       if (step === 'error_type') {
-        const et = ERROR_TYPES.find(x => x.key === e.key)
+        const et = ERROR_TYPES.find(x => x.key?.toUpperCase() === k)
         if (!et) return
+        // Pressure-only types hidden for non-pressure events
+        if (et.pressureOnly && !isPressureEvent) return
         setErrorTypeId(et.id)
+        setPressureShape(null) // explicit reset when error type changes
         if      (et.id === 'wrong_event') {
           if (!isGK) setStep('wrong_event')
           else { const ent = gkEntry(gkSubType?.id); setStep(ent.correctEvents.length ? 'gk_wrong_event' : (ent.extras.length ? 'gk_extra' : 'team')) }
@@ -483,6 +532,17 @@ export default function TagPanel({ pendingTag, onSave, onCancel, editTag, onEdit
         else if (et.id === 'missing_extra')    setStep('missing_extra')
         else if (et.id === 'not_needed_extra') setStep('not_needed_extra')
         else if (et.id === 'wrong_extra')      setStep('wrong_extra_pick')
+        // Pressure-specific types → pressure_shape step
+        else if (PRESSURE_ERROR_TYPES.has(et.id)) setStep('pressure_shape')
+        return
+      }
+
+      // Pressure shape step: number keys select shape, Enter skips (saves null shape)
+      if (step === 'pressure_shape') {
+        if (e.key === 'Enter') { setStep('team'); return }
+        const shapes = PRESSURE_SHAPES[errorTypeId] || []
+        const shape  = shapes.find(s => s.key === e.key)
+        if (shape) { setPressureShape(shape.code); setStep('team') }
         return
       }
 
@@ -549,7 +609,7 @@ export default function TagPanel({ pendingTag, onSave, onCancel, editTag, onEdit
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [pendingTag, step, errorTypeId, gkSubType, selectedExtra, correction, isGK, eventId])
+  }, [pendingTag, step, errorTypeId, gkSubType, selectedExtra, correction, pressureShape, isGK, eventId, isPressureEvent])
 
   if (editTag) return <TagPanelEdit tag={editTag} onSave={onEditSave} onDelete={onEditDelete} onCancel={onEditCancel} />
   if (!pendingTag) return null
@@ -558,6 +618,10 @@ export default function TagPanel({ pendingTag, onSave, onCancel, editTag, onEdit
   const crumbs = [isMissing ? 'Missing Event' : (event?.label || '')]
   if (gkSubType)     crumbs.push(gkSubType.label)
   if (errorTypeId)   crumbs.push(ERROR_TYPES.find(x => x.id === errorTypeId)?.label || '')
+  if (pressureShape) {
+    const allShapes = [...(PRESSURE_SHAPES.missing_pressure || []), ...(PRESSURE_SHAPES.extra_pressure || [])]
+    crumbs.push(allShapes.find(s => s.code === pressureShape)?.label || pressureShape)
+  }
   if (selectedExtra) crumbs.push(selectedExtra)
 
   const wrongExtraMap      = getWrongExtrasMap(eventId) || {}
@@ -610,11 +674,16 @@ export default function TagPanel({ pendingTag, onSave, onCancel, editTag, onEdit
                 if (et.id === 'not_needed_extra' && missingList.length    === 0) return null
                 if (et.id === 'wrong_extra'      && wrongExtraKeysFull.length === 0) return null
                 if (et.id === 'wrong_event'      && wrongEventList.length === 0 && !isGK) return null
+                // Pressure-only types: only show for pressure event
+                if (et.pressureOnly && !isPressureEvent) return null
+                // For pressure event: hide generic extras steps (pressure has no extras)
+                if (isPressureEvent && (et.id === 'missing_extra' || et.id === 'not_needed_extra' || et.id === 'wrong_extra')) return null
                 return (
                   <PillBtn key={et.id} label={et.label} shortcut={et.key} active={false}
-                    color={et.autoSave ? '#30D158' : 'var(--p2)'} autoSave={et.autoSave}
+                    color={et.pressureOnly ? '#30D158' : et.autoSave ? '#30D158' : 'var(--p2)'} autoSave={et.autoSave}
                     onClick={() => {
                       setErrorTypeId(et.id)
+                      setPressureShape(null) // explicit reset when error type changes
                       if      (et.id === 'wrong_event') {
                         if (!isGK) setStep('wrong_event')
                         else setStep(gkEnt.correctEvents.length ? 'gk_wrong_event' : (gkEnt.extras.length ? 'gk_extra' : 'team'))
@@ -628,6 +697,7 @@ export default function TagPanel({ pendingTag, onSave, onCancel, editTag, onEdit
                       else if (et.id === 'missing_extra')    setStep('missing_extra')
                       else if (et.id === 'not_needed_extra') setStep('not_needed_extra')
                       else if (et.id === 'wrong_extra')      setStep('wrong_extra_pick')
+                      else if (PRESSURE_ERROR_TYPES.has(et.id)) setStep('pressure_shape')
                     }}
                   />
                 )
@@ -635,6 +705,50 @@ export default function TagPanel({ pendingTag, onSave, onCancel, editTag, onEdit
             </div>
           </>
         )}
+
+        {/* Pressure shape — sub-classification of missing/extra pressure errors */}
+        {step === 'pressure_shape' && (() => {
+          const shapes = PRESSURE_SHAPES[errorTypeId] || []
+          const shapeColor = errorTypeId === 'missing_pressure' ? '#BF5AF2' : '#FF9F0A'
+          return (
+            <>
+              <StepLabel text="pressure shape (optional — Enter to skip)" color={shapeColor} />
+              <div style={{ display:'flex', flexDirection:'column', gap:5 }}>
+                {shapes.map(s => (
+                  <div key={s.code}
+                    style={{
+                      display:'flex', alignItems:'center', gap:10, padding:'7px 10px',
+                      background: pressureShape === s.code ? `${shapeColor}22` : 'rgba(255,255,255,0.04)',
+                      border:`1px solid ${pressureShape === s.code ? shapeColor : 'rgba(255,255,255,0.08)'}`,
+                      borderRadius:7, cursor:'pointer', transition:'all 0.1s',
+                    }}
+                    onClick={() => { setPressureShape(s.code); setStep('team') }}
+                  >
+                    <span style={{ fontFamily:'JetBrains Mono,monospace', fontSize:11, fontWeight:700,
+                      background:shapeColor, color:'#000', borderRadius:4, padding:'1px 6px', minWidth:28, textAlign:'center' }}>
+                      {s.key}
+                    </span>
+                    <span style={{ fontFamily:'JetBrains Mono,monospace', fontSize:11, fontWeight:700,
+                      color:shapeColor, minWidth:36 }}>
+                      {s.code}
+                    </span>
+                    <div style={{ flex:1 }}>
+                      <div style={{ fontSize:12, fontWeight:600, color:'rgba(255,255,255,0.9)' }}>{s.label}</div>
+                      <div style={{ fontSize:10, color:'rgba(255,255,255,0.45)', marginTop:1 }}>{s.desc}</div>
+                    </div>
+                  </div>
+                ))}
+                <button
+                  onClick={() => setStep('team')}
+                  style={{ marginTop:4, padding:'6px 12px', background:'transparent',
+                    border:'1px solid rgba(255,255,255,0.12)', borderRadius:6, color:'rgba(255,255,255,0.4)',
+                    fontSize:11, cursor:'pointer', textAlign:'left' }}>
+                  ↩ Skip (save without shape)
+                </button>
+              </div>
+            </>
+          )
+        })()}
 
         {/* Wrong event */}
         {(step === 'wrong_event' || step === 'gk_wrong_event') && (
