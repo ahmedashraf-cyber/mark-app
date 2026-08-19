@@ -1,5 +1,5 @@
 (async function(){
-  const BRIDGE_VERSION = '7.8.29';
+  const BRIDGE_VERSION = '7.8.30';
   if(window.__MARK_BRIDGE_VERSION__ === BRIDGE_VERSION){console.log('[MARK] bridge already running (v' + BRIDGE_VERSION + ')');return;}
   if(window.__MARK_BRIDGE_STOP__) window.__MARK_BRIDGE_STOP__();
   window.__MARK_BRIDGE__ = true;
@@ -1638,10 +1638,21 @@
           const PRESSURE_N    = new Set(['pressure-start','pressure-end']);
           const FF_TYPES_SPD  = new Set(['freeze-frame','goal-location','impact']);
 
+          // CRITICAL: define inMatchSPD locally — cannot reference the error-engine's
+          // inMatch (it is block-scoped to a sibling try block and not in scope here).
+          // numMatchId and partId ARE in the outer handler scope.
+          const inMatchSPD = v => v.__typename === 'Event'
+            && (v.matchId === numMatchId || v.matchId === String(numMatchId))
+            && (!partId || v.partId === partId);
+
+          console.log('[MARK speed] session created for match', numMatchId, 'half', partId,
+            '| cache size', Object.values(cache).length,
+            '| match events', Object.values(cache).filter(inMatchSPD).length);
+
           // Refinement/completion maps — filtered to current match/half only
           const refinementMapSPD = {};
           Object.values(cache).forEach(v => {
-            if (v.__typename === 'Event' && v.category === 'refinement' && inMatch(v)) {
+            if (v.__typename === 'Event' && v.category === 'refinement' && inMatchSPD(v)) {
               if (!refinementMapSPD[v.key]) refinementMapSPD[v.key] = new Set();
               refinementMapSPD[v.key].add(v.type);
             }
@@ -1673,14 +1684,16 @@
           speedData = {};
 
           collectorIds.forEach(function(cId) {
-            // CRITICAL: filter by inMatch — only events from current match+half
+            // CRITICAL: filter by inMatchSPD — only events from current match+half
             // Without this, when match B is loaded while match A is still in cache,
             // speed computation picks up match A's events and half-start/end anchors.
             const allByColl = Object.values(cache).filter(v =>
               v.__typename === 'Event' && v.author === cId && v.capturedTime &&
-              inMatch(v) &&
+              inMatchSPD(v) &&
               (v.category === 'base' || v.category === 'refinement' || v.category === 'amendment')
             );
+            console.log('[MARK speed] collector', cId, '| match', numMatchId, 'half', partId,
+              '| allByColl', allByColl.length);
 
             const mk = (activeMs, events, compModule) => {
               const totalEvents = events.length;
@@ -1699,8 +1712,8 @@
             };
             const beEvents = allByColl.filter(isBaseExtrasEv).sort((a,b)=>(a.capturedTime||'').localeCompare(b.capturedTime||''));
             let beWindowStart = null, beWindowEnd = null, beWindowMethod = 'first → last base', beMultiDay = false;
-            const hsEv = Object.values(cache).find(v => v.__typename==='Event' && inMatch(v) && v.category==='base' && v.author===cId && v.payload && v.payload.name==='half-start');
-            const heEv = Object.values(cache).find(v => v.__typename==='Event' && inMatch(v) && v.category==='base' && v.author===cId && v.payload && v.payload.name==='half-end');
+            const hsEv = Object.values(cache).find(v => v.__typename==='Event' && inMatchSPD(v) && v.category==='base' && v.author===cId && v.payload && v.payload.name==='half-start');
+            const heEv = Object.values(cache).find(v => v.__typename==='Event' && inMatchSPD(v) && v.category==='base' && v.author===cId && v.payload && v.payload.name==='half-end');
             if (hsEv && heEv) {
               beWindowStart = new Date(hsEv.capturedTime).getTime();
               beWindowEnd   = new Date(heEv.capturedTime).getTime();
@@ -1794,7 +1807,8 @@
           });
           console.log('[MARK] speedData computed for', Object.keys(speedData).length, 'collectors');
         } catch (spdErr) {
-          console.warn('[MARK] speedData failed:', spdErr && spdErr.message);
+          // Log full error so scope/reference errors are never silently swallowed
+          console.error('[MARK] speedData failed:', spdErr);
           speedData = null;
         }
 
