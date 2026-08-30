@@ -470,6 +470,7 @@ export const FIELD_EVENTS = [
       grp('body_part', 'Body part', 'single', true, [
         opt(O.BODY_RIGHT_FOOT,    '2'),
         opt(O.BODY_LEFT_FOOT,     '3'),
+        opt(O.BODY_HEAD,          '4'),  // not in spec block but code 4 is globally consistent for Head
         opt(O.BODY_NO_TOUCH,      '7'),
       ]),
       EXTRAS_PASS,
@@ -552,10 +553,6 @@ export const FIELD_EVENTS = [
   { id: 'formation',      label: 'Formation',       hotkey: null, mouseOnly: true, panel: 'Offense', groups: [] },
   { id: 'camera_off',     label: 'Camera off',      hotkey: null, mouseOnly: true, panel: 'Offense', groups: [] },
   { id: 'camera_on',      label: 'Camera on',       hotkey: null, mouseOnly: true, panel: 'Offense', groups: [] },
-  {
-    id: 'unknown_pass_end', label: 'Unknown pass end', hotkey: null, mouseOnly: true, panel: 'Offense',
-    groups: [ MISCOMMUNICATION ],
-  },
   { id: 'half_end',  label: 'Half end',  hotkey: null, mouseOnly: true, panel: 'Offense', groups: [], forceClosesAll: true },
   { id: 'fifty_fifty', label: 'Fifty fifty', hotkey: null, mouseOnly: true, panel: 'Offense',
     groups: [
@@ -637,7 +634,8 @@ export const FIELD_EVENTS = [
       grp('action', 'Action', 'single', false, [
         opt(O.OUTCOME_DRIBBLE_ATT, '1'),
       ]),
-      SIDE_DUEL,
+      // Side only appears if Action = Dribble attempted was selected (not skipped)
+      { ...SIDE_DUEL, conditionalOn: { groupId: 'action', minSelections: 1 } },
     ],
   },
 
@@ -772,23 +770,38 @@ export const FIELD_EVENTS = [
             MISCOMMUNICATION,
           ],
         },
+        {
+          // Smother: GK closes down and smothers ball at attacker's feet (duel, not save)
+          // Spec: "Goal keeper (Smoother)" — Extras + Direction + Kind (Dribble attempted)
+          // No Body part, no GK body state, no Technique — genuinely different from all other GK blocks
+          when: ['GK_TYPE_SMOTHER'],
+          label: 'Smother',
+          groups: [
+            grp('extras', 'Extras', 'multi', false, [
+              opt(O.EXTRA_NO_TOUCH, '1'),
+              opt(O.EXTRA_NUTMEG,   '2'),
+            ]),
+            grp('action', 'Action', 'single', false, [
+              opt(O.OUTCOME_DRIBBLE_ATT, '1'),
+            ]),
+            // Direction: conditionalOn action (same pattern as Tackle's Side)
+            { ...SIDE_DUEL, label: 'Direction', conditionalOn: { groupId: 'action', minSelections: 1 } },
+          ],
+        },
       ],
     },
     // Type discriminator group (shown first)
     typeGroup: grp('type', 'GK type', 'single', true, [
-      opt({ code:'GK_TYPE_COLLECTED',      label:'Collected'          }, '1'),
-      opt({ code:'GK_TYPE_PUNCH',          label:'Punch'              }, '2'),
-      opt({ code:'GK_TYPE_KEEPER_SWEEPER', label:'Keeper sweeper'     }, '3'),
-      opt({ code:'GK_TYPE_SAVE_WON',       label:'Save (Won)'         }, '4'),
-      opt({ code:'GK_TYPE_SAVE_SUCCESS',   label:'Save (Success / SE)'}, '5'),
+      opt({ code:'GK_TYPE_COLLECTED',      label:'Collected'           }, '1'),
+      opt({ code:'GK_TYPE_PUNCH',          label:'Punch'               }, '2'),
+      opt({ code:'GK_TYPE_KEEPER_SWEEPER', label:'Keeper sweeper'      }, '3'),
+      opt({ code:'GK_TYPE_SAVE_WON',       label:'Save (Won)'          }, '4'),
+      opt({ code:'GK_TYPE_SAVE_SUCCESS',   label:'Save (Success / SE)' }, '5'),
+      opt({ code:'GK_TYPE_SMOTHER',        label:'Smother'             }, '6'),
     ]),
   },
 
-  {
-    id: 'goal_keeper_smoother', label: 'GK Smoother', hotkey: 'K', mouseOnly: false, panel: 'Defense',
-    note: 'GK duel — engages attacker with feet (like Tackle). Key K cycles: idle→goal_keeper→smoother',
-    groups: [ EXTRAS_SMOOTHER, ACTION_SMOOTHER, SIDE_DUEL ],
-  },
+  // goal_keeper_smoother removed — folded into goal_keeper as GK_TYPE_SMOTHER (Type 6)
 
   {
     id: 'pressure_start', label: 'Pressure start', hotkey: 'G', mouseOnly: false, panel: 'Defense',
@@ -819,6 +832,14 @@ export const FIELD_EVENTS = [
       ]),
     ],
   },
+
+  // ── Defense panel — click-only utility events ─────────────────────────────
+  {
+    // Unknown pass end: data-quality marker. Team not meaningful (unknown who ended it).
+    // Possession marked uncertain — no flip, no team stored.
+    id: 'unknown_pass_end', label: 'Unknown pass end', hotkey: null, mouseOnly: true, panel: 'Defense',
+    groups: [ MISCOMMUNICATION ],
+  },
 ]
 
 // ─── Lookup maps ──────────────────────────────────────────────────────────────
@@ -833,6 +854,28 @@ export const EVENT_BY_KEY = (() => {
   })
   return m
 })()
+
+// ─── Startup key validation ───────────────────────────────────────────────────
+// Runs once at module load. Logs any unintended key collisions.
+// Intentional duplicates (open/close pairs and GK cycle) are whitelisted.
+const INTENTIONAL_DUPLICATES = new Set(['G','S','K'])  // G=pressure toggle, S=shot/end_shot, K=GK cycle
+;(() => {
+  const seen = {}
+  FIELD_EVENTS.forEach(e => {
+    if (!e.hotkey || e.closesEventId) return  // skip close events — they share by design
+    if (!seen[e.hotkey]) seen[e.hotkey] = []
+    seen[e.hotkey].push(e.id)
+  })
+  Object.entries(seen).forEach(([key, ids]) => {
+    if (ids.length > 1 && !INTENTIONAL_DUPLICATES.has(key)) {
+      console.error(`[MARK fieldExtras] UNINTENDED key collision on '${key}': ${ids.join(', ')}`)
+    }
+  })
+  // Confirm digit 0 is never a hotkey (reserved for possession flip in FieldPage)
+  if (seen['0']) {
+    console.error(`[MARK fieldExtras] Key '0' (digit) is reserved for possession flip but is also bound to: ${seen['0'].join(', ')}`)
+  }
+})();
 
 // ─── Open-state registry ──────────────────────────────────────────────────────
 export const OPEN_STATE_PAIRS = [
@@ -989,32 +1032,33 @@ export const POSSESSION_RULES = {
   separation_duel:     { performedBy:'possessing',       flip:'never'      },
   leg_stretch_duel:    { performedBy:'possessing',       flip:'never'      },
   goal_keeper:         { performedBy:'possessing',       flip:'on_outcome',
-                         // flip depends on GK type: Collected/Claim/SaveWon/SaveSuccess = no flip
-                         // Punch = uncertain; KeeperSweeper Clear = uncertain, Claim = no flip
                          flipByGkType: {
                            GK_TYPE_COLLECTED:    'never',
                            GK_TYPE_PUNCH:        'uncertain',
                            GK_TYPE_KEEPER_SWEEPER: 'by_technique',  // Clear=uncertain, Claim=never
                            GK_TYPE_SAVE_WON:     'never',
                            GK_TYPE_SAVE_SUCCESS: 'never',
+                           GK_TYPE_SMOTHER:      'uncertain',  // no Outcome group — destination unknown
                          },
                        },
-  goal_keeper_smoother:{ performedBy:'possessing',       flip:'uncertain'  },  // GK duel, destination unclear
+  // goal_keeper_smoother removed — was separate event, now GK_TYPE_SMOTHER variant
   pressure_start:      { performedBy:'non-possessing',   flip:'never'      },
   pressure_end:        { performedBy:'non-possessing',   flip:'never'      },
   card:                { performedBy:'explicit',         flip:'never'      },
   substitution:        { performedBy:'explicit',         flip:'never'      },
   tactical_shift:      { performedBy:'explicit',         flip:'never'      },
   formation:           { performedBy:'explicit',         flip:'never'      },
-  fifty_fifty:         { performedBy:'explicit',         flip:'explicit'   },  // prompt: which team won?
-  own_goal_against:    { performedBy:'non-possessing',   flip:'never'      },  // possessing team retains
+  fifty_fifty:         { performedBy:'explicit',         flip:'explicit'   },
+  own_goal_against:    { performedBy:'non-possessing',   flip:'never'      },
   error:               { performedBy:'possessing',       flip:'uncertain'  },
-  stoppage:            { performedBy:null,               flip:'never'      },  // team not meaningful
+  stoppage:            { performedBy:null,               flip:'never'      },
   end_stoppage:        { performedBy:null,               flip:'never'      },
   camera_off:          { performedBy:null,               flip:'never'      },
   camera_on:           { performedBy:null,               flip:'never'      },
   half_end:            { performedBy:null,               flip:'resets'     },
-  unknown_pass_end:    { performedBy:'possessing',       flip:'never'      },
+  // unknown_pass_end: team not meaningful (we don't know who ended the pass),
+  // possession marked uncertain — don't flip, don't assign a team
+  unknown_pass_end:    { performedBy:null,               flip:'uncertain'  },
 }
 
 // ─── Possession engine ────────────────────────────────────────────────────────

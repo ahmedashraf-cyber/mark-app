@@ -354,10 +354,27 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
       return
     }
 
-    // Normal chain advance
+    // Normal chain advance — with conditionalOn support
+    // A group with conditionalOn is skipped if the referenced group didn't meet its condition
     const nextIdx = groupIndex + 1
-    if (nextIdx < groupChain.length) {
-      setGroupIndex(nextIdx)
+
+    // Find the next group that is not conditionally skipped
+    let skipTo = nextIdx
+    while (skipTo < groupChain.length) {
+      const nextGroup = groupChain[skipTo]
+      if (!nextGroup.conditionalOn) break  // no condition — always show
+      // Check if the condition is met in already-collected groups
+      const refGroup = saved.find(g => g.groupId === nextGroup.conditionalOn.groupId)
+      const selCount = refGroup?.selections?.length || 0
+      if (selCount >= (nextGroup.conditionalOn.minSelections || 1)) break  // condition met
+      // Condition not met — skip this group (record it as empty)
+      saved.push({ groupId: nextGroup.id, groupLabel: nextGroup.label, selections: [] })
+      skipTo++
+    }
+    setCollectedGroups(saved)
+
+    if (skipTo < groupChain.length) {
+      setGroupIndex(skipTo)
       setCurrentSelections([])
     } else {
       // All groups collected — route based on possession rule
