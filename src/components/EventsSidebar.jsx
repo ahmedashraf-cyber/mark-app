@@ -30,7 +30,7 @@ const LEFT_EVENTS = [
   { key: 'D',    label: 'Dribble',         id: 'dribble' },
   { key: 'W',    label: 'Reception',       id: 'reception' },
   { key: 'T',    label: 'Miscontrol',      id: 'miscontrol' },
-  { key: '0',    label: 'Fifty Fifty',     id: 'fifty_fifty' },
+  { key: null,  label: 'Fifty Fifty',     id: 'fifty_fifty' },
   { key: 'O',    label: 'Out',             id: 'out' },
   { key: 'X',    label: 'Foul Committed',  id: 'foul_committed' },
   { key: 'C',    label: 'Shield',          id: 'shield' },
