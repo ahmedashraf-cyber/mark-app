@@ -876,7 +876,8 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
         </div>
 
         {/* Right sidebar: shared Defense events + FIELD-only click-only extras */}
-        <div style={{display:'flex',flexDirection:'column',width:168,flexShrink:0}}>
+        <div style={{display:'flex',flexDirection:'column',width:168,flexShrink:0,
+          overflow:'hidden',minHeight:0}}>
           <EventsSidebar side="right" activeKey={activeKey} onMouseEvent={onMouseEvent}/>
           {/* FIELD-only Defense click-only events not in EventsSidebar (Scout/Audit untouched) */}
           <div style={{background:'linear-gradient(180deg,var(--bg-2) 0%,rgba(10,10,18,0.95) 100%)',
