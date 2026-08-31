@@ -875,39 +875,32 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
           )}
         </div>
 
-        {/* Right sidebar: shared Defense events + FIELD-only click-only extras */}
-        <div style={{display:'flex',flexDirection:'column',width:168,flexShrink:0,
-          overflow:'hidden',minHeight:0}}>
-          <EventsSidebar side="right" activeKey={activeKey} onMouseEvent={onMouseEvent}/>
-          {/* FIELD-only Defense click-only events not in EventsSidebar (Scout/Audit untouched) */}
-          <div style={{background:'linear-gradient(180deg,var(--bg-2) 0%,rgba(10,10,18,0.95) 100%)',
-            borderLeft:'1px solid var(--b-1)',borderTop:'1px solid var(--b-1)',padding:'4px 0'}}>
-            {[
-              { id:'unknown_pass_end', label:'Unknown pass end' },
-            ].map(ev => {
-              const def = EVENT_BY_ID[ev.id]
-              if (!def) return null
-              return (
-                <div key={ev.id}
-                  onClick={() => {
-                    if (!videoLoaded||captureStep!=='idle') return
-                    startCapture(def, videoRef.current?.currentTime||0)
-                  }}
-                  style={{
-                    display:'flex',alignItems:'center',justifyContent:'space-between',
-                    padding:'7px 12px',cursor:'pointer',
-                    transition:'background .1s',
-                  }}
-                  onMouseEnter={e=>e.currentTarget.style.background='rgba(255,255,255,0.04)'}
-                  onMouseLeave={e=>e.currentTarget.style.background='transparent'}
-                >
-                  <span style={{fontSize:12,color:'var(--t-2)',fontFamily:'DM Sans,sans-serif'}}>{ev.label}</span>
-                  <span style={{fontSize:9,color:'var(--t-3)',fontStyle:'italic',opacity:0.6}}>click</span>
-                </div>
-              )
-            })}
-          </div>
-        </div>
+        {/* Right sidebar — unknown_pass_end injected via extraItems into the scroll container */}
+        <EventsSidebar side="right" activeKey={activeKey} onMouseEvent={onMouseEvent}
+          extraItems={
+            <div key="unknown_pass_end"
+              onClick={() => {
+                if (!videoLoaded || captureStep !== 'idle') return
+                const def = EVENT_BY_ID['unknown_pass_end']
+                if (def) startCapture(def, videoRef.current?.currentTime || 0)
+              }}
+              style={{
+                display:'flex', alignItems:'center', justifyContent:'space-between',
+                padding:'7px 12px', cursor:'pointer',
+                borderTop:'1px solid var(--b-1)',
+              }}
+              onMouseEnter={e => e.currentTarget.style.background = 'rgba(255,255,255,0.04)'}
+              onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
+            >
+              <span style={{fontSize:12, color:'var(--t-2)', fontFamily:'DM Sans,sans-serif'}}>
+                Unknown pass end
+              </span>
+              <span style={{fontSize:9, color:'var(--t-3)', fontStyle:'italic', opacity:0.6}}>
+                click
+              </span>
+            </div>
+          }
+        />
 
         {/* ── Capture panel ── */}
         {captureStep!=='idle'&&pendingEvent&&(

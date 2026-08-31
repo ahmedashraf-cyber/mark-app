@@ -105,7 +105,7 @@ function EventCard({ ev, active, onClick }) {
   )
 }
 
-function EventsSidebar({ side, activeKey, onMouseEvent }) {
+function EventsSidebar({ side, activeKey, onMouseEvent, extraItems }) {
   const events = side === 'left' ? LEFT_EVENTS : RIGHT_EVENTS
   const activeUpper = activeKey ? activeKey.toUpperCase() : null
 
@@ -134,7 +134,7 @@ function EventsSidebar({ side, activeKey, onMouseEvent }) {
         {side === 'left' ? 'Offense' : 'Defense'}
       </div>
 
-      {/* Events */}
+      {/* Events — extraItems rendered inside the same scroll container */}
       <div style={{ flex: 1, overflowY: 'auto', padding: '4px 0' }}>
         {events.map(ev => (
           <EventCard
@@ -144,6 +144,7 @@ function EventsSidebar({ side, activeKey, onMouseEvent }) {
             onClick={ev.key === null ? () => onMouseEvent?.(ev) : undefined}
           />
         ))}
+        {extraItems}
       </div>
     </div>
   )
