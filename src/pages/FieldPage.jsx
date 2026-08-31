@@ -23,7 +23,8 @@ import { useAuth } from '../hooks/useAuth.jsx'
 import ErrorTimeline from '../components/ErrorTimeline'
 import EventsSidebar from '../components/EventsSidebar'
 import TaggedEventsList from '../components/TaggedEventsList'
-import { downloadFieldCsv } from '../utils/exportFieldSession'
+import { downloadFieldCsv, syncSessionToSheet } from '../utils/fieldSheetSync'
+import { FIELD_LS_KEY, FIELD_SHEET_ID, validateMatchId } from '../config/fieldConfig'
 import {
   FIELD_EVENTS, EVENT_BY_ID, EVENT_BY_KEY,
   OPEN_STATE_PAIRS, TRANSPARENT_EVENT_IDS,
@@ -37,11 +38,14 @@ function hashPath(p) {
   try { return btoa(encodeURIComponent(p)).replace(/[/+=]/g,'').slice(0,14) }
   catch { return String(Date.now()).slice(-10) }
 }
-const LS_KEY = 'mark_field_sessions'
-function loadLocalSessions() { try { return JSON.parse(localStorage.getItem(LS_KEY)||'[]') } catch { return [] } }
+function loadLocalSessions() { try { return JSON.parse(localStorage.getItem(FIELD_LS_KEY)||'[]') } catch { return [] } }
 function saveLocalSession(s) {
   const all = loadLocalSessions().filter(x => x.sessionId !== s.sessionId)
-  localStorage.setItem(LS_KEY, JSON.stringify([s,...all].slice(0,50)))
+  localStorage.setItem(FIELD_LS_KEY, JSON.stringify([s,...all].slice(0,50)))
+}
+function clearLocalSession(sessionId) {
+  const all = loadLocalSessions().filter(s => s.sessionId !== sessionId)
+  localStorage.setItem(FIELD_LS_KEY, JSON.stringify(all))
 }
 function findSessionByPath(p) { return loadLocalSessions().find(s => s.videoPath===p && s.status!=='completed')||null }
 function basename(p) { return p ? (p.split(/[\\/]/).pop()||p) : 'Untitled' }
@@ -127,9 +131,22 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
   const [flashEvent,  setFlashEvent]  = useState(null)
   const [flashError,  setFlashError]  = useState(null)  // blocked keypress message
 
-  // ── Done modal ─────────────────────────────────────────────────────────────
+  // ── Done / Save modal ─────────────────────────────────────────────────────
   const [showDoneModal, setShowDoneModal] = useState(false)
   const [submitting,    setSubmitting]   = useState(false)
+
+  // Save metadata fields (entered by collector before upload)
+  const [saveMatchId,    setSaveMatchId]    = useState('')
+  const [saveHalf,       setSaveHalf]       = useState('')
+  const [saveHrCode,     setSaveHrCode]     = useState('')
+  const [saveMatchError, setSaveMatchError] = useState('')
+
+  // Upload result state
+  const [saveResult, setSaveResult] = useState(null)
+  // { status:'success'|'failed', message, rowsWritten?, duplicateHalfWarning? }
+
+  // Pending-upload session (loaded on mount if exists)
+  const [pendingUpload, setPendingUpload] = useState(null)
 
   // ── Load events on session load ────────────────────────────────────────────
   useEffect(() => {
@@ -139,17 +156,16 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
       .catch(e => console.warn('[MARK Field] load events:',e))
   }, [session?.sessionId])
 
-  // ── Restore session from localStorage ─────────────────────────────────────
+  // ── On mount: start fresh. Check for pending uploads from previous sessions ──
+  // FIELD opens empty and ready to collect.
+  // If a previous session has status='pending_sheet_upload', show retry prompt.
   useEffect(() => {
-    if (session) return
-    const saved = loadLocalSessions().find(s => s.status !== 'completed')
-    if (!saved) return
-    setSession(saved)
-    if (saved.videoPath) {
-      invoke('get_video_url',{path:saved.videoPath})
-        .then(url => { setVideoPath(saved.videoPath); const v=videoRef.current; if(v){v.src=url;v.load();setVideoLoaded(true)} })
-        .catch(() => { setVideoPath(saved.videoPath); setVideoError(`Video not found — pick a new location.\n${saved.videoPath}`) })
+    if (session) return  // already have a session from initialSession prop
+    const pending = loadLocalSessions().find(s => s.status === 'pending_sheet_upload')
+    if (pending) {
+      setPendingUpload(pending)
     }
+    // Do NOT auto-restore in-progress sessions — FIELD opens fresh.
   }, [])
 
   // ── Session creation ───────────────────────────────────────────────────────
@@ -632,33 +648,130 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
   }
   const onMouseEvent=useCallback((ev)=>mouseRef.current(ev),[])
 
-  // ── Done ───────────────────────────────────────────────────────────────────
-  async function handleDone() {
-    if (!session) { onDone&&onDone({}); return }
+  // ── Save to Sheet ──────────────────────────────────────────────────────────
+  async function handleSaveToSheet() {
+    // Validate Match ID
+    const matchErr = validateMatchId(saveMatchId)
+    if (matchErr) { setSaveMatchError(matchErr); return }
+    if (!saveHalf) { setSaveMatchError('Please select a half'); return }
+    if (!saveHrCode.trim()) { setSaveMatchError('Collector HR-Code is required'); return }
+    setSaveMatchError('')
     setSubmitting(true)
-    const endWall=Date.now(), startWall=collStartRef.current
-    const prevAcc=session.accumulatedMs||0
-    const thisMs=(startWall&&endWall>startWall)?(endWall-startWall):0
-    const totalMs=prevAcc+thisMs
-    const evPerMin=totalMs>0?(events.length/(totalMs/60000)).toFixed(2):null
-    const hasHalfEnd=events.some(e=>e.eventId==='half_end')
-    const completed={...session,status:'completed',totalEvents:events.length,
-      accumulatedMs:totalMs,collectionEndWallMs:endWall,
-      collectionStartWallMs:session.collectionStartWallMs||startWall,
-      eventsPerMinute:evPerMin,videoDurationSec:duration||null,
-      collectionIncomplete:!hasHalfEnd}
+    setSaveResult(null)
+
+    const endWall   = Date.now()
+    const startWall = collStartRef.current
+    const prevAcc   = session.accumulatedMs || 0
+    const thisMs    = (startWall && endWall > startWall) ? (endWall - startWall) : 0
+    const totalMs   = prevAcc + thisMs
+    const evPerMin  = totalMs > 0 ? (events.length / (totalMs / 60000)).toFixed(2) : null
+    const hasHalfEnd= events.some(e => e.eventId === 'half_end')
+
+    // Build completed session object with metadata
+    const completed = {
+      ...session,
+      status:                'pending_sheet_upload',  // only clear after confirmed write
+      matchId:               saveMatchId,
+      half:                  saveHalf,
+      collectorHrCode:       saveHrCode.trim(),
+      totalEvents:           events.length,
+      accumulatedMs:         totalMs,
+      collectionEndWallMs:   endWall,
+      collectionStartWallMs: session.collectionStartWallMs || startWall,
+      eventsPerMinute:       evPerMin,
+      videoDurationSec:      duration || null,
+      collectionIncomplete:  !hasHalfEnd,
+    }
+
+    // Update Firestore metadata
     try {
-      await updateDoc(doc(db,'mark_field_sessions',session.sessionId),{
-        status:'completed',totalEvents:events.length,accumulatedMs:totalMs,
-        collectionEndWallMs:endWall,eventsPerMinute:evPerMin,
-        videoDurationSec:duration||null,collectionIncomplete:!hasHalfEnd,
-        completedAt:serverTimestamp(),
+      await updateDoc(doc(db, 'mark_field_sessions', session.sessionId), {
+        status: 'pending_sheet_upload',
+        matchId: saveMatchId, half: saveHalf, collectorHrCode: saveHrCode.trim(),
+        totalEvents: events.length, accumulatedMs: totalMs,
+        collectionEndWallMs: endWall, eventsPerMinute: evPerMin,
+        videoDurationSec: duration || null, collectionIncomplete: !hasHalfEnd,
       })
-    } catch(e) { console.warn('[MARK Field] complete:',e) }
+    } catch(e) { console.warn('[MARK Field] Firestore update:', e) }
+
+    // Save locally as pending — so crash before Sheet write still preserves data
     saveLocalSession(completed)
-    try { downloadFieldCsv(completed,events) } catch(e) { console.warn('[MARK Field] CSV:',e) }
+    setSession(completed)
+
+    // Attempt Sheet write
+    try {
+      const result = await syncSessionToSheet(completed, events)
+
+      // ── CONFIRMED SUCCESS — now safe to clear ─────────────────────────────
+      const cleared = { ...completed, status: 'completed' }
+      saveLocalSession(cleared)
+
+      setSaveResult({
+        status: 'success',
+        rowsWritten: result.rowsWritten,
+        duplicateHalfWarning: result.duplicateHalfWarning,
+      })
+      setSubmitting(false)
+      // Don't auto-close — let collector see confirmation, then onDone resets UI
+    } catch(e) {
+      // ── FAILED — keep data, show options ────────────────────────────────
+      console.error('[MARK Field] Sheet sync failed:', e)
+      setSaveResult({
+        status: 'failed',
+        message: e.message || String(e),
+      })
+      setSubmitting(false)
+    }
+  }
+
+  async function handleRetryUpload(pendingSess, pendingEventsArg) {
+    setSubmitting(true)
+    setSaveResult(null)
+    try {
+      const result = await syncSessionToSheet(pendingSess, pendingEventsArg)
+      const cleared = { ...pendingSess, status: 'completed' }
+      saveLocalSession(cleared)
+      setSaveResult({ status: 'success', rowsWritten: result.rowsWritten })
+      setPendingUpload(null)
+    } catch(e) {
+      setSaveResult({ status: 'failed', message: e.message || String(e) })
+    }
     setSubmitting(false)
-    onDone&&onDone({events:events.length,eventsPerMinute:evPerMin})
+  }
+
+  function handleExportCsvOnly() {
+    const sess = session || pendingUpload
+    if (!sess) return
+    try { downloadFieldCsv(sess, events) }
+    catch(e) { console.error('[MARK Field] CSV export:', e) }
+  }
+
+  function handleDiscard() {
+    const sess = session || pendingUpload
+    if (sess) {
+      saveLocalSession({ ...sess, status: 'discarded' })
+    }
+    setPendingUpload(null)
+    setShowDoneModal(false)
+    setSaveResult(null)
+    onDone && onDone({})
+  }
+
+  function handleStartFresh() {
+    // Called after confirmed successful save
+    setShowDoneModal(false)
+    setSaveResult(null)
+    setSaveMatchId(''); setSaveHalf(''); setSaveHrCode(''); setSaveMatchError('')
+    setSession(null)
+    setEvents([])
+    setVideoPath(null)
+    setVideoLoaded(false)
+    setVideoError(null)
+    setCurrentTime(0); setDuration(0)
+    setPossession({ team: null, certain: false })
+    setOpenStates({})
+    collStartRef.current = null
+    if (videoRef.current) { videoRef.current.src = ''; videoRef.current.load() }
   }
 
   // ── Current group for display ──────────────────────────────────────────────
@@ -762,7 +875,38 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
           )}
         </div>
 
-        <EventsSidebar side="right" activeKey={activeKey} onMouseEvent={onMouseEvent}/>
+        {/* Right sidebar: shared Defense events + FIELD-only click-only extras */}
+        <div style={{display:'flex',flexDirection:'column',width:168,flexShrink:0}}>
+          <EventsSidebar side="right" activeKey={activeKey} onMouseEvent={onMouseEvent}/>
+          {/* FIELD-only Defense click-only events not in EventsSidebar (Scout/Audit untouched) */}
+          <div style={{background:'linear-gradient(180deg,var(--bg-2) 0%,rgba(10,10,18,0.95) 100%)',
+            borderLeft:'1px solid var(--b-1)',borderTop:'1px solid var(--b-1)',padding:'4px 0'}}>
+            {[
+              { id:'unknown_pass_end', label:'Unknown pass end' },
+            ].map(ev => {
+              const def = EVENT_BY_ID[ev.id]
+              if (!def) return null
+              return (
+                <div key={ev.id}
+                  onClick={() => {
+                    if (!videoLoaded||captureStep!=='idle') return
+                    startCapture(def, videoRef.current?.currentTime||0)
+                  }}
+                  style={{
+                    display:'flex',alignItems:'center',justifyContent:'space-between',
+                    padding:'7px 12px',cursor:'pointer',
+                    transition:'background .1s',
+                  }}
+                  onMouseEnter={e=>e.currentTarget.style.background='rgba(255,255,255,0.04)'}
+                  onMouseLeave={e=>e.currentTarget.style.background='transparent'}
+                >
+                  <span style={{fontSize:12,color:'var(--t-2)',fontFamily:'DM Sans,sans-serif'}}>{ev.label}</span>
+                  <span style={{fontSize:9,color:'var(--t-3)',fontStyle:'italic',opacity:0.6}}>click</span>
+                </div>
+              )
+            })}
+          </div>
+        </div>
 
         {/* ── Capture panel ── */}
         {captureStep!=='idle'&&pendingEvent&&(
@@ -910,51 +1054,236 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
       <TaggedEventsList tags={events} videoDuration={duration} currentTime={currentTime}
         matchName="Home vs Away" onEdit={null} onDelete={deleteEvent}/>
 
-      {/* ── Done modal ── */}
-      {showDoneModal&&(
-        <div style={{position:'fixed',inset:0,zIndex:1000,background:'rgba(0,0,0,0.8)',backdropFilter:'blur(4px)',display:'flex',alignItems:'center',justifyContent:'center'}}>
-          <div className="card slide-up" style={{width:420,padding:28}}>
-            <div style={{fontFamily:'Inter',fontWeight:800,fontSize:18,color:'var(--t-1)',marginBottom:4}}>Finish Collection</div>
-            <div style={{fontSize:13,color:'var(--t-3)',marginBottom:20}}>{videoName}</div>
-            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10,marginBottom:16}}>
-              <div style={{background:'var(--bg-3)',borderRadius:8,padding:'12px',textAlign:'center'}}>
-                <div style={{fontSize:24,fontWeight:900,color:'#30D158'}}>{events.length}</div>
-                <div style={{fontSize:10,color:'var(--t-3)',marginTop:2}}>Events Collected</div>
-              </div>
-              <div style={{background:'var(--bg-3)',borderRadius:8,padding:'12px',textAlign:'center'}}>
-                {(()=>{
-                  const accMs=session?.accumulatedMs||0
-                  const startMs=collStartRef.current
-                  const totalMs=accMs+(startMs?(Date.now()-startMs):0)
-                  const mins=totalMs>0?totalMs/60000:0
-                  const rate=mins>0?(events.length/mins).toFixed(1):'—'
-                  return <><div style={{fontSize:24,fontWeight:900,color:'var(--t-1)'}}>{rate}</div>
-                    <div style={{fontSize:10,color:'var(--t-3)',marginTop:2}}>Events/min</div></>
-                })()}
-              </div>
+      {/* ── Pending upload notification (shown on launch if previous save failed) ── */}
+      {pendingUpload && !showDoneModal && (
+        <div style={{position:'fixed',bottom:20,left:'50%',transform:'translateX(-50%)',
+          zIndex:500,background:'var(--bg-2)',border:'1px solid rgba(255,149,0,0.5)',
+          borderRadius:10,padding:'14px 20px',maxWidth:440,boxShadow:'0 4px 20px rgba(0,0,0,0.5)'}}>
+          <div style={{fontSize:13,fontWeight:700,color:'#FF9500',marginBottom:6}}>
+            ⚠️ Unsaved session from previous launch
+          </div>
+          <div style={{fontSize:11,color:'var(--t-3)',marginBottom:12}}>
+            {pendingUpload.videoName} · {pendingUpload.totalEvents||0} events · Match {pendingUpload.matchId||'?'} H{pendingUpload.half||'?'}
+          </div>
+          <div style={{display:'flex',gap:8}}>
+            <button className="btn-orange" style={{flex:2,padding:'7px 0',fontSize:12}}
+              onClick={async()=>{
+                setSubmitting(true)
+                const evSnap = await getDocs(query(collection(db,'mark_collected_events'),where('sessionId','==',pendingUpload.sessionId)))
+                const pendingEvs = evSnap.docs.map(d=>d.data())
+                await handleRetryUpload(pendingUpload, pendingEvs)
+              }}>
+              {submitting ? 'Uploading…' : 'Retry upload to Sheet'}
+            </button>
+            <button style={{flex:1,padding:'7px 0',fontSize:12,background:'var(--bg-3)',
+              border:'1px solid var(--b-1)',borderRadius:7,color:'var(--t-2)',cursor:'pointer'}}
+              onClick={async()=>{
+                const evSnap = await getDocs(query(collection(db,'mark_collected_events'),where('sessionId','==',pendingUpload.sessionId)))
+                const pendingEvs = evSnap.docs.map(d=>d.data())
+                downloadFieldCsv(pendingUpload, pendingEvs)
+              }}>
+              Export CSV
+            </button>
+            <button style={{flex:1,padding:'7px 0',fontSize:12,background:'transparent',
+              border:'1px solid rgba(255,69,58,0.3)',borderRadius:7,color:'#FF453A',cursor:'pointer'}}
+              onClick={()=>{
+                if (window.confirm('Discard this session? This cannot be undone.')) {
+                  saveLocalSession({...pendingUpload,status:'discarded'})
+                  setPendingUpload(null)
+                }
+              }}>
+              Discard
+            </button>
+          </div>
+          {saveResult?.status==='failed' && (
+            <div style={{marginTop:8,fontSize:11,color:'#FF453A',background:'rgba(255,69,58,0.08)',
+              padding:'6px 10px',borderRadius:6}}>{saveResult.message}</div>
+          )}
+          {saveResult?.status==='success' && (
+            <div style={{marginTop:8,fontSize:11,color:'#30D158'}}>
+              ✓ Uploaded {saveResult.rowsWritten} rows successfully
             </div>
-            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8,marginBottom:16}}>
-              <div style={{background:'rgba(10,132,255,0.08)',border:'1px solid rgba(10,132,255,0.2)',borderRadius:8,padding:'8px',textAlign:'center'}}>
-                <div style={{fontSize:18,fontWeight:800,color:'#0A84FF'}}>{events.filter(e=>e.team==='home').length}</div>
-                <div style={{fontSize:9,color:'var(--t-3)',marginTop:1}}>HOME</div>
-              </div>
-              <div style={{background:'rgba(232,89,12,0.08)',border:'1px solid rgba(232,89,12,0.2)',borderRadius:8,padding:'8px',textAlign:'center'}}>
-                <div style={{fontSize:18,fontWeight:800,color:'#E8590C'}}>{events.filter(e=>e.team==='away').length}</div>
-                <div style={{fontSize:9,color:'var(--t-3)',marginTop:1}}>AWAY</div>
-              </div>
-            </div>
-            {openBadges.length>0&&<div style={{background:'rgba(255,149,0,0.1)',border:'1px solid rgba(255,149,0,0.3)',borderRadius:8,padding:'8px 12px',marginBottom:16,fontSize:11,color:'#FF9500'}}>
-              ⚠️ Open states will be force-closed: {openBadges.map(p=>EVENT_BY_ID[p.openId]?.label).join(', ')}
-            </div>}
-            {!events.some(e=>e.eventId==='half_end')&&events.length>0&&<div style={{background:'rgba(255,149,0,0.1)',border:'1px solid rgba(255,149,0,0.3)',borderRadius:8,padding:'8px 12px',marginBottom:16,fontSize:11,color:'#FF9500'}}>
-              ⚠️ No Half End tagged — export will have collection_incomplete=1
-            </div>}
-            <div style={{display:'flex',gap:10}}>
-              <button className="btn-ghost" style={{flex:1,padding:'10px 0',fontSize:13}} onClick={()=>setShowDoneModal(false)}>Cancel</button>
-              <button className="btn-orange" style={{flex:2,padding:'10px 0',fontSize:13}} disabled={submitting} onClick={handleDone}>
-                {submitting?'Saving…':'Save & Export CSV'}
-              </button>
-            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── Save / Done modal ──────────────────────────────────────────────────── */}
+      {showDoneModal && (
+        <div style={{position:'fixed',inset:0,zIndex:1000,background:'rgba(0,0,0,0.85)',
+          backdropFilter:'blur(4px)',display:'flex',alignItems:'center',justifyContent:'center'}}>
+          <div className="card slide-up" style={{width:460,padding:28,maxHeight:'90vh',overflowY:'auto'}}>
+
+            {/* ── Success state ── */}
+            {saveResult?.status === 'success' ? (
+              <>
+                <div style={{fontSize:32,textAlign:'center',marginBottom:12}}>✅</div>
+                <div style={{fontFamily:'Inter',fontWeight:800,fontSize:18,color:'var(--t-1)',textAlign:'center',marginBottom:6}}>
+                  Saved to Sheet
+                </div>
+                <div style={{fontSize:12,color:'var(--t-3)',textAlign:'center',marginBottom:16}}>
+                  {saveResult.rowsWritten} rows written
+                </div>
+                {saveResult.duplicateHalfWarning && (
+                  <div style={{background:'rgba(255,149,0,0.1)',border:'1px solid rgba(255,149,0,0.3)',
+                    borderRadius:8,padding:'8px 12px',marginBottom:16,fontSize:11,color:'#FF9500'}}>
+                    ⚠️ Another session for Match {saveMatchId} H{saveHalf} + {saveHrCode} already exists in the sheet ({saveResult.duplicateHalfWarning})
+                  </div>
+                )}
+                <div style={{display:'flex',gap:10}}>
+                  <button style={{flex:1,padding:'10px 0',fontSize:13,background:'var(--bg-3)',
+                    border:'1px solid var(--b-1)',borderRadius:8,color:'var(--t-2)',cursor:'pointer'}}
+                    onClick={handleExportCsvOnly}>
+                    Download CSV
+                  </button>
+                  <button className="btn-orange" style={{flex:2,padding:'10px 0',fontSize:13}}
+                    onClick={handleStartFresh}>
+                    Start New Session
+                  </button>
+                </div>
+              </>
+            ) : saveResult?.status === 'failed' ? (
+              /* ── Failed state ── */
+              <>
+                <div style={{fontSize:32,textAlign:'center',marginBottom:12}}>❌</div>
+                <div style={{fontFamily:'Inter',fontWeight:800,fontSize:18,color:'#FF453A',textAlign:'center',marginBottom:8}}>
+                  Upload Failed
+                </div>
+                <div style={{fontSize:11,color:'var(--t-3)',background:'rgba(255,69,58,0.08)',
+                  padding:'10px 12px',borderRadius:8,marginBottom:16,fontFamily:'JetBrains Mono,monospace',
+                  wordBreak:'break-word'}}>
+                  {saveResult.message}
+                </div>
+                <div style={{fontSize:12,color:'var(--t-2)',marginBottom:16}}>
+                  Your data is safe locally. Choose an option:
+                </div>
+                <div style={{display:'flex',flexDirection:'column',gap:8}}>
+                  <button className="btn-orange" style={{padding:'10px 0',fontSize:13}}
+                    disabled={submitting} onClick={handleSaveToSheet}>
+                    {submitting ? 'Retrying…' : 'Retry Upload'}
+                  </button>
+                  <button style={{padding:'10px 0',fontSize:13,background:'var(--bg-3)',
+                    border:'1px solid var(--b-1)',borderRadius:8,color:'var(--t-2)',cursor:'pointer'}}
+                    onClick={handleExportCsvOnly}>
+                    Export as CSV (offline fallback)
+                  </button>
+                  <button style={{padding:'10px 0',fontSize:13,background:'transparent',
+                    border:'1px solid rgba(255,255,255,0.08)',borderRadius:8,color:'var(--t-3)',cursor:'pointer'}}
+                    onClick={()=>setShowDoneModal(false)}>
+                    Keep collecting — save later
+                  </button>
+                  <button style={{padding:'10px 0',fontSize:13,background:'transparent',
+                    border:'1px solid rgba(255,69,58,0.2)',borderRadius:8,color:'#FF453A',cursor:'pointer'}}
+                    onClick={()=>{ if(window.confirm('Discard all collected data? This cannot be undone.')) handleDiscard() }}>
+                    Discard session
+                  </button>
+                </div>
+              </>
+            ) : (
+              /* ── Metadata entry state ── */
+              <>
+                <div style={{fontFamily:'Inter',fontWeight:800,fontSize:18,color:'var(--t-1)',marginBottom:4}}>
+                  Save Session
+                </div>
+                <div style={{fontSize:12,color:'var(--t-3)',marginBottom:20}}>
+                  {basename(videoPath||session?.videoPath||'')} · {events.length} events
+                </div>
+
+                {/* Stats summary */}
+                <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:8,marginBottom:20}}>
+                  <div style={{background:'var(--bg-3)',borderRadius:8,padding:'10px',textAlign:'center'}}>
+                    <div style={{fontSize:20,fontWeight:900,color:'#30D158'}}>{events.length}</div>
+                    <div style={{fontSize:9,color:'var(--t-3)',marginTop:2}}>Events</div>
+                  </div>
+                  <div style={{background:'rgba(10,132,255,0.08)',border:'1px solid rgba(10,132,255,0.15)',borderRadius:8,padding:'10px',textAlign:'center'}}>
+                    <div style={{fontSize:20,fontWeight:900,color:'#0A84FF'}}>{events.filter(e=>e.team==='home').length}</div>
+                    <div style={{fontSize:9,color:'var(--t-3)',marginTop:2}}>Home</div>
+                  </div>
+                  <div style={{background:'rgba(232,89,12,0.08)',border:'1px solid rgba(232,89,12,0.15)',borderRadius:8,padding:'10px',textAlign:'center'}}>
+                    <div style={{fontSize:20,fontWeight:900,color:'#E8590C'}}>{events.filter(e=>e.team==='away').length}</div>
+                    <div style={{fontSize:9,color:'var(--t-3)',marginTop:2}}>Away</div>
+                  </div>
+                </div>
+
+                {/* Required metadata */}
+                <div style={{display:'flex',flexDirection:'column',gap:10,marginBottom:16}}>
+                  <div>
+                    <div style={{fontSize:10,fontWeight:700,color:'var(--t-3)',letterSpacing:0.8,marginBottom:4,textTransform:'uppercase'}}>
+                      Match ID <span style={{color:'#FF453A'}}>*</span>
+                    </div>
+                    <input
+                      value={saveMatchId}
+                      onChange={e=>{ setSaveMatchId(e.target.value); setSaveMatchError('') }}
+                      placeholder="e.g. 1234567"
+                      style={{width:'100%',background:'var(--bg-3)',border:'1px solid var(--b-1)',
+                        borderRadius:7,padding:'8px 12px',fontSize:13,color:'var(--t-1)',
+                        fontFamily:'JetBrains Mono,monospace',outline:'none',boxSizing:'border-box'}}
+                    />
+                  </div>
+                  <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10}}>
+                    <div>
+                      <div style={{fontSize:10,fontWeight:700,color:'var(--t-3)',letterSpacing:0.8,marginBottom:4,textTransform:'uppercase'}}>
+                        Half <span style={{color:'#FF453A'}}>*</span>
+                      </div>
+                      <div style={{display:'flex',gap:6}}>
+                        {['1','2'].map(h=>(
+                          <button key={h} onClick={()=>setSaveHalf(h)}
+                            style={{flex:1,padding:'8px 0',fontSize:14,fontWeight:700,
+                              background: saveHalf===h ? 'rgba(48,209,88,0.15)' : 'var(--bg-3)',
+                              border:`1px solid ${saveHalf===h ? '#30D158' : 'var(--b-1)'}`,
+                              borderRadius:7,color:saveHalf===h?'#30D158':'var(--t-2)',cursor:'pointer'}}>
+                            {h}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                    <div>
+                      <div style={{fontSize:10,fontWeight:700,color:'var(--t-3)',letterSpacing:0.8,marginBottom:4,textTransform:'uppercase'}}>
+                        Collector HR-Code <span style={{color:'#FF453A'}}>*</span>
+                      </div>
+                      <input
+                        value={saveHrCode}
+                        onChange={e=>{ setSaveHrCode(e.target.value); setSaveMatchError('') }}
+                        placeholder="e.g. 3416"
+                        style={{width:'100%',background:'var(--bg-3)',border:'1px solid var(--b-1)',
+                          borderRadius:7,padding:'8px 12px',fontSize:13,color:'var(--t-1)',
+                          fontFamily:'JetBrains Mono,monospace',outline:'none',boxSizing:'border-box'}}
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                {saveMatchError && (
+                  <div style={{fontSize:11,color:'#FF453A',background:'rgba(255,69,58,0.08)',
+                    padding:'7px 10px',borderRadius:6,marginBottom:12}}>
+                    {saveMatchError}
+                  </div>
+                )}
+
+                {!events.some(e=>e.eventId==='half_end') && events.length>0 && (
+                  <div style={{fontSize:11,color:'#FF9500',background:'rgba(255,149,0,0.08)',
+                    padding:'7px 10px',borderRadius:6,marginBottom:12}}>
+                    ⚠️ No Half End event — collection_incomplete=1 will be set
+                  </div>
+                )}
+
+                <div style={{display:'flex',gap:10}}>
+                  <button style={{flex:1,padding:'10px 0',fontSize:13,background:'transparent',
+                    border:'1px solid var(--b-1)',borderRadius:8,color:'var(--t-3)',cursor:'pointer'}}
+                    onClick={()=>setShowDoneModal(false)}>
+                    Cancel
+                  </button>
+                  <button style={{flex:1,padding:'10px 0',fontSize:13,background:'var(--bg-3)',
+                    border:'1px solid var(--b-1)',borderRadius:8,color:'var(--t-2)',cursor:'pointer'}}
+                    onClick={handleExportCsvOnly}>
+                    CSV only
+                  </button>
+                  <button className="btn-orange" style={{flex:2,padding:'10px 0',fontSize:13}}
+                    disabled={submitting} onClick={handleSaveToSheet}>
+                    {submitting ? 'Saving…' : 'Save to Sheet'}
+                  </button>
+                </div>
+              </>
+            )}
           </div>
         </div>
       )}

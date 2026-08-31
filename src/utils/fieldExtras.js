@@ -1056,9 +1056,9 @@ export const POSSESSION_RULES = {
   camera_off:          { performedBy:null,               flip:'never'      },
   camera_on:           { performedBy:null,               flip:'never'      },
   half_end:            { performedBy:null,               flip:'resets'     },
-  // unknown_pass_end: team not meaningful (we don't know who ended the pass),
-  // possession marked uncertain — don't flip, don't assign a team
-  unknown_pass_end:    { performedBy:null,               flip:'uncertain'  },
+  // unknown_pass_end: collector knows which team's attack it was (explicit prompt),
+  // but doesn't know how it ended. No possession flip. teamSource = 'manual'.
+  unknown_pass_end:    { performedBy:'explicit',         flip:'never'      },
 }
 
 // ─── Possession engine ────────────────────────────────────────────────────────
