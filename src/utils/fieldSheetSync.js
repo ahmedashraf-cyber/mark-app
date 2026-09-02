@@ -188,6 +188,7 @@ export function buildEventRows(events) {
       possession_certain:      ev.possessionCertain === false ? '0' : ev.possessionCertain === true ? '1' : '',
       miscommunication_team:   ev.miscommunicationTeam || '',
       ...attrCols,
+      model_shape:             ev.model_shape || '',  // Pressure Code on model rows; empty on live FIELD rows
     }
     return EVENT_COLUMNS.map(col => String(row[col] ?? ''))
   })

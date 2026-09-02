@@ -158,6 +158,9 @@ export const EVENT_COLUMNS = [
   'attr_direction',
   'attr_kind',
   'attr_paused',
+  // Model answer only — Pressure Code (MP1..MP5, OP1, OP2) from Scout review export.
+  // Empty on live FIELD collection rows. Retained for analysis of which shapes get missed.
+  'model_shape',
 ]
 
 // ── Group id → attr_ column name mapping ──────────────────────────────────────

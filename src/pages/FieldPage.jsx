@@ -25,6 +25,7 @@ import EventsSidebar from '../components/EventsSidebar'
 import TaggedEventsList from '../components/TaggedEventsList'
 import { downloadFieldCsv, syncSessionToSheet } from '../utils/fieldSheetSync'
 import { FIELD_LS_KEY, FIELD_SHEET_ID, validateMatchId } from '../config/fieldConfig'
+import { importModelAnswers, isModelImportDone } from '../utils/importModelAnswers'
 import {
   FIELD_EVENTS, EVENT_BY_ID, EVENT_BY_KEY,
   OPEN_STATE_PAIRS, TRANSPARENT_EVENT_IDS,
@@ -131,7 +132,8 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
   const [flashEvent,  setFlashEvent]  = useState(null)
   const [flashError,  setFlashError]  = useState(null)  // blocked keypress message
 
-  // ── Done / Save modal ─────────────────────────────────────────────────────
+  const [modelImportStatus, setModelImportStatus] = useState(null) // null | 'running' | 'done' | 'error'
+  const [modelImportMsg,    setModelImportMsg]    = useState('')
   const [showDoneModal, setShowDoneModal] = useState(false)
   const [submitting,    setSubmitting]   = useState(false)
 
@@ -887,6 +889,26 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
         <div style={{fontSize:11,color:'var(--t-3)'}}><span style={{color:'#30D158',fontWeight:700}}>{events.length}</span> collected</div>
         {flashEvent&&<div style={{fontSize:11,fontWeight:700,color:'#30D158',background:'rgba(48,209,88,0.15)',padding:'3px 10px',borderRadius:6}}>✓ {flashEvent}</div>}
         {flashError&&<div style={{fontSize:11,fontWeight:700,color:'#FF453A',background:'rgba(255,69,58,0.1)',padding:'3px 10px',borderRadius:6}}>{flashError}</div>}
+        {/* Model import — hidden once done */}
+        {!isModelImportDone() && modelImportStatus !== 'done' && (
+          <button
+            disabled={modelImportStatus==='running'}
+            onClick={async()=>{
+              setModelImportStatus('running'); setModelImportMsg('Starting…')
+              try {
+                const r = await importModelAnswers(msg=>setModelImportMsg(msg))
+                setModelImportStatus('done')
+                setModelImportMsg(r.skipped ? r.reason : `✓ ${r.sessionsWritten} sessions, ${r.eventsWritten} events`)
+              } catch(e) { setModelImportStatus('error'); setModelImportMsg(e.message||String(e)) }
+            }}
+            style={{padding:'4px 10px',fontSize:11,fontWeight:600,flexShrink:0,
+              background:modelImportStatus==='error'?'rgba(255,69,58,0.15)':'rgba(48,209,88,0.12)',
+              border:`1px solid ${modelImportStatus==='error'?'rgba(255,69,58,0.4)':'rgba(48,209,88,0.3)'}`,
+              borderRadius:6,color:modelImportStatus==='error'?'#FF453A':'#30D158',
+              cursor:modelImportStatus==='running'?'wait':'pointer'}}>
+            {modelImportStatus==='running'?modelImportMsg:modelImportStatus==='error'?`⚠ ${modelImportMsg}`:modelImportStatus==='done'?modelImportMsg:'Import Model Answers'}
+          </button>
+        )}
         <button className="btn-orange" style={{padding:'6px 16px',fontSize:12}} onClick={()=>setShowDoneModal(true)}>Done</button>
       </div>
 
