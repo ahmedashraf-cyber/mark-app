@@ -139,11 +139,16 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
   const [saveMatchId,    setSaveMatchId]    = useState('')
   const [saveHalf,       setSaveHalf]       = useState('')
   const [saveHrCode,     setSaveHrCode]     = useState('')
+  const [saveHomeTeam,   setSaveHomeTeam]   = useState('')
+  const [saveAwayTeam,   setSaveAwayTeam]   = useState('')
   const [saveMatchError, setSaveMatchError] = useState('')
 
   // Upload result state
   const [saveResult, setSaveResult] = useState(null)
   // { status:'success'|'failed', message, rowsWritten?, duplicateHalfWarning? }
+
+  const eventSeqRef   = useRef(0)   // monotonic per session, incremented at every commitEvent
+  const openPairsRef  = useRef({})  // { eventId → { pair_id, videoTimeMs, event_seq } }
 
   // Pending-upload session (loaded on mount if exists)
   const [pendingUpload, setPendingUpload] = useState(null)
@@ -197,7 +202,14 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
       setVideoPath(path)
       const v = videoRef.current
       if (v) { v.src=url; v.load(); setVideoLoaded(true) }
-      await ensureSession(path)
+      // Fetch file size for video identity (non-blocking — failures are non-fatal)
+      let sizeBytes = null
+      try { sizeBytes = await invoke('get_file_size', { path }) } catch(e) { console.warn('[MARK Field] get_file_size:', e) }
+      const sess = await ensureSession(path)
+      if (sizeBytes && sess) {
+        const updated = { ...sess, videoSizeBytes: sizeBytes }
+        setSession(updated); saveLocalSession(updated)
+      }
     } catch(e) { console.error('[MARK Field] video load:',e); setVideoError('Could not load video. Try mp4 (H.264).') }
   }
   function handleVideoError() { setVideoError('Could not decode video. Convert to mp4 (H.264) first.'); setVideoLoaded(false) }
@@ -422,23 +434,54 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
 
     const finalGroups = groups || collectedGroups
 
-    // If Half start: set initial possession from the Team Side selection
-    if (realDef.id === 'half_start') {
-      const teamGroup = finalGroups.find(g => g.groupId === 'team_side')
-      const teamSel   = teamGroup?.selections?.[0]?.code
-      const newPoss = teamSel === 'TEAM_HOME' ? 'home'
-                    : teamSel === 'TEAM_AWAY' ? 'away' : realTeam
-      if (newPoss) setPossession({ team: newPoss, certain: true })
+    // Increment event_seq — monotonic per session
+    eventSeqRef.current += 1
+    const eventSeq = eventSeqRef.current
+
+    // video_time_ms as integer — used for pair duration arithmetic (no float rounding)
+    const videoTimeMs = Math.round(realVt * 1000)
+
+    // Pair tracking
+    let pairId     = null
+    let pairStatus = null
+    let durationMs = null
+
+    if (realDef.openState) {
+      // Opening event: generate pair_id using session slice + event_seq
+      pairId = `${session.sessionId.slice(0,8)}_${eventSeq}`
+      pairStatus = 'incomplete'  // marked complete when close event is committed
+      openPairsRef.current[realDef.id] = { pairId, openVideoTimeMs: videoTimeMs, eventSeq }
+    }
+
+    if (realDef.closesEventId) {
+      // Closing event: inherit pair_id from the open event
+      const openPair = openPairsRef.current[realDef.closesEventId]
+      if (openPair) {
+        pairId = openPair.pairId
+        durationMs = videoTimeMs - openPair.openVideoTimeMs  // integer arithmetic
+        pairStatus = forceClose ? 'incomplete' : 'complete'
+        // Mark open event's pair as complete in Firestore (best-effort)
+        if (!forceClose && openPair.pairId) {
+          getDocs(query(collection(db,'mark_collected_events'),
+            where('pair_id','==',openPair.pairId),
+            where('sessionId','==',session.sessionId)))
+          .then(snap => snap.forEach(d => updateDoc(d.ref, { pair_status:'complete' })))
+          .catch(()=>{})
+        }
+        delete openPairsRef.current[realDef.closesEventId]
+      }
     }
 
     const id = `field_${Date.now()}_${Math.random().toString(36).slice(2,7)}`
     const ev = {
       id, sessionId:session.sessionId,
       videoPath: videoPath||session.videoPath||'',
-      videoTimeSec: realVt,
-      eventId:    realDef.id,
-      eventLabel: realDef.label,
-      groups:     finalGroups,
+      videoTimeSec:   realVt,
+      video_time_ms:  videoTimeMs,      // integer ms — use this for arithmetic
+      event_seq:      eventSeq,
+      eventId:        realDef.id,
+      eventLabel:     realDef.label,
+      groups:         finalGroups,
       extras: finalGroups.flatMap(g => g.selections?.map(s=>s.label)||[]),
       team: realTeam||null,
       teamSource: realTeamSrc||null,
@@ -446,6 +489,11 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
       miscommunicationTeam: getMiscommunicationTeam(realDef.id) || null,
       type: type||pendingType||null,
       typeSource: typeSource||pendingTypeSource||null,
+      pair_id:     pairId     || null,
+      pair_status: pairStatus || null,
+      duration_ms: durationMs !== null ? durationMs : null,
+      // close event marker (used by serialiser)
+      closesEventId: realDef.closesEventId || null,
       source:'field', mode:'field',
       collectorId:profile.uid, collectorEmail:profile.email,
       timestamp:Date.now(),
@@ -670,10 +718,13 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
     // Build completed session object with metadata
     const completed = {
       ...session,
-      status:                'pending_sheet_upload',  // only clear after confirmed write
+      status:                'pending_sheet_upload',
       matchId:               saveMatchId,
       half:                  saveHalf,
       collectorHrCode:       saveHrCode.trim(),
+      homeTeamName:          saveHomeTeam.trim(),
+      awayTeamName:          saveAwayTeam.trim(),
+      videoDurationMs:       duration > 0 ? Math.round(duration * 1000) : (session.videoDurationMs || null),
       totalEvents:           events.length,
       accumulatedMs:         totalMs,
       collectionEndWallMs:   endWall,
@@ -761,7 +812,8 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
     // Called after confirmed successful save
     setShowDoneModal(false)
     setSaveResult(null)
-    setSaveMatchId(''); setSaveHalf(''); setSaveHrCode(''); setSaveMatchError('')
+    setSaveMatchId(''); setSaveHalf(''); setSaveHrCode('')
+    setSaveHomeTeam(''); setSaveAwayTeam(''); setSaveMatchError('')
     setSession(null)
     setEvents([])
     setVideoPath(null)
@@ -770,6 +822,8 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
     setCurrentTime(0); setDuration(0)
     setPossession({ team: null, certain: false })
     setOpenStates({})
+    eventSeqRef.current = 0
+    openPairsRef.current = {}
     collStartRef.current = null
     if (videoRef.current) { videoRef.current.src = ''; videoRef.current.load() }
   }
@@ -845,7 +899,16 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
           <video ref={videoRef}
             style={{width:'100%',height:'100%',objectFit:'contain',display:videoLoaded?'block':'none'}}
             onTimeUpdate={e=>{if(!isDraggingRef.current)setCurrentTime(e.target.currentTime)}}
-            onLoadedMetadata={()=>setDuration(videoRef.current?.duration||0)}
+            onLoadedMetadata={()=>{
+            const dur = videoRef.current?.duration || 0
+            setDuration(dur)
+            // Store video_duration_ms on session for video identity
+            if (dur > 0 && session) {
+              const durMs = Math.round(dur * 1000)
+              const updated = { ...session, videoDurationMs: durMs }
+              setSession(updated); saveLocalSession(updated)
+            }
+          }}
             onPlay={()=>setPlaying(true)} onPause={()=>setPlaying(false)}
             onError={handleVideoError}/>
           {!videoLoaded&&(
@@ -1246,7 +1309,22 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
                   </div>
                 </div>
 
-                {saveMatchError && (
+                  <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10}}>
+                    <div>
+                      <div style={{fontSize:10,fontWeight:700,color:'var(--t-3)',letterSpacing:0.8,marginBottom:4,textTransform:'uppercase'}}>Home Team</div>
+                      <input value={saveHomeTeam} onChange={e=>setSaveHomeTeam(e.target.value)}
+                        placeholder="Home team name"
+                        style={{width:'100%',background:'var(--bg-3)',border:'1px solid var(--b-1)',
+                          borderRadius:7,padding:'8px 12px',fontSize:13,color:'var(--t-1)',outline:'none',boxSizing:'border-box'}}/>
+                    </div>
+                    <div>
+                      <div style={{fontSize:10,fontWeight:700,color:'var(--t-3)',letterSpacing:0.8,marginBottom:4,textTransform:'uppercase'}}>Away Team</div>
+                      <input value={saveAwayTeam} onChange={e=>setSaveAwayTeam(e.target.value)}
+                        placeholder="Away team name"
+                        style={{width:'100%',background:'var(--bg-3)',border:'1px solid var(--b-1)',
+                          borderRadius:7,padding:'8px 12px',fontSize:13,color:'var(--t-1)',outline:'none',boxSizing:'border-box'}}/>
+                    </div>
+                  </div>
                   <div style={{fontSize:11,color:'#FF453A',background:'rgba(255,69,58,0.08)',
                     padding:'7px 10px',borderRadius:6,marginBottom:12}}>
                     {saveMatchError}

@@ -246,6 +246,17 @@ fn pick_video_file() -> Option<String> {
         .map(|p| p.to_string_lossy().to_string())
 }
 
+// ─── Get file size in bytes (for video identity) ─────────────────────────────
+// Returns the file size as a u64 string (JS can't handle u64 directly).
+// Combined with video duration from the player, gives a lightweight video identity
+// that detects different video files without hashing the whole file.
+#[command]
+fn get_file_size(path: String) -> Result<String, String> {
+    std::fs::metadata(&path)
+        .map(|m| m.len().to_string())
+        .map_err(|e| format!("get_file_size failed for {}: {}", path, e))
+}
+
 // ─── Save bytes to a user-chosen path via native save dialog (rfd) ────────────
 #[command]
 fn save_xlsx_file(name: String, data: Vec<u8>) -> Result<Option<String>, String> {
@@ -442,7 +453,7 @@ fn patch_one_shortcut(lnk_path: &std::path::Path) -> Result<bool, String> {
 // marker) does not match, so it gets stripped and replaced — that's what was
 // previously frozen by a fixed marker. Bump this whenever the embedded bridge
 // changes so existing installs re-embed the new version.
-const ASAR_MARKER: &str = "<!-- MARK_BRIDGE_INJECTED v7.8.39 -->";
+const ASAR_MARKER: &str = "<!-- MARK_BRIDGE_INJECTED v7.8.40 -->";
 
 #[command]
 fn patch_tag_once_asar() -> Result<String, String> {
@@ -2465,6 +2476,7 @@ fn save_binary_file(path: String, data: Vec<u8>) -> Result<(), String> {
             patch_tag_once_shortcuts,
             patch_tag_once_asar,
             pick_video_file,
+            get_file_size,
             save_xlsx_file,
             google_oauth_sign_in,
             google_oauth_refresh,
