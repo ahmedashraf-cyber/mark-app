@@ -453,7 +453,7 @@ fn patch_one_shortcut(lnk_path: &std::path::Path) -> Result<bool, String> {
 // marker) does not match, so it gets stripped and replaced — that's what was
 // previously frozen by a fixed marker. Bump this whenever the embedded bridge
 // changes so existing installs re-embed the new version.
-const ASAR_MARKER: &str = "<!-- MARK_BRIDGE_INJECTED v7.8.41 -->";
+const ASAR_MARKER: &str = "<!-- MARK_BRIDGE_INJECTED v7.8.42 -->";
 
 #[command]
 fn patch_tag_once_asar() -> Result<String, String> {
@@ -814,7 +814,7 @@ const SENDER_EMAIL: &str = "hudl.quality.egypt@gmail.com";
 fn sender_app_password() -> &'static str {
     option_env!("MARK_GMAIL_APP_PASSWORD").unwrap_or("")
 }
-const OAUTH_SCOPE: &str = "https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/documents openid email";
+const OAUTH_SCOPE: &str = "https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/documents openid email";
 const GMAIL_SCOPE: &str = "https://www.googleapis.com/auth/gmail.send openid email";
 
 // Open the browser, run the loopback OAuth flow, return the token JSON
