@@ -490,12 +490,32 @@ export default function SessionSetupPage({ onSessionStart, lastResult, onShowHis
                   desc:'Open any video and tag events directly — no match ID needed, no error types. Pure data collection.',
                   steps:['Open any local video file','Tag events with keyboard shortcuts','Export collected data'],
                 },
-              ].map(m => (
+                {
+                  mode:'comparison',
+                  color:'#64D2FF',
+                  glyph: (
+                    <svg width="32" height="32" viewBox="0 0 32 32" fill="none">
+                      <rect x="4" y="10" width="10" height="12" rx="2" stroke="#64D2FF" strokeWidth="1.8"/>
+                      <rect x="18" y="10" width="10" height="12" rx="2" stroke="#64D2FF" strokeWidth="1.8"/>
+                      <line x1="14" y1="16" x2="18" y2="16" stroke="#64D2FF" strokeWidth="1.8" strokeLinecap="round"/>
+                      <path d="M15.5 13.5L18 16l-2.5 2.5" stroke="#64D2FF" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                    </svg>
+                  ),
+                  title:'Comparison',
+                  sub:'Compare collector vs model answer',
+                  desc:'Enter a match ID and collector HR-code to score their session against the approved model answer.',
+                  steps:['Enter match ID and half','Select collector HR-code','View score and detail'],
+                },
                 <div key={m.mode}
                   onClick={() => {
                     // Field mode: start immediately — no match/half needed
                     if (m.mode === 'field') {
                       onSessionStart({ mode: 'field', sessionId: null })
+                      return
+                    }
+                    // Comparison mode: start immediately
+                    if (m.mode === 'comparison') {
+                      onSessionStart({ mode: 'comparison', sessionId: null })
                       return
                     }
                     setReviewMode(m.mode)

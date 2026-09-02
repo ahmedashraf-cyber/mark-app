@@ -6,6 +6,7 @@ import LoginPage from './pages/LoginPage'
 import SessionSetupPage from './pages/SessionSetupPage'
 import ReviewPage from './pages/ReviewPage'
 import FieldPage from './pages/FieldPage'
+import ComparisonPage from './pages/ComparisonPage'
 import SessionHistoryPage from './pages/SessionHistoryPage'
 import AuditPage from './pages/AuditPage'
 import AuditReportPage from './pages/AuditReportPage'
@@ -242,6 +243,8 @@ function AppInner() {
             onDone={() => setSession(null)}
             onBack={() => setSession(null)}
           />
+        ) : session?.mode === 'comparison' ? (
+          <ComparisonPage onBack={() => setSession(null)} />
         ) : session ? (
           <ReviewPage
             session={session}
