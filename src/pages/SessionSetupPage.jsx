@@ -506,6 +506,7 @@ export default function SessionSetupPage({ onSessionStart, lastResult, onShowHis
                   desc:'Enter a match ID and collector HR-code to score their session against the approved model answer.',
                   steps:['Enter match ID and half','Select collector HR-code','View score and detail'],
                 },
+              ].map(m => (
                 <div key={m.mode}
                   onClick={() => {
                     // Field mode: start immediately — no match/half needed
