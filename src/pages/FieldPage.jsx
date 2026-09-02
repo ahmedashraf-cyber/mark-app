@@ -143,6 +143,7 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
   const [saveHrCode,     setSaveHrCode]     = useState('')
   const [saveHomeTeam,   setSaveHomeTeam]   = useState('')
   const [saveAwayTeam,   setSaveAwayTeam]   = useState('')
+  const [isModelAnswer,  setIsModelAnswer]  = useState(false)
   const [saveMatchError, setSaveMatchError] = useState('')
 
   // Upload result state
@@ -726,6 +727,10 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
       collectorHrCode:       saveHrCode.trim(),
       homeTeamName:          saveHomeTeam.trim(),
       awayTeamName:          saveAwayTeam.trim(),
+      is_model:              isModelAnswer ? '1' : '0',
+      model_version:         isModelAnswer ? '1' : '',
+      model_status:          isModelAnswer ? 'approved' : '',
+      model_source:          isModelAnswer ? 'field' : '',
       videoDurationMs:       duration > 0 ? Math.round(duration * 1000) : (session.videoDurationMs || null),
       totalEvents:           events.length,
       accumulatedMs:         totalMs,
@@ -816,6 +821,7 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
     setSaveResult(null)
     setSaveMatchId(''); setSaveHalf(''); setSaveHrCode('')
     setSaveHomeTeam(''); setSaveAwayTeam(''); setSaveMatchError('')
+    setIsModelAnswer(false)
     setSession(null)
     setEvents([])
     setVideoPath(null)
@@ -1359,6 +1365,29 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
                     ⚠️ No Half End event — collection_incomplete=1 will be set
                   </div>
                 )}
+
+                {/* Model answer toggle */}
+                <div onClick={()=>setIsModelAnswer(v=>!v)}
+                  style={{display:'flex',alignItems:'center',gap:12,padding:'10px 12px',
+                    marginBottom:12,
+                    background:isModelAnswer?'rgba(48,209,88,0.1)':'var(--bg-3)',
+                    border:`1px solid ${isModelAnswer?'rgba(48,209,88,0.4)':'var(--b-1)'}`,
+                    borderRadius:8,cursor:'pointer'}}>
+                  <div style={{width:18,height:18,borderRadius:5,flexShrink:0,
+                    background:isModelAnswer?'#30D158':'transparent',
+                    border:`2px solid ${isModelAnswer?'#30D158':'var(--b-2)'}`,
+                    display:'flex',alignItems:'center',justifyContent:'center'}}>
+                    {isModelAnswer&&<span style={{color:'#000',fontSize:11,fontWeight:900}}>✓</span>}
+                  </div>
+                  <div>
+                    <div style={{fontSize:13,fontWeight:600,color:isModelAnswer?'#30D158':'var(--t-1)'}}>
+                      This is a model answer
+                    </div>
+                    <div style={{fontSize:10,color:'var(--t-3)',marginTop:1}}>
+                      Saves with is_model=1, model_status=approved
+                    </div>
+                  </div>
+                </div>
 
                 <div style={{display:'flex',gap:10}}>
                   <button style={{flex:1,padding:'10px 0',fontSize:13,background:'transparent',
