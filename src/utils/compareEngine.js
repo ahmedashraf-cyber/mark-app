@@ -24,57 +24,79 @@
 
 import { toleranceFor, ERROR_VERDICTS } from '../config/comparisonConfig'
 
-// ── Minimal Hungarian algorithm (O(n³)) ───────────────────────────────────────
-// Solves the assignment problem: given cost matrix, find minimum-cost
-// one-to-one assignment. Returns array of [rowIdx, colIdx] pairs.
+// ── Optimal assignment (Jonker-Volgenant / shortest augmenting path) ─────────
+// Handles non-square cost matrices (more rows than cols or vice versa).
+// Returns array of [rowIdx, colIdx] pairs — only finite-cost assignments.
+// Unmatched rows/cols are simply omitted from the result.
 function hungarian(costMatrix) {
-  const n = costMatrix.length
-  if (n === 0) return []
-  const m = costMatrix[0].length
-  const INF = 1e18
+  const numRows = costMatrix.length
+  if (numRows === 0) return []
+  const numCols = costMatrix[0].length
+  if (numCols === 0) return []
 
-  // Pad to square
-  const size = Math.max(n, m)
-  const C = []
-  for (let i = 0; i < size; i++) {
-    C.push([])
-    for (let j = 0; j < size; j++) {
-      C[i].push(i < n && j < m ? costMatrix[i][j] : INF)
+  const INF = 1e15
+
+  // Work on the transpose if more cols than rows (algorithm works on rows ≥ cols)
+  const transposed = numCols > numRows
+  const C    = transposed ? costMatrix[0].map((_, j) => costMatrix.map(r => r[j])) : costMatrix
+  const rows = transposed ? numCols : numRows
+  const cols = transposed ? numRows : numCols
+
+  // u[i] = row potentials (1-indexed), v[j] = col potentials (1-indexed)
+  const u    = new Array(rows + 1).fill(0)
+  const v    = new Array(cols + 1).fill(0)
+  const rowOf= new Array(cols + 1).fill(0)  // rowOf[j] = row assigned to col j (1-indexed, 0=unassigned)
+  const colOf= new Array(rows + 1).fill(0)  // colOf[i] = col assigned to row i (1-indexed, 0=unassigned)
+
+  for (let i = 1; i <= rows; i++) {
+    rowOf[0] = i
+    let j0 = 0
+    const dist = new Array(cols + 1).fill(INF)
+    const prev = new Array(cols + 1).fill(-1)
+    const done = new Array(cols + 1).fill(false)
+
+    do {
+      done[j0] = true
+      const i0 = rowOf[j0]
+      let delta = INF, j1 = -1
+      for (let j = 1; j <= cols; j++) {
+        if (!done[j]) {
+          // safe access: i0 is always a valid row index (1..rows) because rowOf is seeded with i
+          const cost = (i0 >= 1 && i0 <= rows && j >= 1 && j <= cols)
+            ? (C[i0-1][j-1] ?? INF) : INF
+          const cur = cost - u[i0] - v[j]
+          if (cur < dist[j]) { dist[j] = cur; prev[j] = j0 }
+          if (dist[j] < delta) { delta = dist[j]; j1 = j }
+        }
+      }
+      if (j1 === -1 || delta >= INF) break  // no finite augmenting path
+      for (let j = 0; j <= cols; j++) {
+        if (done[j]) { u[rowOf[j]] += delta; v[j] -= delta }
+        else dist[j] -= delta
+      }
+      j0 = j1
+    } while (rowOf[j0] !== 0)
+
+    // Augment along the path
+    let j = j0
+    while (j !== 0 && prev[j] !== -1) {
+      rowOf[j] = rowOf[prev[j]]
+      colOf[rowOf[j]] = j
+      j = prev[j]
     }
   }
 
-  const u = new Array(size + 1).fill(0)
-  const v = new Array(size + 1).fill(0)
-  const p = new Array(size + 1).fill(0)  // assignment: col → row
-  const way = new Array(size + 1).fill(0)
-
-  for (let i = 1; i <= size; i++) {
-    p[0] = i
-    let j0 = 0
-    const minVal = new Array(size + 1).fill(INF)
-    const used   = new Array(size + 1).fill(false)
-    do {
-      used[j0] = true
-      let i0 = p[j0], delta = INF, j1 = -1
-      for (let j = 1; j <= size; j++) {
-        if (!used[j]) {
-          const cur = C[i0-1][j-1] - u[i0] - v[j]
-          if (cur < minVal[j]) { minVal[j] = cur; way[j] = j0 }
-          if (minVal[j] < delta) { delta = minVal[j]; j1 = j }
-        }
-      }
-      for (let j = 0; j <= size; j++) {
-        if (used[j]) { u[p[j]] += delta; v[j] -= delta }
-        else minVal[j] -= delta
-      }
-      j0 = j1
-    } while (p[j0] !== 0)
-    do { const j1 = way[j0]; p[j0] = p[j1]; j0 = j1 } while (j0)
-  }
-
+  // Collect finite-cost assignments
   const result = []
-  for (let j = 1; j <= size; j++) {
-    if (p[j] !== 0 && p[j] <= n && j <= m) result.push([p[j]-1, j-1])
+  for (let j = 1; j <= cols; j++) {
+    if (rowOf[j] === 0) continue
+    const ri = rowOf[j] - 1  // 0-indexed row
+    const ci = j - 1          // 0-indexed col
+    if (transposed) {
+      if (costMatrix[ci]?.[ri] < INF) result.push([ci, ri])
+    } else {
+      if (costMatrix[ri]?.[ci] < INF) result.push([ri, ci])
+    }
   }
   return result
 }
