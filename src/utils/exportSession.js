@@ -46,6 +46,24 @@ function fmtTime(s) {
   return `${m}:${sec.toString().padStart(2,'0')}.${ms.toString().padStart(3,'0')}`
 }
 
+// ── Shared pressure shape lookup — single source of truth ─────────────────────
+// exportScoutSession.js imports this rather than duplicating it.
+// To rename a label: change it here only.
+export const PRESSURE_SHAPES = [
+  { code:'MP1', label:'Shooter Pressure'    },
+  { code:'MP2', label:'Keeper Pressure'     },
+  { code:'MP3', label:'Pre-Duel Pressure'   },
+  { code:'MP4', label:'Clear Pressure'      },
+  { code:'MP5', label:'Pre-Receive Pressure'},
+  { code:'OP1', label:'Static Defender'     },
+  { code:'OP2', label:'Space Cover'         },
+]
+
+export function pressureShapeLabel(code) {
+  if (!code) return ''
+  return PRESSURE_SHAPES.find(s => s.code === code)?.label || code
+}
+
 // Normalise a stored half to H1 / H2 / EX1 / EX2 for clip filenames.
 function normalizeHalf(h) {
   const s = String(h || '').toUpperCase().replace(/\s/g, '')
@@ -130,11 +148,15 @@ export async function exportSessionToXlsx({ session, tags, quality, tagCount, to
     const extras = (tag.extras || []).map(extraLabel)
     const team   = tag.team === 'home' ? home : tag.team === 'away' ? away : (tag.team || '')
     const videoLink = videoPath ? `file:///${videoPath.replace(/\\/g, '/')}` : ''
+    const psCode  = tag.pressureShape || ''
+    const psLabel = pressureShapeLabel(psCode)
     return [
       session.matchId || session.sessionId,
       session.matchName || '',
       tag.triggeredEventLabel || tag.triggeredKey || '',
       fmtTime(tag.videoTimeSec),
+      psLabel,              // Pressure Shape
+      psCode,               // Pressure Code
       extras[0] || '', extras[1] || '', extras[2] || '',
       extras[3] || '', extras[4] || '',
       team,
@@ -142,18 +164,20 @@ export async function exportSessionToXlsx({ session, tags, quality, tagCount, to
     ]
   })
 
-  const maxExtras  = Math.max(0, ...rows.map(r => r.filter(Boolean).slice(4, 9).length))
+  const maxExtras  = Math.max(0, ...rows.map(r => r.filter(Boolean).slice(6, 11).length))
   const extraCount = Math.min(5, maxExtras)
 
-  const baseHeaders  = ['Match ID', 'Match Name', 'Event', 'Timestamp']
+  const baseHeaders  = ['Match ID', 'Match Name', 'Event', 'Timestamp',
+                        'Pressure Shape', 'Pressure Code']
   const extraHeaders = Array.from({ length: extraCount }, (_, i) => `Extra ${i + 1}`)
   const headers      = [...baseHeaders, ...extraHeaders, 'Team', 'Open at Timestamp']
 
   const trimmedRows = rows.map(r => [
     r[0], r[1], r[2], r[3],
-    ...r.slice(4, 4 + extraCount),
-    r[9],
-    r[10],
+    r[4], r[5],                        // Pressure Shape, Pressure Code
+    ...r.slice(6, 6 + extraCount),     // Extras
+    r[11],                             // Team
+    r[12],                             // videoLink
   ])
 
   const qualityRow = [`Quality Score: ${quality}%  |  ${tagCount} errors / ${total} events reviewed`]

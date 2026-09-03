@@ -11,6 +11,7 @@
  */
 
 import * as XLSX from 'xlsx'
+import { pressureShapeLabel } from './exportSession'
 
 // ── Name helpers ───────────────────────────────────────────────────────────
 const HALF_LABEL = { 1:'1st Half', 2:'2nd Half', '1':'1st Half', '2':'2nd Half', 'H1':'1st Half', 'H2':'2nd Half', 'EX1':'ET1', 'EX2':'ET2', 'ET1':'ET1', 'ET2':'ET2' }
@@ -180,15 +181,9 @@ export function buildScoutWorkbook({ session, tags, quality, tagCount, total,
     const team    = tag.team === 'home' ? home : tag.team === 'away' ? away : (tag.team || '')
     const clip    = videoPath ? clipName(folderBase, tag, dt) : ''
     const errType = extras[0] || ''
-    // Pressure shape — code stored, label looked up for display
+    // Pressure shape — code stored, label looked up via shared pressureShapeLabel()
     const psCode  = tag.pressureShape || ''
-    const allShapes = [
-      {code:'MP1',label:'Shooter Pressure'}, {code:'MP2',label:'Keeper Pressure'},
-      {code:'MP3',label:'Pre-Duel Pressure'}, {code:'MP4',label:'Clear Pressure'},
-      {code:'MP5',label:'Pre-Receive Pressure'}, {code:'OP1',label:'Static Defender'},
-      {code:'OP2',label:'Space Cover'},
-    ]
-    const psLabel = psCode ? (allShapes.find(s=>s.code===psCode)?.label || psCode) : ''
+    const psLabel = pressureShapeLabel(psCode)
     return [
       matchId, matchName, half, reviewer,
       fmtTime(tag.videoTimeSec),
