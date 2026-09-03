@@ -75,10 +75,14 @@ async function loadSheetSession(sessionId) {
 
 // Resolve model session for match_id + half
 async function resolveModelSession(matchId, half) {
+  // Normalise to string — Sheet cells are always strings; Firestore may have been
+  // written as number by older code. String comparison is the standard here.
+  const mid = String(matchId).trim()
+
   // Try Firestore first
   const snap = await getDocs(query(
     collection(db, 'mark_field_sessions'),
-    where('matchId', '==', matchId),
+    where('matchId', '==', mid),
     where('half',    '==', half),
     where('is_model','==', '1'),
   ))
@@ -86,7 +90,7 @@ async function resolveModelSession(matchId, half) {
     .map(d => d.data())
     .filter(s => s.model_status === 'approved')
     .sort((a, b) => parseInt(b.model_version || 0) - parseInt(a.model_version || 0))
-  if (approved.length > 0) return { session: approved[0], source: 'firestore' }
+  if (approved.length > 0) return { session: { ...approved[0], session_id: approved[0].sessionId || approved[0].session_id }, source: 'firestore' }
 
   // Fall back to Sheet (legacy imports)
   const token = await getToken()
@@ -100,8 +104,12 @@ async function resolveModelSession(matchId, half) {
   const headers = rows[0]
   const candidates = rows.slice(1)
     .map(r => Object.fromEntries(headers.map((h, i) => [h, r[i] || ''])))
-    .filter(s => s.match_id === matchId && s.half === half &&
-                 s.is_model === '1' && s.model_status === 'approved')
+    .filter(s =>
+      String(s.match_id).trim() === mid &&   // normalise both sides to string
+      s.half === half &&
+      s.is_model === '1' &&
+      s.model_status === 'approved'
+    )
     .sort((a, b) => parseInt(b.model_version || 0) - parseInt(a.model_version || 0))
 
   if (!candidates.length) return null
@@ -183,9 +191,10 @@ export default function ComparisonPage({ onBack }) {
 
       // 2. Resolve collector session
       setLoadingMsg('Looking up collector session…')
+      const mid = String(matchId.trim())  // normalise to string
       const collSnap = await getDocs(query(
         collection(db, 'mark_field_sessions'),
-        where('matchId',         '==', matchId.trim()),
+        where('matchId',         '==', mid),
         where('half',            '==', half),
         where('collectorHrCode', '==', hrCode.trim()),
       ))
@@ -193,7 +202,7 @@ export default function ComparisonPage({ onBack }) {
       const halfAlt = half.replace('H','')
       const collSnap2 = await getDocs(query(
         collection(db, 'mark_field_sessions'),
-        where('matchId',         '==', matchId.trim()),
+        where('matchId',         '==', mid),
         where('half',            '==', halfAlt),
         where('collectorHrCode', '==', hrCode.trim()),
       ))

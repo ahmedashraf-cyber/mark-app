@@ -88,7 +88,7 @@ export function buildSessionRow(session) {
   const row = {
     schema_version:            FIELD_SCHEMA_VERSION,
     session_id:                session.sessionId        || '',
-    match_id:                  session.matchId          || '',
+    match_id:                  String(session.matchId || ''),
     half,
     collector_hr_code:         session.collectorHrCode  || '',
     collector_email:           session.collectorEmail   || '',
@@ -315,7 +315,7 @@ export async function syncSessionToSheet(session, events) {
     const sessRows = await readRange(token, FIELD_TAB_SESSIONS, 'A:E')
     const conflict = sessRows.slice(1).find(r =>
       r[0] && r[0] !== session.sessionId &&
-      r[2] === session.matchId &&
+      r[2] === String(session.matchId) &&
       r[3] === `${session.half}H` &&
       r[4] === session.collectorHrCode
     )

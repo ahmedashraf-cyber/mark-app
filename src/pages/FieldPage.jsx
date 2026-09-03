@@ -722,7 +722,7 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
     const completed = {
       ...session,
       status:                'pending_sheet_upload',
-      matchId:               saveMatchId,
+      matchId:               String(saveMatchId),
       half:                  saveHalf,
       collectorHrCode:       saveHrCode.trim(),
       homeTeamName:          saveHomeTeam.trim(),
@@ -745,7 +745,7 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
     try {
       await updateDoc(doc(db, 'mark_field_sessions', session.sessionId), {
         status: 'pending_sheet_upload',
-        matchId: saveMatchId, half: saveHalf, collectorHrCode: saveHrCode.trim(),
+        matchId: String(saveMatchId), half: saveHalf, collectorHrCode: saveHrCode.trim(),
         totalEvents: events.length, accumulatedMs: totalMs,
         collectionEndWallMs: endWall, eventsPerMinute: evPerMin,
         videoDurationSec: duration || null, collectionIncomplete: !hasHalfEnd,
