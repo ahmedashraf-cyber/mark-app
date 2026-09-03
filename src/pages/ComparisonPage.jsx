@@ -196,14 +196,13 @@ export default function ComparisonPage({ onBack }) {
 
       // 2. Resolve collector session
       setLoadingMsg('Looking up collector session…')
-      const mid = String(matchId.trim())  // normalise to string
+      const mid = String(matchId.trim())
       const collSnap = await getDocs(query(
         collection(db, 'mark_field_sessions'),
         where('matchId',         '==', mid),
         where('half',            '==', half),
         where('collectorHrCode', '==', hrCode.trim()),
       ))
-      // Also try half without H suffix
       const halfAlt = half.replace('H','')
       const collSnap2 = await getDocs(query(
         collection(db, 'mark_field_sessions'),
@@ -226,20 +225,26 @@ export default function ComparisonPage({ onBack }) {
 
       // 3. Load events
       setLoadingMsg('Loading model events…')
+      console.log('[COMPARE] mSess:', JSON.stringify({session_id:mSess.session_id, source:mSource, match_id:mSess.match_id, half:mSess.half}))
       const mEvents = await loadSessionEvents(mSess.session_id, mSource)
+      console.log('[COMPARE] mEvents loaded:', mEvents.length)
       if (mEvents.length === 0)
         throw new Error(`Model session "${mSess.session_id}" loaded 0 events. Check the field_events tab contains data for this session.`)
 
       setLoadingMsg('Loading collector events…')
+      console.log('[COMPARE] cSess:', JSON.stringify({session_id:cSess.session_id, matchId:cSess.matchId, half:cSess.half}))
       const cEvents = await loadSessionEvents(cSess.session_id, 'firestore')
+      console.log('[COMPARE] cEvents loaded:', cEvents.length)
 
       // 4. Scope
       const scopeRaw  = mSess.scope_event_ids || ''
       const scopeIds  = scopeRaw ? scopeRaw.split('|').filter(Boolean) : []
+      console.log('[COMPARE] scopeIds:', scopeIds)
 
       // 5. Run comparison
       setLoadingMsg('Running comparison…')
       const runId = `run_${Date.now()}_${Math.random().toString(36).slice(2,6)}`
+      console.log('[COMPARE] calling compare(), modelSessionId:', mSess.session_id)
       const compResult = compare(
         { ...mSess, session_id: mSess.session_id },
         mEvents,
@@ -247,9 +252,11 @@ export default function ComparisonPage({ onBack }) {
         cEvents,
         { modelSessionId: mSess.session_id, runId, scopeEventIds: scopeIds }
       )
+      console.log('[COMPARE] result:', compResult.score, compResult.verdictCounts)
       setResult({ ...compResult, runId, scopeIds })
 
     } catch(e) {
+      console.error('[COMPARE CRASH]', e, e?.stack)
       setError(e.message || String(e))
     } finally {
       setLoading(false); setLoadingMsg('')
@@ -270,9 +277,10 @@ export default function ComparisonPage({ onBack }) {
       }
       await writeComparisonResults(mSessNorm, cSessNorm, result, result.scopeIds, result.runId)
       setWritten(true)
-    } catch(e) { setError(e.message || String(e)) }
-    finally { setLoading(false); setLoadingMsg('') }
-  }
+    } catch(e) {
+      console.error('[COMPARE WRITE CRASH]', e, e?.stack)
+      setError(e.message || String(e))
+    } finally { setLoading(false); setLoadingMsg('') }
 
   const vc = result?.verdictCounts || {}
 
