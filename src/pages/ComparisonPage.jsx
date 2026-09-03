@@ -281,6 +281,7 @@ export default function ComparisonPage({ onBack }) {
       console.error('[COMPARE WRITE CRASH]', e, e?.stack)
       setError(e.message || String(e))
     } finally { setLoading(false); setLoadingMsg('') }
+  }
 
   const vc = result?.verdictCounts || {}
 
