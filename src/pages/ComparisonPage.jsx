@@ -46,14 +46,19 @@ async function loadSheetEvents(sessionId) {
   const range = encodeURIComponent('field_events!A:AK')
   const res = await fetch(`${SHEETS_BASE}/values/${range}`,
     { headers: { Authorization: `Bearer ${token}` } })
-  if (!res.ok) throw new Error(`Sheet read failed: ${res.status}`)
+  if (!res.ok) throw new Error(`Sheet read failed for field_events: ${res.status}`)
   const data = await res.json()
   const rows  = data.values || []
   if (!rows.length) return []
   const headers = rows[0]
-  const events  = rows.slice(1)
-    .filter(r => r[0] === sessionId)
+  // col A (index 0) = session_id per EVENT_COLUMNS definition
+  const sidIdx = headers.indexOf('session_id')
+  if (sidIdx === -1) throw new Error('field_events sheet missing session_id column — check header row')
+  const events = rows.slice(1)
+    .filter(r => (r[sidIdx] || '') === sessionId)
     .map(r => Object.fromEntries(headers.map((h, i) => [h, r[i] || ''])))
+  if (events.length === 0)
+    throw new Error(`No events found in field_events sheet for session_id "${sessionId}". Check the tab has data and headers match.`)
   return events
 }
 
@@ -222,6 +227,8 @@ export default function ComparisonPage({ onBack }) {
       // 3. Load events
       setLoadingMsg('Loading model events…')
       const mEvents = await loadSessionEvents(mSess.session_id, mSource)
+      if (mEvents.length === 0)
+        throw new Error(`Model session "${mSess.session_id}" loaded 0 events. Check the field_events tab contains data for this session.`)
 
       setLoadingMsg('Loading collector events…')
       const cEvents = await loadSessionEvents(cSess.session_id, 'firestore')
@@ -253,9 +260,14 @@ export default function ComparisonPage({ onBack }) {
     if (!result || !modelSess || !collSess) return
     setLoading(true); setLoadingMsg('Writing to Sheet…')
     try {
-      const mSessNorm = { ...modelSess, session_id: modelSess.session_id || modelSess.sessionId }
-      const cSessNorm = { ...collSess,  session_id: collSess.session_id  || collSess.sessionId,
-                          collector_hr_code: collSess.collectorHrCode || collSess.collector_hr_code }
+      const mSessNorm = { ...modelSess,
+        session_id: modelSess.sessionId || modelSess.session_id,  // Firestore uses sessionId
+        collector_hr_code: modelSess.collectorHrCode || modelSess.collector_hr_code || '',
+      }
+      const cSessNorm = { ...collSess,
+        session_id: collSess.sessionId || collSess.session_id,
+        collector_hr_code: collSess.collectorHrCode || collSess.collector_hr_code || '',
+      }
       await writeComparisonResults(mSessNorm, cSessNorm, result, result.scopeIds, result.runId)
       setWritten(true)
     } catch(e) { setError(e.message || String(e)) }

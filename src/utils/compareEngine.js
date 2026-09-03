@@ -122,8 +122,14 @@ function videoMatchStatus(sessA, sessB) {
 export function compare(sessA, eventsA, sessB, eventsB, config) {
   const { modelSessionId, runId, scopeEventIds } = config
 
-  // Identify model vs collector
-  const isAModel = sessA.session_id === modelSessionId
+  // Identify model vs collector — normalise both sides
+  const sidA = sessA.session_id || sessA.sessionId || ''
+  const sidB = sessB.session_id || sessB.sessionId || ''
+  if (!modelSessionId) throw new Error('compare(): config.modelSessionId is required')
+  if (sidA !== modelSessionId && sidB !== modelSessionId)
+    throw new Error(`compare(): modelSessionId "${modelSessionId}" matches neither sessA ("${sidA}") nor sessB ("${sidB}")`)
+
+  const isAModel      = sidA === modelSessionId
   const modelSess     = isAModel ? sessA : sessB
   const collectorSess = isAModel ? sessB : sessA
   let   modelEvents   = isAModel ? [...eventsA] : [...eventsB]
