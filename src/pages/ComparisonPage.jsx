@@ -22,6 +22,7 @@ import { compare } from '../utils/compareEngine'
 import { writeComparisonResults } from '../utils/comparisonSheet'
 import { FIELD_SHEET_ID, EVENT_COLUMNS } from '../config/fieldConfig'
 import { CURRENT_VERSION } from '../hooks/useUpdateCheck'
+import { msToReadable } from '../utils/fieldSheetSync'
 
 const SHEETS_BASE = `https://sheets.googleapis.com/v4/spreadsheets/${FIELD_SHEET_ID}`
 
@@ -451,7 +452,7 @@ export default function ComparisonPage({ onBack }) {
                 <table style={{ width:'100%', borderCollapse:'collapse', fontSize:11 }}>
                   <thead>
                     <tr style={{ borderBottom:'1px solid var(--b-1)' }}>
-                      {['Verdict','Event','Model ms','Collector ms','Δms','Model team','Coll team','Shape'].map(h => (
+                      {['Verdict','Event','Model time','Collector time','Δms','Model team','Coll team','Shape'].map(h => (
                         <th key={h} style={{ padding:'4px 8px', textAlign:'left',
                           fontSize:9, fontWeight:700, color:'var(--t-3)', letterSpacing:0.5,
                           textTransform:'uppercase', whiteSpace:'nowrap' }}>{h}</th>
@@ -465,9 +466,9 @@ export default function ComparisonPage({ onBack }) {
                         <td style={{ padding:'4px 8px', fontFamily:'JetBrains Mono,monospace',
                           color:'var(--t-2)' }}>{row.event_code}</td>
                         <td style={{ padding:'4px 8px', fontFamily:'JetBrains Mono,monospace',
-                          color:'var(--t-3)', fontSize:10 }}>{row.model_video_time_ms}</td>
+                          color:'var(--t-3)', fontSize:10 }}>{msToReadable(row.model_video_time_ms)}</td>
                         <td style={{ padding:'4px 8px', fontFamily:'JetBrains Mono,monospace',
-                          color:'var(--t-3)', fontSize:10 }}>{row.collector_video_time_ms}</td>
+                          color:'var(--t-3)', fontSize:10 }}>{msToReadable(row.collector_video_time_ms)}</td>
                         <td style={{ padding:'4px 8px', fontFamily:'JetBrains Mono,monospace',
                           color: parseInt(row.delta_ms)>1000?'#FF9500':'var(--t-3)',
                           fontSize:10 }}>{row.delta_ms}</td>

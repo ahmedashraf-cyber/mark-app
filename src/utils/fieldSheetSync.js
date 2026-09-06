@@ -39,11 +39,13 @@ async function getToken() {
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
-function msToReadable(ms) {
+export function msToReadable(ms) {
   if (ms === null || ms === undefined || ms === '') return ''
-  const total = Math.floor(ms / 1000)
-  const m = Math.floor(total / 60), s = total % 60, mil = Math.floor(ms % 1000)
-  return `${m}:${String(s).padStart(2,'0')}.${String(mil).padStart(3,'0')}`
+  const n = parseInt(ms)
+  if (isNaN(n)) return ''
+  const total = Math.floor(n / 1000)
+  const m = Math.floor(total / 60), s = total % 60, mil = Math.floor(n % 1000)
+  return `${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}.${String(mil).padStart(3,'0')}`
 }
 function isoOrEmpty(ms) {
   if (!ms) return ''

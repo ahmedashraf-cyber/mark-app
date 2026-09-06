@@ -69,7 +69,9 @@ export const DETAIL_COLUMNS = [
   'event_code',
   'verdict',                    // correct/missing_event/extra_event/wrong_side/wrong_timestamp/wrong_extra/missing_extra
   'model_video_time_ms',        // empty on extra_event rows
+  'model_time_readable',        // MM:SS.mmm; empty when model_video_time_ms is empty
   'collector_video_time_ms',    // empty on missing_event rows
+  'collector_time_readable',    // MM:SS.mmm; empty when collector_video_time_ms is empty
   'delta_ms',                   // abs difference; empty when one side missing
   'model_team',
   'collector_team',

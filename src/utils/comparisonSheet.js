@@ -14,6 +14,7 @@ import {
   TOLERANCE_CONFIG_VERSION, ALGORITHM_VERSION,
 } from '../config/comparisonConfig'
 import { CURRENT_VERSION } from '../hooks/useUpdateCheck'
+import { msToReadable } from './fieldSheetSync'
 
 const BASE = `https://sheets.googleapis.com/v4/spreadsheets/${FIELD_SHEET_ID}`
 
@@ -84,7 +85,11 @@ function buildScoreRow(runId, modelSess, collectorSess, result, scopeEventIds) {
 }
 
 function buildDetailRows(detailRows) {
-  return detailRows.map(d => DETAIL_COLUMNS.map(c => String(d[c] ?? '')))
+  return detailRows.map(d => DETAIL_COLUMNS.map(c => {
+    if (c === 'model_time_readable')     return msToReadable(d.model_video_time_ms     || '')
+    if (c === 'collector_time_readable') return msToReadable(d.collector_video_time_ms || '')
+    return String(d[c] ?? '')
+  }))
 }
 
 // ── Main write function ────────────────────────────────────────────────────
