@@ -500,6 +500,47 @@ function calcGroupScore(group, baseEvents, amendments, refinements, reviewerIds)
   return { score, reviewed: groupBase.length, edited: uniqueEdited }
 }
 
+// ── TO Extras score ───────────────────────────────────────────────────────────
+// Scores extra-attribute errors on TO events specifically.
+// denominator = TO base events that have at least one extras amendment (from reviewer)
+// errors      = count of those extras amendments where ≥1 changed field is in DT_EXTRA_TO
+// score       = max(0, Math.round(((denom - errors) / denom) * 100))
+// Returns { score, reviewed: denom, errors } or null if denom === 0.
+function calcToExtrasScore(baseEvents, amendments, reviewerIds) {
+  const DT_TO_EVENTS  = new Set(['hold-up-duel','leg-stretch-duel','positioning-duel','separation-duel'])
+  const DT_EXTRA_TO   = new Set(['launch','step-in','right-take-on','left-take-on','sliding','right','left','none'])
+  const reviewerSet   = new Set((reviewerIds || []).map(Number))
+
+  // TO base events
+  const toEvents  = (baseEvents || []).filter(e => DT_TO_EVENTS.has(e.name || ''))
+  const toKeySet  = new Set(toEvents.map(e => e.key))
+
+  // Extras amendments on TO events authored by reviewer
+  const toExtrasAmends = (amendments || []).filter(a =>
+    toKeySet.has(a.key) &&
+    (a.type === 'extras' || a.type === 'impact') &&
+    reviewerSet.has(Number(a.author))
+  )
+
+  // denominator: unique TO event keys that have at least one extras amendment
+  const reviewedKeys = new Set(toExtrasAmends.map(a => a.key))
+  const denom = reviewedKeys.size
+  if (denom === 0) return null
+
+  // errors: extras amendments where ≥1 changed field is in DT_EXTRA_TO
+  // A wrong-extras amendment means the reviewer changed a field — if that field
+  // is a TO-relevant extra, it counts as an error.
+  let errors = 0
+  toExtrasAmends.forEach(a => {
+    const fields = a.payload?.fields || {}
+    const changedTOFields = Object.keys(fields).filter(k => DT_EXTRA_TO.has(k))
+    if (changedTOFields.length > 0) errors++
+  })
+
+  const score = Math.max(0, Math.round(((denom - errors) / denom) * 100))
+  return { score, reviewed: denom, errors }
+}
+
 function calcEventTypeScores(baseEvents, amendments, reviewerIds) {
   const byName = {}
   ;(baseEvents || []).forEach(e => {
@@ -531,6 +572,9 @@ function AuditDashboard({ results, score, abcScores, onFullReport, session, iden
   const getScore       = k => rg ? (rg[k]?.score  ?? null) : null
   const getViewed      = k => rg ? (rg[k]?.viewed  ?? 0)   : 0
   const getErrors      = k => rg ? (rg[k]?.errors  ?? 0)   : 0
+
+  // TO Extras card
+  const toEx = results.toExtrasScore ?? null  // { score, reviewed, errors } or null
 
   // Module scores from bridge defect_type engine
   const moduleScoresDT     = rg?.moduleScoresDT    || null
@@ -697,18 +741,19 @@ function AuditDashboard({ results, score, abcScores, onFullReport, session, iden
   return (
     <div className="scale-in" style={{ display:'flex', flexDirection:'column', gap:10 }}>
 
-      {/* ══ ROW 1: 6 Score Cards ══════════════════════════════════════════════ */}
-      <div style={{ display:'grid', gridTemplateColumns:'repeat(7,1fr)', gap:8 }}>
+      {/* ══ ROW 1: 8 Score Cards ══════════════════════════════════════════════ */}
+      <div style={{ display:'grid', gridTemplateColumns:'repeat(8,1fr)', gap:8 }}>
 
         {[
-          { label:'Overall',      sc:overallScore, color:null,      err:overallErrors, rev:overallViewed, revLbl:'REVIEWED', isOverall:true },
-          { label:'Half Quality', sc:hqScore,      color:'#FF9F0A', err:hqErrors,      rev:hqDenom,       revLbl:'TOT EVTS', isOverall:true },
-          { label:'A — Review',   sc:getScore('A'),  color:'#0A84FF', err:getErrors('A'),  rev:getViewed('A'),  revLbl:'REVIEWED' },
-          { label:'B — Review',   sc:getScore('B'),  color:'#30D158', err:getErrors('B'),  rev:getViewed('B'),  revLbl:'REVIEWED' },
-          { label:'C — Review',   sc:getScore('C'),  color:'#FFD60A', err:getErrors('C'),  rev:getViewed('C'),  revLbl:'REVIEWED' },
-          { label:'D — Review',   sc:getScore('D'),  color:'#FF9F0A', err:getErrors('D'),  rev:getViewed('D'),  revLbl:'REVIEWED' },
-          { label:'TO — Review',  sc:getScore('TO'), color:'#BF5AF2', err:getErrors('TO'), rev:getViewed('TO'), revLbl:'REVIEWED' },
-        ].map(({ label, sc, color, err, rev, revLbl, isOverall }) => {
+          { label:'Overall',         sc:overallScore,   color:null,      err:overallErrors,   rev:overallViewed,    revLbl:'REVIEWED', isOverall:true },
+          { label:'Half Quality',    sc:hqScore,        color:'#FF9F0A', err:hqErrors,        rev:hqDenom,          revLbl:'TOT EVTS', isOverall:true },
+          { label:'A — Review',      sc:getScore('A'),  color:'#0A84FF', err:getErrors('A'),  rev:getViewed('A'),   revLbl:'REVIEWED' },
+          { label:'B — Review',      sc:getScore('B'),  color:'#30D158', err:getErrors('B'),  rev:getViewed('B'),   revLbl:'REVIEWED' },
+          { label:'C — Review',      sc:getScore('C'),  color:'#FFD60A', err:getErrors('C'),  rev:getViewed('C'),   revLbl:'REVIEWED' },
+          { label:'D — Review',      sc:getScore('D'),  color:'#FF9F0A', err:getErrors('D'),  rev:getViewed('D'),   revLbl:'REVIEWED' },
+          { label:'TO — Review',     sc:getScore('TO'), color:'#BF5AF2', err:getErrors('TO'), rev:getViewed('TO'),  revLbl:'REVIEWED' },
+          { label:'TO Extras',       sc:toEx?.score ?? null, color:'#BF5AF2', err:toEx?.errors ?? 0, rev:toEx?.reviewed ?? 0, revLbl:'TO EXT', isEmpty: toEx === null },
+        ].map(({ label, sc, color, err, rev, revLbl, isOverall, isEmpty }) => {
           const col = isOverall && sc !== null ? scoreColor(sc) : (color ?? 'var(--t-3)')
           const circ = 2 * Math.PI * 26
           const offset = circ - ((sc ?? 0) / 100) * circ
@@ -718,11 +763,11 @@ function AuditDashboard({ results, score, abcScores, onFullReport, session, iden
               borderRadius:10, padding:'12px 8px',
               display:'flex', flexDirection:'column', alignItems:'center', gap:7,
               position:'relative', overflow:'hidden',
-              opacity: sc === null ? 0.4 : 1,
+              opacity: (sc === null && !isEmpty) ? 0.4 : 1,
               transition:'all .3s var(--ease-out-expo)',
             }}>
               {sc !== null && <div style={{ position:'absolute', top:0, left:'50%', transform:'translateX(-50%)', width:'50%', height:2, background:`linear-gradient(90deg,transparent,${col},transparent)` }}/>}
-              <span style={{ fontSize:9, fontWeight:800, color:col, letterSpacing:1.5, textTransform:'uppercase' }}>{label}</span>
+              <span style={{ fontSize:9, fontWeight:800, color: isEmpty ? 'var(--t-3)' : col, letterSpacing:1.5, textTransform:'uppercase' }}>{label}</span>
               <div style={{ position:'relative', width:68, height:68 }}>
                 <svg width="68" height="68" viewBox="0 0 68 68">
                   <circle cx="34" cy="34" r="26" fill="none" stroke="var(--b-2)" strokeWidth="6"/>
@@ -734,11 +779,16 @@ function AuditDashboard({ results, score, abcScores, onFullReport, session, iden
                   )}
                 </svg>
                 <div style={{ position:'absolute', inset:0, display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center' }}>
-                  <span style={{ fontFamily:'Inter', fontWeight:900, fontSize:17, color:col, lineHeight:1 }}>{sc !== null ? sc : '—'}</span>
-                  {sc !== null && <span style={{ fontSize:7, color:'var(--t-3)', fontWeight:700, letterSpacing:1 }}>%</span>}
+                  {isEmpty
+                    ? <span style={{ fontSize:8, color:'var(--t-3)', fontWeight:700, textAlign:'center', letterSpacing:0.5 }}>NO TO{'\n'}EXTRAS</span>
+                    : <>
+                        <span style={{ fontFamily:'Inter', fontWeight:900, fontSize:17, color:col, lineHeight:1 }}>{sc !== null ? sc : '—'}</span>
+                        {sc !== null && <span style={{ fontSize:7, color:'var(--t-3)', fontWeight:700, letterSpacing:1 }}>%</span>}
+                      </>
+                  }
                 </div>
               </div>
-              {sc !== null && (
+              {sc !== null && !isEmpty && (
                 <div style={{ display:'flex', gap:6, alignItems:'center' }}>
                   <div style={{ textAlign:'center' }}>
                     <div style={{ fontFamily:'JetBrains Mono,monospace', fontSize:11, fontWeight:700, color:'#FF453A', lineHeight:1 }}>{err}</div>
@@ -2135,7 +2185,9 @@ export default function AuditPage({ session, onBack, onFullReport, initialResult
         abc[key] = calcGroupScore(REVIEW_GROUPS[key], data.baseEvents, data.amendments, refinements, reviewerIds)
       }
       const eventTypeScores = calcEventTypeScores(data.baseEvents, data.amendments, reviewerIds)
+      const toExtrasScore   = calcToExtrasScore(data.baseEvents, data.amendments, reviewerIds)
       data.eventTypeScores = eventTypeScores
+      data.toExtrasScore   = toExtrasScore
 
       const seedIdentities = data.identities || []
       data.identityMap = buildIdentityMap(seedIdentities, rosterRef.current)
@@ -2694,6 +2746,7 @@ export default function AuditPage({ session, onBack, onFullReport, initialResult
         // New: A/B/C/D/TO defect_type scores
         qualityScoreD:      abc?.D?.score  ?? null,
         qualityScoreTO:     abc?.TO?.score ?? null,
+        qualityScoreToExtras: data.toExtrasScore?.score ?? null,
         // New: module × defect_type matrix
         moduleScoresDT:     data.reviewGroupScores?.moduleScoresDT    ? JSON.stringify(data.reviewGroupScores.moduleScoresDT)    : null,
         moduleDefectMatrix: data.reviewGroupScores?.moduleDefectMatrix ? JSON.stringify(data.reviewGroupScores.moduleDefectMatrix) : null,
