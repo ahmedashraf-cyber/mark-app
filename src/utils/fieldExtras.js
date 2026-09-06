@@ -1042,8 +1042,8 @@ export const POSSESSION_RULES = {
                          },
                        },
   // goal_keeper_smoother removed — was separate event, now GK_TYPE_SMOTHER variant
-  pressure_start:      { performedBy:'non-possessing',   flip:'never'      },
-  pressure_end:        { performedBy:'non-possessing',   flip:'never'      },
+  pressure_start:      { performedBy:'explicit',         flip:'never'      },  // always prompt — pressure can be applied by either team regardless of possession
+  pressure_end:        { performedBy:'non-possessing',   flip:'never'      },  // team inherited from pressure_start via teamInherited flag on the open-state pair
   card:                { performedBy:'explicit',         flip:'never'      },
   substitution:        { performedBy:'explicit',         flip:'never'      },
   tactical_shift:      { performedBy:'explicit',         flip:'never'      },
