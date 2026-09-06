@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import { db } from '../firebase/config'
 import { collection, query, where, getDocs, doc, setDoc, getDoc, serverTimestamp, orderBy, limit } from 'firebase/firestore'
 import { useAuth } from '../hooks/useAuth.jsx'
-import { useAdmin } from '../hooks/useAdmin.js'
+import { useAdmin, useInternalUser } from '../hooks/useAdmin.js'
 import { importRosterCsv } from '../data/roster.js'
 import { CURRENT_VERSION } from '../hooks/useUpdateCheck'
 import { HALVES, formatHalf } from '../utils/half.js'
@@ -146,7 +146,15 @@ async function fetchMatchesFromSheet() {
 
 export default function SessionSetupPage({ onSessionStart, lastResult, onShowHistory, onWatchSession }) {
   const { profile, logout } = useAuth()
-  const isAdmin = useAdmin(profile)
+  const isAdmin    = useAdmin(profile)
+  const isInternal = useInternalUser(profile)
+
+  // Log access level once when profile resolves
+  useEffect(() => {
+    if (profile?.email) {
+      console.log('[MARK] Access level:', isInternal ? 'internal' : 'external', '|', profile.email)
+    }
+  }, [profile?.email])
   const rosterFileRef = useRef(null)
   const [rosterImporting, setRosterImporting] = useState(false)
 
@@ -435,7 +443,7 @@ export default function SessionSetupPage({ onSessionStart, lastResult, onShowHis
             </div>
 
             {/* Mode cards */}
-            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:16,width:'100%',maxWidth:600}}>
+            <div style={{display:'grid',gridTemplateColumns:isInternal?'1fr 1fr':'1fr',gap:16,width:'100%',maxWidth:600}}>
               {[
                 {
                   mode:'scout',
@@ -506,7 +514,7 @@ export default function SessionSetupPage({ onSessionStart, lastResult, onShowHis
                   desc:'Enter a match ID and collector HR-code to score their session against the approved model answer.',
                   steps:['Enter match ID and half','Select collector HR-code','View score and detail'],
                 },
-              ].map(m => (
+              ].filter(m => isInternal || m.mode === 'field').map(m => (
                 <div key={m.mode}
                   onClick={() => {
                     // Field mode: start immediately — no match/half needed

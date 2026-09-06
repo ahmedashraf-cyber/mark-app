@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { AuthProvider, useAuth } from './hooks/useAuth.jsx'
+import { useInternalUser } from './hooks/useAdmin.js'
 import { checkForUpdate } from './hooks/useUpdateCheck.js'
 import LoginPage from './pages/LoginPage'
 import SessionSetupPage from './pages/SessionSetupPage'
@@ -154,7 +155,8 @@ function BackgroundDecoration() {
 }
 
 function AppInner() {
-  const { user, loading } = useAuth()
+  const { user, loading, profile } = useAuth()
+  const isInternal = useInternalUser(profile)
   const [session, setSession]         = useState(null)
   const [historySession, setHistorySession] = useState(null)
   const [showHistory, setShowHistory] = useState(false)
@@ -226,6 +228,8 @@ function AppInner() {
             onBack={() => setShowAuditReport(false)}
           />
         ) : session?.mode === 'audit' ? (
+          // Route guard: redirect external users back to setup
+          !isInternal ? (setSession(null), null) :
           <AuditPage
             session={session}
             initialResults={auditResults}
@@ -244,8 +248,11 @@ function AppInner() {
             onBack={() => setSession(null)}
           />
         ) : session?.mode === 'comparison' ? (
+          !isInternal ? (setSession(null), null) :
           <ComparisonPage onBack={() => setSession(null)} />
         ) : session ? (
+          // Scout mode (ReviewPage) — guard external users
+          !isInternal ? (setSession(null), null) :
           <ReviewPage
             session={session}
             bridgeSyncStatus={bridgeSyncStatus}
