@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { db } from '../firebase/config'
-import { collection, query, where, getDocs, doc, setDoc, getDoc, serverTimestamp, orderBy, limit } from 'firebase/firestore'
+import { collection, query, where, getDocs, doc, setDoc, getDoc, deleteDoc, serverTimestamp, orderBy, limit } from 'firebase/firestore'
 import { useAuth } from '../hooks/useAuth.jsx'
 import { useAdmin, useInternalUser } from '../hooks/useAdmin.js'
 import { importRosterCsv } from '../data/roster.js'
@@ -240,6 +240,57 @@ export default function SessionSetupPage({ onSessionStart, lastResult, onShowHis
       m.awayTeam.toLowerCase().includes(q) ||
       m.competition.toLowerCase().includes(q)
   })
+
+  const [reCollectConfirm, setReCollectConfirm] = useState(false)
+  const [reCollectLoading, setReCollectLoading] = useState(false)
+
+  // Delete a completed Scout session and ALL linked data before re-collecting.
+  // Deletes: mark_error_tags, mark_audit_sessions, mark_audit_amendments,
+  //          mark_sessions, mark_locks.
+  // Drive folder: left in place (no Drive delete API — orphaned folder is harmless).
+  async function deleteSessionCompletely(sessionId, matchId, halfId, mode) {
+    const lockId = `${matchId}_${halfId}_${mode}`
+    const BATCH  = 400
+
+    async function deleteQueryDocs(q) {
+      const snap = await getDocs(q)
+      for (let i = 0; i < snap.docs.length; i += BATCH) {
+        await Promise.all(snap.docs.slice(i, i + BATCH).map(d => deleteDoc(d.ref)))
+      }
+      return snap.docs.length
+    }
+
+    const [tags, auditSess, auditAmends] = await Promise.all([
+      deleteQueryDocs(query(collection(db, 'mark_error_tags'),       where('sessionId', '==', sessionId))),
+      deleteQueryDocs(query(collection(db, 'mark_audit_sessions'),   where('sessionId', '==', sessionId))),
+      deleteQueryDocs(query(collection(db, 'mark_audit_amendments'), where('sessionId', '==', sessionId))),
+    ])
+    await deleteDoc(doc(db, 'mark_sessions', sessionId))
+    await deleteDoc(doc(db, 'mark_locks', lockId)).catch(() => {})
+
+    console.log(`[MARK] deleteSessionCompletely: ${sessionId} — deleted ${tags} tags, ${auditSess} audit sessions, ${auditAmends} audit amendments`)
+  }
+
+  async function handleReCollect() {
+    if (!completedSession || !selectedMatch || !selectedHalf) return
+    setReCollectLoading(true)
+    const mode = reviewMode || 'scout'
+    try {
+      await deleteSessionCompletely(
+        completedSession.id || completedSession.sessionId,
+        selectedMatch.productionId,
+        selectedHalf.id,
+        mode,
+      )
+      setLockStatus('free')
+      setCompletedSession(null)
+      setReCollectConfirm(false)
+      await handleStartSession()
+    } catch (e) {
+      setError('Re-collect failed: ' + e.message)
+      setReCollectLoading(false)
+    }
+  }
 
   async function checkHalfLock() {
     if (!selectedMatch || !selectedHalf) return
@@ -655,7 +706,7 @@ export default function SessionSetupPage({ onSessionStart, lastResult, onShowHis
             ) : filteredMatches.map((m, i) => {
               const isSelected = selectedMatch?.productionId === m.productionId
               return (
-                <div key={i} onClick={() => { setSelectedMatch(m); setLockStatus(null); setSelectedHalf(null); setCompletedSession(null) }}
+                <div key={i} onClick={() => { setSelectedMatch(m); setLockStatus(null); setSelectedHalf(null); setCompletedSession(null); setReCollectConfirm(false) }}
                   style={{
                     padding:'11px 20px', borderBottom:'1px solid var(--b-1)', cursor:'pointer',
                     background: isSelected ? 'rgba(232,89,12,0.08)' : 'transparent',
@@ -702,7 +753,7 @@ export default function SessionSetupPage({ onSessionStart, lastResult, onShowHis
                 const isSelected = selectedHalf?.id === h.id
                 return (
                   <button key={h.id}
-                    onClick={() => { setSelectedHalf(h); setLockStatus(null); setCompletedSession(null) }}
+                    onClick={() => { setSelectedHalf(h); setLockStatus(null); setCompletedSession(null); setReCollectConfirm(false) }}
                     disabled={!selectedMatch}
                     style={{
                       padding:'12px 8px', borderRadius:10, cursor: selectedMatch ? 'pointer' : 'not-allowed',
@@ -784,6 +835,41 @@ export default function SessionSetupPage({ onSessionStart, lastResult, onShowHis
                   onClick={() => completedSession && onShowHistory && onShowHistory(completedSession)}>
                   View Review →
                 </button>
+
+                {/* Re-collect — internal (@hudl.com) users only */}
+                {isInternal && !reCollectConfirm && (
+                  <button style={{width:'100%',padding:'11px',fontSize:13,fontWeight:600,
+                    background:'rgba(255,69,58,0.08)',border:'1px solid rgba(255,69,58,0.3)',
+                    borderRadius:8,color:'#FF453A',cursor:'pointer'}}
+                    onClick={() => setReCollectConfirm(true)}>
+                    Re-collect
+                  </button>
+                )}
+
+                {/* Inline confirmation */}
+                {isInternal && reCollectConfirm && (
+                  <div style={{background:'rgba(255,69,58,0.08)',border:'1px solid rgba(255,69,58,0.3)',
+                    borderRadius:8,padding:'12px',display:'flex',flexDirection:'column',gap:8}}>
+                    <div style={{fontSize:11,color:'#FF453A',fontWeight:600,lineHeight:1.4}}>
+                      This will permanently delete the previous review and start fresh. This cannot be undone.
+                    </div>
+                    <div style={{display:'flex',gap:6}}>
+                      <button style={{flex:1,padding:'8px 0',fontSize:12,background:'transparent',
+                        border:'1px solid var(--b-1)',borderRadius:6,color:'var(--t-3)',cursor:'pointer'}}
+                        onClick={() => setReCollectConfirm(false)}>
+                        Cancel
+                      </button>
+                      <button style={{flex:2,padding:'8px 0',fontSize:12,fontWeight:700,
+                        background:'rgba(255,69,58,0.15)',border:'1px solid rgba(255,69,58,0.5)',
+                        borderRadius:6,color:'#FF453A',cursor:'pointer'}}
+                        disabled={reCollectLoading}
+                        onClick={handleReCollect}>
+                        {reCollectLoading ? 'Deleting…' : 'Yes, delete and re-collect'}
+                      </button>
+                    </div>
+                  </div>
+                )}
+
                 {isAdmin && (
                   <button className="btn-orange" style={{width:'100%',padding:'11px',fontSize:13,fontWeight:600}}
                     disabled={loading} onClick={handleStartSession}>
