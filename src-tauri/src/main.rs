@@ -453,7 +453,7 @@ fn patch_one_shortcut(lnk_path: &std::path::Path) -> Result<bool, String> {
 // marker) does not match, so it gets stripped and replaced — that's what was
 // previously frozen by a fixed marker. Bump this whenever the embedded bridge
 // changes so existing installs re-embed the new version.
-const ASAR_MARKER: &str = "<!-- MARK_BRIDGE_INJECTED v7.8.61 -->";
+const ASAR_MARKER: &str = "<!-- MARK_BRIDGE_INJECTED v7.8.62 -->";
 
 #[command]
 fn patch_tag_once_asar() -> Result<String, String> {
@@ -872,7 +872,7 @@ async fn firebase_google_sign_in() -> Result<serde_json::Value, String> {
     let page = "<html><body style='font-family:sans-serif;text-align:center;padding-top:60px'><h2>Signed in to MARK</h2><p>You can close this tab.</p></body></html>";
     let _ = stream.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", page.len(), page).as_bytes()).await;
 
-    // Exchange code for tokens — Desktop client returns id_token
+    // Exchange code for tokens using Desktop client
     let client = reqwest::Client::new();
     let token_resp: serde_json::Value = client
         .post("https://oauth2.googleapis.com/token")
@@ -890,15 +890,18 @@ async fn firebase_google_sign_in() -> Result<serde_json::Value, String> {
         return Err(format!("Token error: {}", token_resp["error_description"].as_str().unwrap_or("unknown")));
     }
 
-    let id_token = token_resp["id_token"].as_str()
-        .ok_or_else(|| "No id_token in Google response".to_string())?;
+    // Use access_token (not id_token) — Firebase Identity Toolkit accepts
+    // access_tokens from any Google OAuth client, unlike id_tokens which must
+    // match the Firebase web client audience.
+    let access_token = token_resp["access_token"].as_str()
+        .ok_or_else(|| "No access_token in Google response".to_string())?;
 
-    // Exchange Google id_token for Firebase idToken via Identity Toolkit REST
+    // Exchange Google access_token for Firebase idToken via Identity Toolkit REST
     let firebase_api_key = "AIzaSyB-HWh2kJgoPDwzYhZWgW6pi8uZK8u9K7U";
     let firebase_resp: serde_json::Value = client
         .post(format!("https://identitytoolkit.googleapis.com/v1/accounts:signInWithIdp?key={}", firebase_api_key))
         .json(&serde_json::json!({
-            "postBody": format!("id_token={}&providerId=google.com", id_token),
+            "postBody": format!("access_token={}&providerId=google.com", access_token),
             "requestUri": "http://localhost",
             "returnIdpCredential": true,
             "returnSecureToken": true
