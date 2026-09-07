@@ -3,6 +3,9 @@ import { initializeApp } from 'firebase/app'
 import {
   getAuth,
   signInWithEmailAndPassword,
+  signInWithPopup,
+  signInWithCredential,
+  GoogleAuthProvider,
   onAuthStateChanged,
   signOut,
   setPersistence,
@@ -25,4 +28,4 @@ export const db = getFirestore(app)
 
 setPersistence(auth, browserLocalPersistence)
 
-export { signInWithEmailAndPassword, onAuthStateChanged, signOut }
+export { signInWithEmailAndPassword, signInWithPopup, signInWithCredential, GoogleAuthProvider, onAuthStateChanged, signOut }
