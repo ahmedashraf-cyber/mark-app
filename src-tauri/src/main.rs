@@ -453,7 +453,7 @@ fn patch_one_shortcut(lnk_path: &std::path::Path) -> Result<bool, String> {
 // marker) does not match, so it gets stripped and replaced — that's what was
 // previously frozen by a fixed marker. Bump this whenever the embedded bridge
 // changes so existing installs re-embed the new version.
-const ASAR_MARKER: &str = "<!-- MARK_BRIDGE_INJECTED v7.8.58 -->";
+const ASAR_MARKER: &str = "<!-- MARK_BRIDGE_INJECTED v7.8.59 -->";
 
 #[command]
 fn patch_tag_once_asar() -> Result<String, String> {
@@ -823,9 +823,9 @@ const GMAIL_SCOPE: &str = "https://www.googleapis.com/auth/gmail.send openid ema
 
 // Open the browser, run the loopback OAuth flow, return the token JSON
 // (access_token, refresh_token, expires_in, ...).
-// Google sign-in specifically for Firebase Authentication.
-// Uses the Firebase web client ID (not the Drive/Sheets client).
-// Returns { id_token, access_token, email } for use with Firebase signInWithCredential.
+// Google sign-in for Firebase Authentication using implicit flow + Firebase Identity Toolkit.
+// No client secret needed — exchanges Google access_token for Firebase idToken via REST.
+// Returns { firebase_id_token, email }.
 #[command]
 async fn firebase_google_sign_in() -> Result<serde_json::Value, String> {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -836,9 +836,9 @@ async fn firebase_google_sign_in() -> Result<serde_json::Value, String> {
     let port = listener.local_addr().map_err(|e| e.to_string())?.port();
     let redirect_uri = format!("http://127.0.0.1:{}", port);
 
-    // Use Firebase web client ID + openid/email scope to get an id_token
+    // Implicit flow — response_type=token returns access_token in URL fragment
     let auth_url = format!(
-        "https://accounts.google.com/o/oauth2/v2/auth?client_id={}&redirect_uri={}&response_type=code&scope={}&access_type=offline&prompt=select_account",
+        "https://accounts.google.com/o/oauth2/v2/auth?client_id={}&redirect_uri={}&response_type=token&scope={}&prompt=select_account",
         urlencoding::encode(FIREBASE_WEB_CLIENT_ID),
         urlencoding::encode(&redirect_uri),
         urlencoding::encode("openid email profile"),
@@ -851,58 +851,61 @@ async fn firebase_google_sign_in() -> Result<serde_json::Value, String> {
             .spawn()
             .map_err(|e| format!("Could not open browser: {}", e))?;
     }
+    #[cfg(not(target_os = "windows"))]
+    { let _ = &auth_url; }
 
-    let (mut stream, _) = listener
-        .accept()
-        .await
+    // First connection: browser hits our server. Serve a page that reads the
+    // URL fragment (which contains access_token) and POSTs it back to us.
+    let (mut stream, _) = listener.accept().await
         .map_err(|e| format!("No sign-in redirect received: {}", e))?;
-    let mut buf = vec![0u8; 8192];
-    let n = stream.read(&mut buf).await.map_err(|e| e.to_string())?;
-    let req = String::from_utf8_lossy(&buf[..n]);
-    let first_line = req.lines().next().unwrap_or("");
-    let code = first_line
-        .split_whitespace()
-        .nth(1)
-        .and_then(|p| p.split('?').nth(1))
-        .and_then(|qs| qs.split('&').find(|kv| kv.starts_with("code=")))
-        .map(|kv| kv.trim_start_matches("code="))
-        .map(|c| urlencoding::decode(c).map(|s| s.into_owned()).unwrap_or_else(|_| c.to_string()))
-        .ok_or_else(|| "Sign-in was cancelled (no authorization code).".to_string())?;
+    let extract_page = r#"<html><body><script>
+var p={};window.location.hash.substring(1).split('&').forEach(function(s){var kv=s.split('=');p[kv[0]]=decodeURIComponent(kv[1]||'');});
+fetch('/',{method:'POST',headers:{'Content-Type':'text/plain'},body:p.access_token||''}).then(function(){
+document.body.innerHTML='<div style="font-family:sans-serif;text-align:center;padding-top:60px"><h2>Signed in to MARK</h2><p>You can close this tab.</p></div>';});
+</script></body></html>"#;
+    let r1 = format!("HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", extract_page.len(), extract_page);
+    let _ = stream.write_all(r1.as_bytes()).await;
+    drop(stream);
 
-    let page = "<html><body style='font-family:sans-serif;text-align:center;padding-top:60px'><h2>Signed in to MARK</h2><p>You can close this tab and return to MARK.</p></body></html>";
-    let resp = format!(
-        "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-        page.len(), page
-    );
-    let _ = stream.write_all(resp.as_bytes()).await;
+    // Second connection: the JS POSTs the access_token back
+    let (mut stream2, _) = listener.accept().await
+        .map_err(|e| format!("No token POST received: {}", e))?;
+    let mut buf = vec![0u8; 4096];
+    let n = stream2.read(&mut buf).await.map_err(|e| e.to_string())?;
+    let raw = String::from_utf8_lossy(&buf[..n]);
+    let access_token = raw.split("\r\n\r\n").nth(1).unwrap_or("").trim().to_string();
+    let _ = stream2.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").await;
 
-    // Exchange code for tokens using Firebase web client
-    let firebase_client_secret = option_env!("MARK_FIREBASE_CLIENT_SECRET").unwrap_or("");
-    let client = reqwest::Client::new();
-    let params = [
-        ("client_id",     FIREBASE_WEB_CLIENT_ID),
-        ("client_secret", firebase_client_secret),
-        ("code",          code.as_str()),
-        ("grant_type",    "authorization_code"),
-        ("redirect_uri",  redirect_uri.as_str()),
-    ];
-    let token_json: serde_json::Value = client
-        .post("https://oauth2.googleapis.com/token")
-        .form(&params)
-        .send()
-        .await
-        .map_err(|e| format!("Token exchange failed: {}", e))?
-        .json()
-        .await
-        .map_err(|e| format!("Token parse failed: {}", e))?;
-
-    if token_json.get("error").is_some() {
-        return Err(format!("Google sign-in error: {}", token_json));
+    if access_token.is_empty() {
+        return Err("Sign-in was cancelled — no access token received.".to_string());
     }
-    Ok(token_json)
+
+    // Exchange Google access_token for Firebase idToken via Identity Toolkit REST
+    let firebase_api_key = "AIzaSyB-HWh2kJgoPDwzYhZWgW6pi8uZK8u9K7U";
+    let client = reqwest::Client::new();
+    let body = serde_json::json!({
+        "postBody": format!("access_token={}&providerId=google.com", access_token),
+        "requestUri": "http://localhost",
+        "returnIdpCredential": true,
+        "returnSecureToken": true
+    });
+    let resp: serde_json::Value = client
+        .post(format!("https://identitytoolkit.googleapis.com/v1/accounts:signInWithIdp?key={}", firebase_api_key))
+        .json(&body)
+        .send().await.map_err(|e| format!("Firebase REST call failed: {}", e))?
+        .json().await.map_err(|e| format!("Firebase REST parse failed: {}", e))?;
+
+    if let Some(err) = resp.get("error") {
+        return Err(format!("Firebase sign-in error: {}", err["message"].as_str().unwrap_or("unknown")));
+    }
+    Ok(serde_json::json!({
+        "firebase_id_token": resp["idToken"],
+        "email": resp["email"],
+    }))
 }
 
 #[command]
+async fn google_oauth_sign_in() -> Result<serde_json::Value, String> {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")

@@ -38,8 +38,8 @@ export default function LoginPage() {
     try {
       // Uses firebase_google_sign_in (Firebase web client ID — accepts id_token for Firebase Auth)
       const tokenJson = await invoke('firebase_google_sign_in')
-      const idToken = tokenJson.id_token
-      if (!idToken) throw new Error('No id_token returned from Google sign-in')
+      const idToken = tokenJson.firebase_id_token
+      if (!idToken) throw new Error('No Firebase id_token returned')
 
       // Sign into Firebase with the Google id_token
       const credential = GoogleAuthProvider.credential(idToken)
