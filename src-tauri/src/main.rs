@@ -453,7 +453,7 @@ fn patch_one_shortcut(lnk_path: &std::path::Path) -> Result<bool, String> {
 // marker) does not match, so it gets stripped and replaced — that's what was
 // previously frozen by a fixed marker. Bump this whenever the embedded bridge
 // changes so existing installs re-embed the new version.
-const ASAR_MARKER: &str = "<!-- MARK_BRIDGE_INJECTED v7.8.57 -->";
+const ASAR_MARKER: &str = "<!-- MARK_BRIDGE_INJECTED v7.8.58 -->";
 
 #[command]
 fn patch_tag_once_asar() -> Result<String, String> {
@@ -798,6 +798,10 @@ fn send_key_to_collection_app(_exe_name: String, _key_code: String) -> Result<St
 // secret is treated as non-confidential by Google, so embedding it here is fine.
 const OAUTH_CLIENT_ID: &str =
     "680107914768-8ndh7e12cluc5jbptfrarg7rlrg9mfjt.apps.googleusercontent.com";
+// Firebase web client ID — used for Google sign-in into Firebase Auth.
+// Different from OAUTH_CLIENT_ID (which is for Drive/Sheets).
+const FIREBASE_WEB_CLIENT_ID: &str =
+    "1008124793031-sfvl5dp8vdlltfrokj7oum0dns9br3af.apps.googleusercontent.com";
 // Client secret is injected at BUILD time from the MARK_GOOGLE_CLIENT_SECRET
 // GitHub Actions secret — never committed to the repo. (Empty in local builds.)
 fn oauth_client_secret() -> &'static str {
@@ -819,8 +823,86 @@ const GMAIL_SCOPE: &str = "https://www.googleapis.com/auth/gmail.send openid ema
 
 // Open the browser, run the loopback OAuth flow, return the token JSON
 // (access_token, refresh_token, expires_in, ...).
+// Google sign-in specifically for Firebase Authentication.
+// Uses the Firebase web client ID (not the Drive/Sheets client).
+// Returns { id_token, access_token, email } for use with Firebase signInWithCredential.
 #[command]
-async fn google_oauth_sign_in() -> Result<serde_json::Value, String> {
+async fn firebase_google_sign_in() -> Result<serde_json::Value, String> {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .map_err(|e| format!("Local sign-in server failed to start: {}", e))?;
+    let port = listener.local_addr().map_err(|e| e.to_string())?.port();
+    let redirect_uri = format!("http://127.0.0.1:{}", port);
+
+    // Use Firebase web client ID + openid/email scope to get an id_token
+    let auth_url = format!(
+        "https://accounts.google.com/o/oauth2/v2/auth?client_id={}&redirect_uri={}&response_type=code&scope={}&access_type=offline&prompt=select_account",
+        urlencoding::encode(FIREBASE_WEB_CLIENT_ID),
+        urlencoding::encode(&redirect_uri),
+        urlencoding::encode("openid email profile"),
+    );
+
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("rundll32")
+            .args(["url.dll,FileProtocolHandler", &auth_url])
+            .spawn()
+            .map_err(|e| format!("Could not open browser: {}", e))?;
+    }
+
+    let (mut stream, _) = listener
+        .accept()
+        .await
+        .map_err(|e| format!("No sign-in redirect received: {}", e))?;
+    let mut buf = vec![0u8; 8192];
+    let n = stream.read(&mut buf).await.map_err(|e| e.to_string())?;
+    let req = String::from_utf8_lossy(&buf[..n]);
+    let first_line = req.lines().next().unwrap_or("");
+    let code = first_line
+        .split_whitespace()
+        .nth(1)
+        .and_then(|p| p.split('?').nth(1))
+        .and_then(|qs| qs.split('&').find(|kv| kv.starts_with("code=")))
+        .map(|kv| kv.trim_start_matches("code="))
+        .map(|c| urlencoding::decode(c).map(|s| s.into_owned()).unwrap_or_else(|_| c.to_string()))
+        .ok_or_else(|| "Sign-in was cancelled (no authorization code).".to_string())?;
+
+    let page = "<html><body style='font-family:sans-serif;text-align:center;padding-top:60px'><h2>Signed in to MARK</h2><p>You can close this tab and return to MARK.</p></body></html>";
+    let resp = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+        page.len(), page
+    );
+    let _ = stream.write_all(resp.as_bytes()).await;
+
+    // Exchange code for tokens using Firebase web client
+    let firebase_client_secret = option_env!("MARK_FIREBASE_CLIENT_SECRET").unwrap_or("");
+    let client = reqwest::Client::new();
+    let params = [
+        ("client_id",     FIREBASE_WEB_CLIENT_ID),
+        ("client_secret", firebase_client_secret),
+        ("code",          code.as_str()),
+        ("grant_type",    "authorization_code"),
+        ("redirect_uri",  redirect_uri.as_str()),
+    ];
+    let token_json: serde_json::Value = client
+        .post("https://oauth2.googleapis.com/token")
+        .form(&params)
+        .send()
+        .await
+        .map_err(|e| format!("Token exchange failed: {}", e))?
+        .json()
+        .await
+        .map_err(|e| format!("Token parse failed: {}", e))?;
+
+    if token_json.get("error").is_some() {
+        return Err(format!("Google sign-in error: {}", token_json));
+    }
+    Ok(token_json)
+}
+
+#[command]
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
@@ -2479,6 +2561,7 @@ fn save_binary_file(path: String, data: Vec<u8>) -> Result<(), String> {
             get_file_size,
             save_xlsx_file,
             google_oauth_sign_in,
+            firebase_google_sign_in,
             google_oauth_refresh,
             drive_create_sheet,
             cut_clips,

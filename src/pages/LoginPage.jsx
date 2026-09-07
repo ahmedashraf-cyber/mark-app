@@ -36,9 +36,8 @@ export default function LoginPage() {
   async function handleGoogle() {
     setError(''); setGLoading(true)
     try {
-      // Use the existing Rust OAuth flow (opens browser, handles redirect)
-      // Returns { id_token, access_token, ... }
-      const tokenJson = await invoke('google_oauth_sign_in')
+      // Uses firebase_google_sign_in (Firebase web client ID — accepts id_token for Firebase Auth)
+      const tokenJson = await invoke('firebase_google_sign_in')
       const idToken = tokenJson.id_token
       if (!idToken) throw new Error('No id_token returned from Google sign-in')
 
