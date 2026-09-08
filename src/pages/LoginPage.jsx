@@ -4,35 +4,43 @@ import { auth, signInWithEmailAndPassword } from '../firebase/config'
 const TRAINERS_SHEET_ID  = '1bErhs3yQiJMl6PXRJFgH512wLgfm2dM6Cpj2owimLuw'
 const SHEETS_API_KEY     = 'AIzaSyDEO-0MZ4-LOdIJ7aIyscgmLWGN5h8MpNI'
 
-// Searches both tabs for an HR code.
+// Searches both Trainers and Supervisors tabs for an HR code.
+// Tries multiple tab name variants exactly as FIELD does.
 // Trainers tab:    A=HR Code, B=Name, C=?, D=?, E=Email, F=Password
 // Supervisors tab: A=HR Code, B=Name, C=Role, D=Email,  E=Password
 async function lookupHrCode(hrCode) {
   const code = hrCode.trim().replace(/\s+/g, '').toUpperCase()
 
   const tabs = [
-    { name: 'Trainers',    range: 'A2:F', emailCol: 4, passCol: 5 },
-    { name: 'Supervisors', range: 'A2:E', emailCol: 3, passCol: 4 },
+    // Trainers — try all name variants FIELD uses
+    { names: ['Trainers','trainers','Batch Trainers','batch trainers','TRAINERS','Trainer'], range: 'A2:F', emailCol: 4, passCol: 5 },
+    // Supervisors — try all name variants
+    { names: ['Supervisors','supervisors','SUPERVISORS','Supervisor'], range: 'A2:E', emailCol: 3, passCol: 4 },
   ]
 
-  for (const tab of tabs) {
-    try {
-      const url = `https://sheets.googleapis.com/v4/spreadsheets/${TRAINERS_SHEET_ID}/values/${encodeURIComponent(tab.name + '!' + tab.range)}?key=${SHEETS_API_KEY}`
-      const res  = await fetch(url)
-      if (!res.ok) continue
-      const data = await res.json()
-      const rows = data.values || []
-      const row  = rows.find(r => (r[0] || '').replace(/\s+/g,'').trim().toUpperCase() === code)
-      if (row) {
-        return {
-          hrCode:   row[0],
-          name:     row[1] || '',
-          email:    (row[tab.emailCol] || '').replace(/\s+/g,'').trim().toLowerCase(),
-          password: (row[tab.passCol]  || '').trim(),
-          tab:      tab.name,
+  for (const tabGroup of tabs) {
+    for (const tabName of tabGroup.names) {
+      try {
+        const url = `https://sheets.googleapis.com/v4/spreadsheets/${TRAINERS_SHEET_ID}/values/${encodeURIComponent(tabName + '!' + tabGroup.range)}?key=${SHEETS_API_KEY}`
+        const res  = await fetch(url)
+        if (!res.ok) continue
+        const data = await res.json()
+        const rows = data.values || []
+        if (!rows.length) continue
+        const row = rows.find(r => (r[0] || '').replace(/\s+/g,'').trim().toUpperCase() === code)
+        if (row) {
+          return {
+            hrCode:   row[0],
+            name:     row[1] || '',
+            email:    (row[tabGroup.emailCol] || '').replace(/\s+/g,'').trim().toLowerCase(),
+            password: (row[tabGroup.passCol]  || '').trim(),
+            tab:      tabName,
+          }
         }
-      }
-    } catch(e) { /* try next tab */ }
+        // Tab found but code not in it — no need to try other name variants for this tab
+        break
+      } catch(e) { /* try next variant */ }
+    }
   }
   return null
 }
@@ -69,10 +77,10 @@ export default function LoginPage() {
     setError(''); setLoading(true)
     try {
       const user = await lookupHrCode(hrCode)
-      if (!user)         throw new Error('HR Code not found — check the code and try again')
-      if (!user.email)   throw new Error('No email set for this HR Code')
-      if (!user.password) throw new Error('No password set for this HR Code')
-      await signInWithEmailAndPassword(auth, user.email.trim(), user.password.trim())
+      if (!user)          throw new Error('HR Code not found — check the code and try again')
+      if (!user.email)    throw new Error('No email set for this HR Code — contact your admin')
+      if (!user.password) throw new Error('No password set for this HR Code — contact your admin')
+      await signInWithEmailAndPassword(auth, user.email, user.password)
     } catch (err) {
       setLoading(false)
       setError(EMAIL_ERRORS[err.code] || err.message || 'Sign-in failed')
