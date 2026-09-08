@@ -4,19 +4,37 @@ import { auth, signInWithEmailAndPassword } from '../firebase/config'
 const TRAINERS_SHEET_ID  = '1bErhs3yQiJMl6PXRJFgH512wLgfm2dM6Cpj2owimLuw'
 const SHEETS_API_KEY     = 'AIzaSyDEO-0MZ4-LOdIJ7aIyscgmLWGN5h8MpNI'
 
-// Fetch all rows from the Trainers sheet (tab: "Trainers")
-// Columns: A=HR Code, B=Name, C=Role, D=Type, E=Email, F=Password
+// Searches both tabs for an HR code.
+// Trainers tab:    A=HR Code, B=Name, C=?, D=?, E=Email, F=Password
+// Supervisors tab: A=HR Code, B=Name, C=Role, D=Email,  E=Password
 async function lookupHrCode(hrCode) {
-  const range = encodeURIComponent('Trainers!A:F')
-  const url   = `https://sheets.googleapis.com/v4/spreadsheets/${TRAINERS_SHEET_ID}/values/${range}?key=${SHEETS_API_KEY}`
-  const res   = await fetch(url)
-  if (!res.ok) throw new Error('Could not reach Trainers sheet')
-  const data  = await res.json()
-  const rows  = (data.values || []).slice(1) // skip header row
-  const code  = hrCode.trim().toUpperCase()
-  const row   = rows.find(r => (r[0] || '').trim().toUpperCase() === code)
-  if (!row) return null
-  return { hrCode: row[0], name: row[1], role: row[2], email: row[4], password: row[5] }
+  const code = hrCode.trim().replace(/\s+/g, '').toUpperCase()
+
+  const tabs = [
+    { name: 'Trainers',    range: 'A2:F', emailCol: 4, passCol: 5 },
+    { name: 'Supervisors', range: 'A2:E', emailCol: 3, passCol: 4 },
+  ]
+
+  for (const tab of tabs) {
+    try {
+      const url = `https://sheets.googleapis.com/v4/spreadsheets/${TRAINERS_SHEET_ID}/values/${encodeURIComponent(tab.name + '!' + tab.range)}?key=${SHEETS_API_KEY}`
+      const res  = await fetch(url)
+      if (!res.ok) continue
+      const data = await res.json()
+      const rows = data.values || []
+      const row  = rows.find(r => (r[0] || '').replace(/\s+/g,'').trim().toUpperCase() === code)
+      if (row) {
+        return {
+          hrCode:   row[0],
+          name:     row[1] || '',
+          email:    (row[tab.emailCol] || '').replace(/\s+/g,'').trim().toLowerCase(),
+          password: (row[tab.passCol]  || '').trim(),
+          tab:      tab.name,
+        }
+      }
+    } catch(e) { /* try next tab */ }
+  }
+  return null
 }
 
 export default function LoginPage() {
