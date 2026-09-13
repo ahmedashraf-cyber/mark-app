@@ -399,13 +399,54 @@ async fn drill_scan_folder(folder_id: String) -> Result<serde_json::Value, Strin
         }
     }
 
-    // stable order so clip_index is reproducible across scans
+    // Stable order so clip_index is reproducible across scans — and NATURAL
+    // order, not plain text. A text sort gives Q1, Q10, Q11, Q2, which is a
+    // confusing sequence to tag an answer key in. Digit runs are compared as
+    // numbers so Q2 precedes Q10.
+    fn natural_cmp(a: &str, b: &str) -> std::cmp::Ordering {
+        let (a, b) = (a.to_lowercase(), b.to_lowercase());
+        let mut x = a.chars().peekable();
+        let mut y = b.chars().peekable();
+        loop {
+            match (x.peek().copied(), y.peek().copied()) {
+                (None, None) => return std::cmp::Ordering::Equal,
+                (None, Some(_)) => return std::cmp::Ordering::Less,
+                (Some(_), None) => return std::cmp::Ordering::Greater,
+                (Some(cx), Some(cy)) => {
+                    if cx.is_ascii_digit() && cy.is_ascii_digit() {
+                        let mut nx = String::new();
+                        while let Some(c) = x.peek().copied() {
+                            if c.is_ascii_digit() { nx.push(c); x.next(); } else { break }
+                        }
+                        let mut ny = String::new();
+                        while let Some(c) = y.peek().copied() {
+                            if c.is_ascii_digit() { ny.push(c); y.next(); } else { break }
+                        }
+                        // parse as u64; fall back to length then text if absurdly long
+                        let vx = nx.parse::<u64>().unwrap_or(u64::MAX);
+                        let vy = ny.parse::<u64>().unwrap_or(u64::MAX);
+                        match vx.cmp(&vy) {
+                            std::cmp::Ordering::Equal => continue,
+                            other => return other,
+                        }
+                    } else {
+                        x.next();
+                        y.next();
+                        match cx.cmp(&cy) {
+                            std::cmp::Ordering::Equal => continue,
+                            other => return other,
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     out.sort_by(|a, b| {
-        a["video_filename"]
-            .as_str()
-            .unwrap_or("")
-            .to_lowercase()
-            .cmp(&b["video_filename"].as_str().unwrap_or("").to_lowercase())
+        natural_cmp(
+            a["video_filename"].as_str().unwrap_or(""),
+            b["video_filename"].as_str().unwrap_or(""),
+        )
     });
 
     Ok(serde_json::json!({ "clips": out, "count": out.len() }))
@@ -638,7 +679,7 @@ fn patch_one_shortcut(lnk_path: &std::path::Path) -> Result<bool, String> {
 // marker) does not match, so it gets stripped and replaced — that's what was
 // previously frozen by a fixed marker. Bump this whenever the embedded bridge
 // changes so existing installs re-embed the new version.
-const ASAR_MARKER: &str = "<!-- MARK_BRIDGE_INJECTED v7.8.70 -->";
+const ASAR_MARKER: &str = "<!-- MARK_BRIDGE_INJECTED v7.8.71 -->";
 
 #[command]
 fn patch_tag_once_asar() -> Result<String, String> {
