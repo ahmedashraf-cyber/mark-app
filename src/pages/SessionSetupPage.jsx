@@ -544,10 +544,26 @@ export default function SessionSetupPage({ onSessionStart, lastResult, onShowHis
                       <circle cx="16" cy="16" r="6.5" stroke="#30D158" strokeWidth="1.5" opacity="0.4"/>
                     </svg>
                   ),
-                  title:'Field',
+                  title:'Tag',
                   sub:'Collect events as primary data',
                   desc:'Open any video and tag events directly — no match ID needed, no error types. Pure data collection.',
                   steps:['Open any local video file','Tag events with keyboard shortcuts','Export collected data'],
+                },
+                {
+                  mode:'drill',
+                  color:'#E8590C',
+                  glyph: (
+                    <svg width="32" height="32" viewBox="0 0 32 32" fill="none">
+                      <circle cx="16" cy="16" r="12" stroke="#E8590C" strokeWidth="2"/>
+                      <circle cx="16" cy="16" r="7" stroke="#E8590C" strokeWidth="1.5" opacity="0.55"/>
+                      <circle cx="16" cy="16" r="2.4" fill="#E8590C"/>
+                      <path d="M26 6l-7 7" stroke="#E8590C" strokeWidth="1.8" strokeLinecap="round"/>
+                    </svg>
+                  ),
+                  title:'Drill',
+                  sub:'Train and test on short clips',
+                  desc:'Trainees tag short clips and are scored against a trainer answer key. Timed, with a pass mark.',
+                  steps:['Pick a quiz assigned to you','Tag each clip before time runs out','See your score at the end'],
                 },
                 {
                   mode:'comparison',
@@ -565,7 +581,7 @@ export default function SessionSetupPage({ onSessionStart, lastResult, onShowHis
                   desc:'Enter a match ID and collector HR-code to score their session against the approved model answer.',
                   steps:['Enter match ID and half','Select collector HR-code','View score and detail'],
                 },
-              ].filter(m => isInternal || m.mode === 'field').map(m => (
+              ].filter(m => isInternal || m.mode === 'field' || m.mode === 'drill').map(m => (
                 <div key={m.mode}
                   onClick={() => {
                     // Field mode: start immediately — no match/half needed
@@ -576,6 +592,10 @@ export default function SessionSetupPage({ onSessionStart, lastResult, onShowHis
                     // Comparison mode: start immediately
                     if (m.mode === 'comparison') {
                       onSessionStart({ mode: 'comparison', sessionId: null })
+                      return
+                    }
+                    if (m.mode === 'drill') {
+                      onSessionStart({ mode: 'drill', sessionId: null })
                       return
                     }
                     setReviewMode(m.mode)

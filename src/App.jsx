@@ -8,6 +8,7 @@ import SessionSetupPage from './pages/SessionSetupPage'
 import ReviewPage from './pages/ReviewPage'
 import FieldPage from './pages/FieldPage'
 import ComparisonPage from './pages/ComparisonPage'
+import DrillPage from './pages/DrillPage'
 import SessionHistoryPage from './pages/SessionHistoryPage'
 import AuditPage from './pages/AuditPage'
 import AuditReportPage from './pages/AuditReportPage'
@@ -209,7 +210,7 @@ function AppInner() {
     </PageTransition>
   )
 
-  const pageId = observingSession ? `observer-${observingSession.sessionId}` : showAuditReport ? 'audit-report' : session?.mode === 'audit' ? `audit-${session.sessionId}` : session?.mode === 'field' ? `field-${Date.now()}` : session ? `review-${session.sessionId}` : showHistory ? 'history' : 'setup'
+  const pageId = observingSession ? `observer-${observingSession.sessionId}` : showAuditReport ? 'audit-report' : session?.mode === 'audit' ? `audit-${session.sessionId}` : session?.mode === 'drill' ? `drill-${Date.now()}` : session?.mode === 'field' ? `field-${Date.now()}` : session ? `review-${session.sessionId}` : showHistory ? 'history' : 'setup'
 
   return (
     <>
@@ -247,6 +248,8 @@ function AppInner() {
             onDone={() => setSession(null)}
             onBack={() => setSession(null)}
           />
+        ) : session?.mode === 'drill' ? (
+          <DrillPage onBack={() => setSession(null)} />
         ) : session?.mode === 'comparison' ? (
           !isInternal ? (setSession(null), null) :
           <ComparisonPage onBack={() => setSession(null)} />

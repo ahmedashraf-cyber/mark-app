@@ -25,6 +25,11 @@ export const PEOPLE_COL = { hrCode: 0, name: 1, role: 2, email: 3, password: 4 }
 // Created automatically on first quiz. The ID is stored in Firestore at
 // mark_config/drill so every install resolves the same spreadsheet, and a lock
 // prevents two simultaneous creators producing two spreadsheets.
+// The spreadsheet a creator made and shared with the service account as Editor.
+// MARK cannot create this itself — a service account has no Drive storage quota
+// and so can never own a file. Verified working: six tabs, read and write.
+// A value in Firestore at mark_config/drill overrides this.
+export const DRILL_SHEET_ID_DEFAULT = '1Pu1FsD0rPqRo4ydzMBTJgv5V8KnB601GkStd7eGV7gY'
 export const DRILL_SPREADSHEET_NAME = 'MARK — DRILL'
 export const DRILL_CONFIG_DOC       = 'drill'          // mark_config/drill
 
