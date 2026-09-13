@@ -422,6 +422,83 @@ async fn drill_clip_url(
     Ok(format!("http://127.0.0.1:{}/drive?id={}", port, file_id))
 }
 
+// ─── DRILL: create the dedicated DRILL spreadsheet ───────────────────────────
+// DRILL data lives in its OWN spreadsheet, not the TAG one. A Google Sheet caps
+// at 10 million cells; quiz results at 500 trainees would consume roughly a
+// million per quiz, so sharing the TAG spreadsheet would eventually jam TAG,
+// Comparison and Audit all at once. Isolating it contains the blast radius.
+//
+// Creates every tab up front and shares with the supplied emails as writers, so
+// the trainers can open and read it directly.
+#[command]
+async fn drill_create_spreadsheet(
+    title: String,
+    tabs: Vec<String>,
+    share_emails: Vec<String>,
+) -> Result<String, String> {
+    let token = get_google_access_token().await?;
+    let client = reqwest::Client::new();
+
+    let sheets: Vec<serde_json::Value> = tabs
+        .iter()
+        .map(|t| serde_json::json!({ "properties": { "title": t } }))
+        .collect();
+
+    let body = serde_json::json!({
+        "properties": { "title": title },
+        "sheets": sheets
+    });
+
+    let resp: serde_json::Value = client
+        .post("https://sheets.googleapis.com/v4/spreadsheets")
+        .bearer_auth(&token)
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("Create spreadsheet failed: {}", e))?
+        .json()
+        .await
+        .map_err(|e| format!("Create spreadsheet parse failed: {}", e))?;
+
+    if let Some(err) = resp.get("error") {
+        return Err(format!(
+            "Create spreadsheet error: {}",
+            err["message"].as_str().unwrap_or("unknown")
+        ));
+    }
+
+    let id = resp["spreadsheetId"]
+        .as_str()
+        .ok_or_else(|| "No spreadsheetId returned".to_string())?
+        .to_string();
+
+    // Share with each trainer. A failure here is non-fatal — the spreadsheet
+    // exists and MARK can still read and write it via the service account, the
+    // humans just cannot open it until sharing succeeds.
+    for email in share_emails.iter().filter(|e| !e.trim().is_empty()) {
+        let perm = serde_json::json!({
+            "role": "writer",
+            "type": "user",
+            "emailAddress": email
+        });
+        let url = format!(
+            "https://www.googleapis.com/drive/v3/files/{}/permissions?sendNotificationEmail=false&supportsAllDrives=true",
+            id
+        );
+        if let Err(e) = client
+            .post(&url)
+            .bearer_auth(&token)
+            .json(&perm)
+            .send()
+            .await
+        {
+            eprintln!("[DRILL] share with {} failed: {}", email, e);
+        }
+    }
+
+    Ok(id)
+}
+
 // ─── Native file picker via rfd ───────────────────────────────────────────────
 #[command]
 fn pick_video_file() -> Option<String> {
@@ -638,7 +715,7 @@ fn patch_one_shortcut(lnk_path: &std::path::Path) -> Result<bool, String> {
 // marker) does not match, so it gets stripped and replaced — that's what was
 // previously frozen by a fixed marker. Bump this whenever the embedded bridge
 // changes so existing installs re-embed the new version.
-const ASAR_MARKER: &str = "<!-- MARK_BRIDGE_INJECTED v7.8.66 -->";
+const ASAR_MARKER: &str = "<!-- MARK_BRIDGE_INJECTED v7.8.67 -->";
 
 #[command]
 fn patch_tag_once_asar() -> Result<String, String> {
@@ -2767,6 +2844,7 @@ fn save_binary_file(path: String, data: Vec<u8>) -> Result<(), String> {
             firebase_google_sign_in,
             drill_scan_folder,
             drill_clip_url,
+            drill_create_spreadsheet,
             google_oauth_refresh,
             drive_create_sheet,
             cut_clips,
