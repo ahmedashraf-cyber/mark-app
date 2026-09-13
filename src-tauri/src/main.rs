@@ -149,8 +149,83 @@ async fn start_video_server(video_path: Arc<Mutex<Option<String>>>) -> u16 {
         listener.local_addr().unwrap().port()
     };
 
+    // ── DRILL: proxy a Drive file so <video> can play it ─────────────────────
+    // A <video> element cannot send an Authorization header, and DRILL clips
+    // live in a private Drive folder. So the element points here and we attach
+    // the service-account bearer token on its behalf. Range headers are passed
+    // through both ways so seeking and looping still work.
+    async fn serve_drive(
+        headers: HeaderMap,
+        Query(params): Query<HashMap<String, String>>,
+    ) -> Response<axum::body::Body> {
+        use axum::body::Body;
+
+        let file_id = match params.get("id") {
+            Some(id) if !id.is_empty() => id.clone(),
+            _ => {
+                return Response::builder()
+                    .status(StatusCode::BAD_REQUEST)
+                    .body(Body::from("missing id"))
+                    .unwrap()
+            }
+        };
+
+        let token = match get_google_access_token().await {
+            Ok(t) => t,
+            Err(e) => {
+                return Response::builder()
+                    .status(StatusCode::UNAUTHORIZED)
+                    .body(Body::from(format!("drive auth failed: {}", e)))
+                    .unwrap()
+            }
+        };
+
+        let url = format!(
+            "https://www.googleapis.com/drive/v3/files/{}?alt=media&supportsAllDrives=true",
+            file_id
+        );
+        let client = reqwest::Client::new();
+        let mut req = client.get(&url).bearer_auth(&token);
+        // forward the browser's Range request so seeking works
+        if let Some(range) = headers.get("range") {
+            if let Ok(r) = range.to_str() {
+                req = req.header("Range", r);
+            }
+        }
+
+        let upstream = match req.send().await {
+            Ok(r) => r,
+            Err(e) => {
+                return Response::builder()
+                    .status(StatusCode::BAD_GATEWAY)
+                    .body(Body::from(format!("drive fetch failed: {}", e)))
+                    .unwrap()
+            }
+        };
+
+        let status = upstream.status();
+        let mut builder = Response::builder().status(status);
+        // carry through the headers <video> needs for seeking
+        for name in ["content-type", "content-length", "content-range", "accept-ranges"] {
+            if let Some(v) = upstream.headers().get(name) {
+                builder = builder.header(name, v);
+            }
+        }
+        let bytes = match upstream.bytes().await {
+            Ok(b) => b,
+            Err(e) => {
+                return Response::builder()
+                    .status(StatusCode::BAD_GATEWAY)
+                    .body(Body::from(format!("drive read failed: {}", e)))
+                    .unwrap()
+            }
+        };
+        builder.body(Body::from(bytes)).unwrap()
+    }
+
     let app = Router::new()
         .route("/video", get(serve_video).head(serve_video))
+        .route("/drive", get(serve_drive).head(serve_drive))
         .with_state(video_path);
 
     let addr = format!("127.0.0.1:{}", port);
@@ -235,6 +310,116 @@ async fn get_video_url(
     let port = *state.port.lock().unwrap();
     // Store path in state — server reads it directly, no URL encoding needed
     Ok(format!("http://127.0.0.1:{}/video", port))
+}
+
+// ─── DRILL: scan a Drive folder for video clips ───────────────────────────────
+// Recurses into subfolders (your decision: scan everything inside the folder).
+// Uses the service account, which holds full `drive` scope — the user-OAuth
+// path only has `drive.file` and can never see a folder it did not create.
+// The folder must be shared with SA_CLIENT_EMAIL or this returns empty.
+#[command]
+async fn drill_scan_folder(folder_id: String) -> Result<serde_json::Value, String> {
+    let token = get_google_access_token()
+        .await
+        .map_err(|e| format!("Drive auth failed: {}", e))?;
+    let client = reqwest::Client::new();
+
+    let mut out: Vec<serde_json::Value> = Vec::new();
+    // breadth-first over subfolders, with a hard cap so a pathological tree
+    // cannot hang the scan
+    let mut queue: Vec<String> = vec![folder_id.clone()];
+    let mut visited: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut guard = 0;
+
+    while let Some(current) = queue.pop() {
+        guard += 1;
+        if guard > 200 {
+            break;
+        }
+        if !visited.insert(current.clone()) {
+            continue;
+        }
+
+        let mut page_token: Option<String> = None;
+        loop {
+            let q = format!("'{}' in parents and trashed=false", current.replace('\'', "\\'"));
+            let mut req = client
+                .get("https://www.googleapis.com/drive/v3/files")
+                .query(&[
+                    ("q", q.as_str()),
+                    ("fields", "nextPageToken,files(id,name,mimeType,size,videoMediaMetadata(durationMillis))"),
+                    ("pageSize", "200"),
+                    ("supportsAllDrives", "true"),
+                    ("includeItemsFromAllDrives", "true"),
+                ])
+                .bearer_auth(&token);
+            if let Some(pt) = &page_token {
+                req = req.query(&[("pageToken", pt.as_str())]);
+            }
+
+            let resp: serde_json::Value = req
+                .send()
+                .await
+                .map_err(|e| format!("Drive list failed: {}", e))?
+                .json()
+                .await
+                .map_err(|e| format!("Drive parse failed: {}", e))?;
+
+            if let Some(err) = resp.get("error") {
+                return Err(format!(
+                    "Drive error: {}. Is the folder shared with {} ?",
+                    err["message"].as_str().unwrap_or("unknown"),
+                    SA_CLIENT_EMAIL
+                ));
+            }
+
+            if let Some(files) = resp["files"].as_array() {
+                for f in files {
+                    let mime = f["mimeType"].as_str().unwrap_or("");
+                    if mime == "application/vnd.google-apps.folder" {
+                        if let Some(id) = f["id"].as_str() {
+                            queue.push(id.to_string());
+                        }
+                    } else if mime.starts_with("video/") {
+                        out.push(serde_json::json!({
+                            "drive_file_id": f["id"],
+                            "video_filename": f["name"],
+                            "mime_type": mime,
+                            "size_bytes": f["size"],
+                            "duration_ms": f["videoMediaMetadata"]["durationMillis"],
+                        }));
+                    }
+                }
+            }
+
+            match resp["nextPageToken"].as_str() {
+                Some(pt) => page_token = Some(pt.to_string()),
+                None => break,
+            }
+        }
+    }
+
+    // stable order so clip_index is reproducible across scans
+    out.sort_by(|a, b| {
+        a["video_filename"]
+            .as_str()
+            .unwrap_or("")
+            .to_lowercase()
+            .cmp(&b["video_filename"].as_str().unwrap_or("").to_lowercase())
+    });
+
+    Ok(serde_json::json!({ "clips": out, "count": out.len() }))
+}
+
+// Local URL a <video> element can play for a Drive clip. The /drive route
+// attaches the bearer token, which the element itself cannot do.
+#[command]
+async fn drill_clip_url(
+    file_id: String,
+    state: tauri::State<'_, VideoState>,
+) -> Result<String, String> {
+    let port = *state.port.lock().unwrap();
+    Ok(format!("http://127.0.0.1:{}/drive?id={}", port, file_id))
 }
 
 // ─── Native file picker via rfd ───────────────────────────────────────────────
@@ -453,7 +638,7 @@ fn patch_one_shortcut(lnk_path: &std::path::Path) -> Result<bool, String> {
 // marker) does not match, so it gets stripped and replaced — that's what was
 // previously frozen by a fixed marker. Bump this whenever the embedded bridge
 // changes so existing installs re-embed the new version.
-const ASAR_MARKER: &str = "<!-- MARK_BRIDGE_INJECTED v7.8.65 -->";
+const ASAR_MARKER: &str = "<!-- MARK_BRIDGE_INJECTED v7.8.66 -->";
 
 #[command]
 fn patch_tag_once_asar() -> Result<String, String> {
@@ -2580,6 +2765,8 @@ fn save_binary_file(path: String, data: Vec<u8>) -> Result<(), String> {
             save_xlsx_file,
             google_oauth_sign_in,
             firebase_google_sign_in,
+            drill_scan_folder,
+            drill_clip_url,
             google_oauth_refresh,
             drive_create_sheet,
             cut_clips,
