@@ -17,7 +17,7 @@ export const DRILL_TRAINEE_ROLE_SUBSTRING = 'Collector'
 
 // ── Source sheet for people (same one HR-code login reads) ───────────────────
 export const PEOPLE_SHEET_ID  = '1bErhs3yQiJMl6PXRJFgH512wLgfm2dM6Cpj2owimLuw'
-export const PEOPLE_TAB_NAMES = ['Supervisors', 'supervisors', 'SUPERVISORS', 'Supervisor']
+export const PEOPLE_TAB_NAMES = ['Supervisor', 'Supervisors', 'supervisors', 'SUPERVISORS']
 // Supervisors tab layout: A=HR code, B=Name, C=Role, D=Email, E=Password
 export const PEOPLE_COL = { hrCode: 0, name: 1, role: 2, email: 3, password: 4 }
 
