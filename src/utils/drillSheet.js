@@ -22,9 +22,9 @@
  */
 import { invoke } from '@tauri-apps/api/core'
 import { db } from '../firebase/config'
-import { doc, getDoc, setDoc, runTransaction } from 'firebase/firestore'
+import { doc, getDoc, setDoc } from 'firebase/firestore'
 import {
-  DRILL_SPREADSHEET_NAME, DRILL_CONFIG_DOC, DRILL_TABS,
+  DRILL_CONFIG_DOC, DRILL_TABS,
 } from '../config/drillConfig'
 
 const SHEETS_BASE = 'https://sheets.googleapis.com/v4/spreadsheets'
@@ -50,77 +50,102 @@ export async function getDrillSheetId() {
 }
 
 /**
- * Resolve the spreadsheet, creating it once if needed.
- * `shareEmails` are given writer access so trainers can open it.
+ * ONE-TIME SETUP — point MARK at a spreadsheet a human already created.
  *
- * The transaction is what makes this safe: two creators racing both read the
- * doc, but only one commits, and the loser re-reads the winner's ID.
+ * MARK cannot create the spreadsheet itself: a service account has zero Drive
+ * storage quota, so it can never OWN a file. (Folders work, which is why the
+ * Scout export can make them — a folder holds no content.) Writing to a file
+ * owned by a real person is fine and consumes their quota, which is how the TAG
+ * spreadsheet already works.
+ *
+ * So a creator makes an empty spreadsheet, shares it with the service account
+ * as Editor, and pastes the link here once. MARK then adds the six tabs and
+ * their headers itself and records the ID in Firestore, so every other install
+ * finds the same spreadsheet without repeating the step.
  */
-export async function ensureDrillSheet(shareEmails = []) {
-  const existing = await getDrillSheetId()
-  if (existing) return existing
+export function parseSpreadsheetId(input) {
+  const s = String(input || '').trim()
+  if (!s) return null
+  const m = s.match(/\/spreadsheets\/d\/([a-zA-Z0-9_-]+)/)
+  if (m) return m[1]
+  if (/^[a-zA-Z0-9_-]{30,}$/.test(s)) return s
+  return null
+}
 
-  const ref = doc(db, 'mark_config', DRILL_CONFIG_DOC)
-
-  // claim the right to create
-  const claimed = await runTransaction(db, async tx => {
-    const snap = await tx.get(ref)
-    const data = snap.exists() ? snap.data() : {}
-    if (data.spreadsheetId) return { id: data.spreadsheetId, mine: false }
-    // someone else may be mid-creation — respect a fresh lock
-    const lockAt = data.creatingAt?.toMillis?.() ?? data.creatingAt ?? 0
-    if (lockAt && Date.now() - lockAt < 60_000) return { id: null, mine: false }
-    tx.set(ref, { creatingAt: Date.now() }, { merge: true })
-    return { id: null, mine: true }
-  })
-
-  if (claimed.id) { _sheetId = claimed.id; return claimed.id }
-
-  if (!claimed.mine) {
-    // another instance is creating it — wait for them
-    for (let i = 0; i < 30; i++) {
-      await new Promise(r => setTimeout(r, 1000))
-      const id = await getDrillSheetId()
-      if (id) return id
-    }
-    throw new Error('Another user is still setting up the DRILL sheet. Try again shortly.')
+/** Can the service account actually reach it? Returns the title on success. */
+export async function verifySheetAccess(spreadsheetId) {
+  const t = await token()
+  const res = await fetch(
+    `${SHEETS_BASE}/${spreadsheetId}?fields=properties.title,sheets.properties`,
+    { headers: { Authorization: `Bearer ${t}` } })
+  if (res.status === 404) {
+    throw new Error('Not found. Check the link, and that it is shared with ' +
+      'mark-reporter@mark-app-498618.iam.gserviceaccount.com')
   }
-
-  // we hold the lock — create, seed headers, record the ID
-  try {
-    const id = await invoke('drill_create_spreadsheet', {
-      title: DRILL_SPREADSHEET_NAME,
-      tabs: DRILL_TABS.map(t => t.name),
-      shareEmails,
-    })
-    await writeAllHeaders(id)
-    await setDoc(ref, {
-      spreadsheetId: id,
-      createdAt: Date.now(),
-      creatingAt: null,
-    }, { merge: true })
-    _sheetId = id
-    return id
-  } catch (e) {
-    // release the lock so the next attempt is not blocked for a minute
-    await setDoc(ref, { creatingAt: null }, { merge: true }).catch(() => {})
-    throw e
+  if (res.status === 403) {
+    throw new Error('No permission. Share it with ' +
+      'mark-reporter@mark-app-498618.iam.gserviceaccount.com as Editor.')
+  }
+  if (!res.ok) throw new Error(`Could not open the spreadsheet (${res.status})`)
+  const meta = await res.json()
+  return {
+    title: meta.properties?.title || '(untitled)',
+    existingTabs: (meta.sheets || []).map(s => s.properties.title),
   }
 }
 
-/** Seed row 1 of every tab in one batched request. */
-async function writeAllHeaders(sheetId) {
+/**
+ * Add any missing tabs, then seed headers on the tabs we just created.
+ * Existing tabs are left alone so re-running is harmless.
+ */
+export async function setupDrillSheet(input) {
+  const id = parseSpreadsheetId(input)
+  if (!id) throw new Error('That does not look like a Google Sheets link.')
+
+  const { title, existingTabs } = await verifySheetAccess(id)
   const t = await token()
-  const data = DRILL_TABS.map(tab => ({
-    range: `${tab.name}!A1`,
-    values: [tab.columns],
-  }))
-  const res = await fetch(`${SHEETS_BASE}/${sheetId}/values:batchUpdate`, {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${t}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ valueInputOption: 'RAW', data }),
-  })
-  if (!res.ok) throw new Error(`Writing headers failed (${res.status})`)
+
+  const missing = DRILL_TABS.filter(tab => !existingTabs.includes(tab.name))
+  if (missing.length) {
+    const res = await fetch(`${SHEETS_BASE}/${id}:batchUpdate`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${t}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        requests: missing.map(tab => ({ addSheet: { properties: { title: tab.name } } })),
+      }),
+    })
+    if (!res.ok) {
+      const txt = await res.text().catch(() => '')
+      throw new Error(`Could not add tabs (${res.status}): ${txt.slice(0, 160)}`)
+    }
+  }
+
+  // headers only on tabs that were missing — never overwrite a populated tab
+  if (missing.length) {
+    const hdrRes = await fetch(`${SHEETS_BASE}/${id}/values:batchUpdate`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${t}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        valueInputOption: 'RAW',
+        data: missing.map(tab => ({ range: `${tab.name}!A1`, values: [tab.columns] })),
+      }),
+    })
+    if (!hdrRes.ok) throw new Error(`Could not write headers (${hdrRes.status})`)
+  }
+
+  await setDoc(doc(db, 'mark_config', DRILL_CONFIG_DOC), {
+    spreadsheetId: id,
+    title,
+    configuredAt: Date.now(),
+  }, { merge: true })
+  _sheetId = id
+
+  return { spreadsheetId: id, title, tabsAdded: missing.map(m => m.name) }
+}
+
+/** True once setup has been done, so the UI knows whether to prompt. */
+export async function isDrillConfigured() {
+  return !!(await getDrillSheetId())
 }
 
 // ── Reads ────────────────────────────────────────────────────────────────────

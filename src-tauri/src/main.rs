@@ -422,125 +422,6 @@ async fn drill_clip_url(
     Ok(format!("http://127.0.0.1:{}/drive?id={}", port, file_id))
 }
 
-// ─── DRILL: create the dedicated DRILL spreadsheet ───────────────────────────
-// DRILL data lives in its OWN spreadsheet, not the TAG one. A Google Sheet caps
-// at 10 million cells; quiz results at 500 trainees would consume roughly a
-// million per quiz, so sharing the TAG spreadsheet would eventually jam TAG,
-// Comparison and Audit all at once. Isolating it contains the blast radius.
-//
-// Creates every tab up front and shares with the supplied emails as writers, so
-// the trainers can open and read it directly.
-#[command]
-async fn drill_create_spreadsheet(
-    title: String,
-    tabs: Vec<String>,
-    share_emails: Vec<String>,
-) -> Result<String, String> {
-    let token = get_google_access_token().await?;
-    let client = reqwest::Client::new();
-
-    // Step 1 — create the file through the DRIVE api, not the Sheets api.
-    // sheets/v4/spreadsheets returns "The caller does not have permission" for
-    // this service account, while drive/v3/files already works in production
-    // (drive_create_folder uses it for the Scout export). Same result, and it
-    // is the path we know the account is allowed to take.
-    let meta = serde_json::json!({
-        "name": title,
-        "mimeType": "application/vnd.google-apps.spreadsheet"
-    });
-    let created: serde_json::Value = client
-        .post("https://www.googleapis.com/drive/v3/files")
-        .query(&[("fields", "id"), ("supportsAllDrives", "true")])
-        .bearer_auth(&token)
-        .json(&meta)
-        .send()
-        .await
-        .map_err(|e| format!("Create spreadsheet failed: {}", e))?
-        .json()
-        .await
-        .map_err(|e| format!("Create spreadsheet parse failed: {}", e))?;
-
-    if let Some(err) = created.get("error") {
-        return Err(format!(
-            "Create spreadsheet error: {}",
-            err["message"].as_str().unwrap_or("unknown")
-        ));
-    }
-    let id = created["id"]
-        .as_str()
-        .ok_or_else(|| "No file id returned".to_string())?
-        .to_string();
-
-    // Step 2 — a fresh spreadsheet has one default sheet. Add ours, then remove
-    // the default. Requests inside one batchUpdate apply in order, so the
-    // delete cannot strand the file with zero sheets.
-    let existing: serde_json::Value = client
-        .get(format!("https://sheets.googleapis.com/v4/spreadsheets/{}", id))
-        .query(&[("fields", "sheets.properties.sheetId")])
-        .bearer_auth(&token)
-        .send()
-        .await
-        .map_err(|e| format!("Read new spreadsheet failed: {}", e))?
-        .json()
-        .await
-        .map_err(|e| format!("Read new spreadsheet parse failed: {}", e))?;
-
-    let default_sheet_id = existing["sheets"]
-        .as_array()
-        .and_then(|a| a.first())
-        .and_then(|s| s["properties"]["sheetId"].as_i64());
-
-    let mut requests: Vec<serde_json::Value> = tabs
-        .iter()
-        .map(|t| serde_json::json!({ "addSheet": { "properties": { "title": t } } }))
-        .collect();
-    if let Some(sid) = default_sheet_id {
-        requests.push(serde_json::json!({ "deleteSheet": { "sheetId": sid } }));
-    }
-
-    if !requests.is_empty() {
-        let resp: serde_json::Value = client
-            .post(format!(
-                "https://sheets.googleapis.com/v4/spreadsheets/{}:batchUpdate",
-                id
-            ))
-            .bearer_auth(&token)
-            .json(&serde_json::json!({ "requests": requests }))
-            .send()
-            .await
-            .map_err(|e| format!("Adding tabs failed: {}", e))?
-            .json()
-            .await
-            .map_err(|e| format!("Adding tabs parse failed: {}", e))?;
-        if let Some(err) = resp.get("error") {
-            return Err(format!(
-                "Adding tabs error: {}",
-                err["message"].as_str().unwrap_or("unknown")
-            ));
-        }
-    }
-
-    // Step 3 — share with the trainers. Non-fatal: the spreadsheet exists and
-    // MARK reads and writes it through the service account regardless; sharing
-    // only decides whether a human can open it.
-    for email in share_emails.iter().filter(|e| !e.trim().is_empty()) {
-        let perm = serde_json::json!({
-            "role": "writer",
-            "type": "user",
-            "emailAddress": email
-        });
-        let url = format!(
-            "https://www.googleapis.com/drive/v3/files/{}/permissions?sendNotificationEmail=false&supportsAllDrives=true",
-            id
-        );
-        if let Err(e) = client.post(&url).bearer_auth(&token).json(&perm).send().await {
-            eprintln!("[DRILL] share with {} failed: {}", email, e);
-        }
-    }
-
-    Ok(id)
-}
-
 // ─── Native file picker via rfd ───────────────────────────────────────────────
 #[command]
 fn pick_video_file() -> Option<String> {
@@ -757,7 +638,7 @@ fn patch_one_shortcut(lnk_path: &std::path::Path) -> Result<bool, String> {
 // marker) does not match, so it gets stripped and replaced — that's what was
 // previously frozen by a fixed marker. Bump this whenever the embedded bridge
 // changes so existing installs re-embed the new version.
-const ASAR_MARKER: &str = "<!-- MARK_BRIDGE_INJECTED v7.8.68 -->";
+const ASAR_MARKER: &str = "<!-- MARK_BRIDGE_INJECTED v7.8.69 -->";
 
 #[command]
 fn patch_tag_once_asar() -> Result<String, String> {
@@ -2886,7 +2767,6 @@ fn save_binary_file(path: String, data: Vec<u8>) -> Result<(), String> {
             firebase_google_sign_in,
             drill_scan_folder,
             drill_clip_url,
-            drill_create_spreadsheet,
             google_oauth_refresh,
             drive_create_sheet,
             cut_clips,
