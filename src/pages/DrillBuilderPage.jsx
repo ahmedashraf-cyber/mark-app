@@ -30,7 +30,7 @@ import { appendRows } from '../utils/drillSheet'
 import {
   TAB_QUIZZES, TAB_CLIPS, TAB_ANSWERS,
   QUIZZES_COLUMNS, CLIPS_COLUMNS, ANSWERS_COLUMNS,
-  QUIZ_STATUS, newId,
+  QUIZ_STATUS, newId, msToClock,
 } from '../config/drillConfig'
 import ClipTagger, { fmtTime } from '../components/ClipTagger'
 
@@ -67,6 +67,7 @@ export default function DrillBuilderPage({ person, onBack, onSaved }) {
   const [scanMsg,  setScanMsg]  = useState('')
   const [clips,    setClips]    = useState([])
   const [checked,  setChecked]  = useState(false)
+  const [forced,   setForced]   = useState(new Set())  // clips kept despite a failed probe
 
   const [clipIdx, setClipIdx] = useState(0)
   const [answers, setAnswers] = useState({})
@@ -84,7 +85,9 @@ export default function DrillBuilderPage({ person, onBack, onSaved }) {
 
   const taggable = FIELD_EVENTS.filter(e => e.panel)
   const panels   = [...new Set(taggable.map(e => e.panel))]
-  const playable = useMemo(() => clips.filter(c => c.playable), [clips])
+  const playable = useMemo(
+    () => clips.filter(c => c.playable || forced.has(c.drive_file_id)),
+    [clips, forced])
 
   const effectiveScope = useMemo(() => {
     const s = new Set(scope)
@@ -195,6 +198,7 @@ export default function DrillBuilderPage({ person, onBack, onSaved }) {
             answer_event_code: ev.event_code,
             answer_team: ev.team || '',
             answer_video_time_ms: ev.video_time_ms,
+            answer_video_time: msToClock(ev.video_time_ms),
             ...Object.fromEntries(Object.entries(ev.attrs || {}).map(([k, v]) => ['answer_' + k, v])),
           })
         })
@@ -386,14 +390,30 @@ export default function DrillBuilderPage({ person, onBack, onSaved }) {
                 <div style={{ fontSize:12, fontWeight:700, color:'#FF453A', marginBottom:6 }}>
                   These will be left out of the quiz
                 </div>
-                {clips.filter(c => c.playable === false).slice(0, 10).map(c => (
-                  <div key={c.drive_file_id} style={{ fontSize:11, color:'var(--t-2)',
-                    fontFamily:'JetBrains Mono,monospace' }}>
-                    {c.video_filename} — {c.unplayable_reason}
+                {clips.filter(c => c.playable === false).map(c => (
+                  <div key={c.drive_file_id} style={{ display:'flex', alignItems:'center',
+                    gap:10, padding:'4px 0' }}>
+                    <span style={{ flex:1, fontSize:11, color:'var(--t-2)',
+                      fontFamily:'JetBrains Mono,monospace' }}>
+                      {c.video_filename} — {c.unplayable_reason}
+                    </span>
+                    <button onClick={() => setForced(f => {
+                        const n = new Set(f)
+                        n.has(c.drive_file_id) ? n.delete(c.drive_file_id) : n.add(c.drive_file_id)
+                        return n })}
+                      style={{ fontSize:10, fontWeight:700, padding:'4px 9px', borderRadius:5,
+                        cursor:'pointer', whiteSpace:'nowrap',
+                        background: forced.has(c.drive_file_id) ? 'rgba(48,209,88,0.15)' : 'transparent',
+                        border:`1px solid ${forced.has(c.drive_file_id) ? '#30D158' : 'var(--b-1)'}`,
+                        color: forced.has(c.drive_file_id) ? '#30D158' : 'var(--t-3)' }}>
+                      {forced.has(c.drive_file_id) ? 'included' : 'include anyway'}
+                    </button>
                   </div>
                 ))}
-                <div style={{ fontSize:10, color:'var(--t-3)', marginTop:6 }}>
-                  Re-export as h264 mp4 if you need them.
+                <div style={{ fontSize:10, color:'var(--t-3)', marginTop:8, lineHeight:1.5 }}>
+                  A timeout usually means a slow connection, not a bad file — those are
+                  worth including anyway. A codec error means it genuinely will not play
+                  and needs re-exporting as h264 mp4.
                 </div>
               </div>
             )}
@@ -412,8 +432,12 @@ export default function DrillBuilderPage({ person, onBack, onSaved }) {
                       {c.size_bytes ? (c.size_bytes / 1048576).toFixed(1) + ' MB' : '—'}
                     </span>
                     <span style={{ width:58, textAlign:'right', fontSize:9, fontWeight:700,
-                      color: c.playable === true ? '#30D158' : c.playable === false ? '#FF453A' : 'var(--t-3)' }}>
-                      {c.playable === true ? 'PLAYS' : c.playable === false ? 'FAILS' : '…'}
+                      color: c.playable === true ? '#30D158'
+                           : forced.has(c.drive_file_id) ? '#FFD60A'
+                           : c.playable === false ? '#FF453A' : 'var(--t-3)' }}>
+                      {c.playable === true ? 'PLAYS'
+                       : forced.has(c.drive_file_id) ? 'FORCED'
+                       : c.playable === false ? 'FAILS' : '…'}
                     </span>
                   </div>
                 ))}

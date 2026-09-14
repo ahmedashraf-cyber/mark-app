@@ -11,11 +11,11 @@ import { useState, useEffect, useCallback } from 'react'
 import { useAuth } from '../hooks/useAuth.jsx'
 import { resolveDrillRole } from '../hooks/useAdmin.js'
 import { roleForEmail, personForEmail, loadCreators } from '../utils/drillPeople'
-import { readTab, readTabs, appendOrQueue, flushQueue, pendingWriteCount } from '../utils/drillSheet'
+import { readTab, readTabs, appendOrQueue, flushQueue, pendingWriteCount, syncHeaders } from '../utils/drillSheet'
 import {
   TAB_QUIZZES, TAB_CLIPS, TAB_ANSWERS, TAB_SESSIONS, TAB_ANSWERS_GIVEN, TAB_TRAINEE_LOG,
   SESSIONS_COLUMNS, ANSWERS_GIVEN_COLUMNS, TRAINEE_LOG_COLUMNS,
-  QUIZ_STATUS, SESSION_STATUS,
+  QUIZ_STATUS, SESSION_STATUS, msToClock,
 } from '../config/drillConfig'
 import { createSession, loadSession, clearSession, toScoringInput } from '../utils/drillSession'
 import { scoreAttempt } from '../utils/drillScoring'
@@ -57,6 +57,10 @@ export default function DrillPage({ onBack }) {
 
   useEffect(() => {
     if (pendingWriteCount() > 0) flushQueue().catch(() => {})
+    // Keep row 1 of every tab in step with the column lists. Columns get added
+    // as DRILL grows, and appendRows writes by position, so a stale header row
+    // would put data under the wrong names. Cheap, idempotent, row 1 only.
+    syncHeaders().catch(e => console.warn('[DRILL] header sync:', e.message))
   }, [])
 
   useEffect(() => {
@@ -173,12 +177,17 @@ export default function DrillPage({ onBack }) {
       wrong_timestamp_count: scored.counts.wrong_timestamp || 0,
       wrong_extra_count: scored.counts.wrong_extra || 0,
       total_time_taken_ms: timeTakenMs,
+      total_time_taken: msToClock(timeTakenMs),
       is_test_run: isTest ? 1 : 0, status: finished.status,
     }], SESSIONS_COLUMNS)
 
     await appendOrQueue(TAB_ANSWERS_GIVEN, scored.rows.map(r => ({
       result_id: finished.result_id, ...r,
       attrs_differed: r.attrs_differed || '',
+      // readable companions beside the raw ms — the ms stay for arithmetic
+      trainee_video_time: msToClock(r.tag?.video_time_ms),
+      correct_video_time: msToClock(r.key?.video_time_ms),
+      clip_time_taken:    msToClock(r.clip_time_taken_ms),
     })), ANSWERS_GIVEN_COLUMNS)
 
     // creators testing their own quiz are excluded from the profile log
@@ -197,7 +206,8 @@ export default function DrillPage({ onBack }) {
         missed_count: scored.counts.missed || 0,
         wrong_event_count: scored.counts.wrong_event || 0,
         wrong_extra_count: scored.counts.wrong_extra || 0,
-        time_taken: timeTakenMs,
+        time_taken_ms: timeTakenMs,
+        time_taken: msToClock(timeTakenMs),
         version: finished.quiz_version,
       }], TRAINEE_LOG_COLUMNS)
     }

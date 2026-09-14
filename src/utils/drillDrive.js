@@ -104,11 +104,18 @@ export async function checkAllPlayable(clips, onProgress) {
   const out = []
   for (let i = 0; i < clips.length; i++) {
     const c = clips[i]
+    // One retry. A first-attempt timeout is usually the connection warming up,
+    // not a bad file, and wrongly excluding a good clip is worse than a slower
+    // scan.
     let result
-    try {
-      result = await checkPlayability(await clipUrl(c.drive_file_id))
-    } catch (e) {
-      result = { ok: false, reason: e.message || 'error' }
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        result = await checkPlayability(await clipUrl(c.drive_file_id))
+      } catch (e) {
+        result = { ok: false, reason: e.message || 'error' }
+      }
+      if (result.ok) break
+      if (attempt === 0) onProgress?.(i + 1, clips.length, { ...c, retrying: true })
     }
     const checked = { ...c, playable: result.ok, unplayable_reason: result.reason }
     out.push(checked)

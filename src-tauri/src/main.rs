@@ -679,7 +679,7 @@ fn patch_one_shortcut(lnk_path: &std::path::Path) -> Result<bool, String> {
 // marker) does not match, so it gets stripped and replaced — that's what was
 // previously frozen by a fixed marker. Bump this whenever the embedded bridge
 // changes so existing installs re-embed the new version.
-const ASAR_MARKER: &str = "<!-- MARK_BRIDGE_INJECTED v7.8.75 -->";
+const ASAR_MARKER: &str = "<!-- MARK_BRIDGE_INJECTED v7.8.76 -->";
 
 #[command]
 fn patch_tag_once_asar() -> Result<String, String> {
@@ -1423,6 +1423,13 @@ struct JwtClaims {
     iat: u64,
 }
 
+// Cached service-account token. Without this EVERY Drive and Sheets call signs
+// a fresh JWT and does a full OAuth round trip — which made the DRILL clip
+// playability check time out on perfectly good files, because each clip paid
+// that cost before a single byte of video moved. Tokens last an hour; we keep
+// them for 50 minutes and re-mint with a margin.
+static SA_TOKEN_CACHE: std::sync::Mutex<Option<(String, u64)>> = std::sync::Mutex::new(None);
+
 async fn get_google_access_token() -> Result<String, String> {
     use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
 
@@ -1430,6 +1437,15 @@ async fn get_google_access_token() -> Result<String, String> {
         .duration_since(std::time::UNIX_EPOCH)
         .map_err(|e| e.to_string())?
         .as_secs();
+
+    // serve from cache when it still has life left
+    if let Ok(guard) = SA_TOKEN_CACHE.lock() {
+        if let Some((tok, expires_at)) = guard.as_ref() {
+            if *expires_at > now + 60 {
+                return Ok(tok.clone());
+            }
+        }
+    }
 
     let claims = JwtClaims {
         iss: SA_CLIENT_EMAIL.to_string(),
@@ -1459,10 +1475,18 @@ async fn get_google_access_token() -> Result<String, String> {
     let json: serde_json::Value = resp.json().await
         .map_err(|e| format!("Token parse failed: {}", e))?;
 
-    json["access_token"]
+    let token = json["access_token"]
         .as_str()
         .map(|s| s.to_string())
-        .ok_or_else(|| format!("No access_token in response: {}", json))
+        .ok_or_else(|| format!("No access_token in response: {}", json))?;
+
+    // Google returns expires_in seconds (normally 3600). Cache with a margin so
+    // a long-running scan never trips over an expiry mid-way.
+    let lifetime = json["expires_in"].as_u64().unwrap_or(3600);
+    if let Ok(mut guard) = SA_TOKEN_CACHE.lock() {
+        *guard = Some((token.clone(), now + lifetime.saturating_sub(300)));
+    }
+    Ok(token)
 }
 
 #[command]

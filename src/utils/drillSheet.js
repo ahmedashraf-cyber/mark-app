@@ -155,6 +155,30 @@ export async function setupDrillSheet(input) {
   return { spreadsheetId: id, title, tabsAdded: missing.map(m => m.name) }
 }
 
+/**
+ * Rewrite row 1 of every tab to match the current column lists.
+ *
+ * Needed whenever columns are added: the tabs already exist so setupDrillSheet
+ * leaves their headers alone, but appendRows writes by POSITION from the column
+ * array. A stale header row would mean data landing under the wrong names.
+ * Only row 1 is touched, so existing data is untouched.
+ */
+export async function syncHeaders() {
+  const id = await getDrillSheetId()
+  if (!id) throw new Error('No DRILL spreadsheet configured')
+  const t = await token()
+  const res = await fetch(`${SHEETS_BASE}/${id}/values:batchUpdate`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${t}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      valueInputOption: 'RAW',
+      data: DRILL_TABS.map(tab => ({ range: `${tab.name}!A1`, values: [tab.columns] })),
+    }),
+  })
+  if (!res.ok) throw new Error(`Header sync failed (${res.status})`)
+  return DRILL_TABS.map(t2 => ({ tab: t2.name, columns: t2.columns.length }))
+}
+
 /** True once setup has been done, so the UI knows whether to prompt. */
 export async function isDrillConfigured() {
   return !!(await getDrillSheetId())

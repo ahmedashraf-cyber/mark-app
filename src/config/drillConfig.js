@@ -85,7 +85,10 @@ export const DRILL_LS_KEY       = 'mark_drill_session' // in-progress session
 // Hence the pre-flight playability check at scan time.
 export const SUPPORTED_VIDEO_EXT   = ['mp4', 'mov', 'mkv']
 export const VIDEO_MIME_PREFIXES   = ['video/']
-export const PLAYABILITY_TIMEOUT_MS = 8000
+// 25s, not 8s. The original 8s rejected perfectly good mp4s because each probe
+// paid for a fresh OAuth token round trip before any video moved. The token is
+// cached now, but a cold first request plus a slow connection still needs room.
+export const PLAYABILITY_TIMEOUT_MS = 25000
 
 // ── Sheet columns ────────────────────────────────────────────────────────────
 export const QUIZZES_COLUMNS = [
@@ -112,7 +115,7 @@ export const DRILL_ATTR_COLUMNS = [
 
 export const ANSWERS_COLUMNS = [
   'quiz_id', 'quiz_version', 'clip_index', 'event_index',
-  'answer_event_code', 'answer_team', 'answer_video_time_ms',
+  'answer_event_code', 'answer_team', 'answer_video_time_ms', 'answer_video_time',
   ...DRILL_ATTR_COLUMNS.map(a => 'answer_' + a),
 ]
 
@@ -121,23 +124,23 @@ export const SESSIONS_COLUMNS = [
   'attempt_number', 'started_at', 'finished_at', 'score_percent', 'passed',
   'total_events', 'correct_count', 'missed_count', 'not_needed_count',
   'wrong_event_count', 'wrong_team_count', 'wrong_timestamp_count',
-  'wrong_extra_count', 'total_time_taken_ms', 'is_test_run', 'status',
+  'wrong_extra_count', 'total_time_taken_ms', 'total_time_taken', 'is_test_run', 'status',
 ]
 
 export const ANSWERS_GIVEN_COLUMNS = [
   'result_id', 'clip_index', 'event_index',
-  'trainee_event_code', 'trainee_team', 'trainee_video_time_ms',
+  'trainee_event_code', 'trainee_team', 'trainee_video_time_ms', 'trainee_video_time',
   ...DRILL_ATTR_COLUMNS.map(a => 'trainee_' + a),
-  'correct_event_code', 'correct_team', 'correct_video_time_ms',
+  'correct_event_code', 'correct_team', 'correct_video_time_ms', 'correct_video_time',
   ...DRILL_ATTR_COLUMNS.map(a => 'correct_' + a),
-  'verdict', 'delta_ms', 'attrs_differed', 'clip_time_taken_ms',
+  'verdict', 'delta_ms', 'attrs_differed', 'clip_time_taken_ms', 'clip_time_taken',
 ]
 
 export const TRAINEE_LOG_COLUMNS = [
   'trainee_hr_code', 'trainee_email', 'session_type', 'session_id_or_quiz_id',
   'session_date', 'match_id_or_quiz_name', 'scope', 'score_percent',
   'total_events_or_clips', 'correct_count', 'missed_count',
-  'wrong_event_count', 'wrong_extra_count', 'time_taken', 'version',
+  'wrong_event_count', 'wrong_extra_count', 'time_taken_ms', 'time_taken', 'version',
 ]
 
 export const DRILL_TABS = [
@@ -161,6 +164,20 @@ export const REQUEST_STATUS = {
   PENDING:  'pending',
   APPROVED: 'approved',
   REJECTED: 'rejected',
+}
+
+/**
+ * HH:MM:SS.mmm from milliseconds. Stored in the sheet NEXT TO the raw ms, not
+ * instead of it — scoring needs a number to subtract, a human needs a clock.
+ */
+export function msToClock(ms) {
+  const n = Number(ms)
+  if (!isFinite(n) || n < 0) return ''
+  const h = Math.floor(n / 3600000)
+  const m = Math.floor((n % 3600000) / 60000)
+  const sec = Math.floor((n % 60000) / 1000)
+  const milli = Math.floor(n % 1000)
+  return `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(sec).padStart(2,'0')}.${String(milli).padStart(3,'0')}`
 }
 
 export function newId(prefix) {
