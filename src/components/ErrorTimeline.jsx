@@ -48,7 +48,7 @@ function markerShort(err) {
 
 export default function ErrorTimeline({
   errors, videoDuration, videoRef, currentTime, playing, muted,
-  onSeek, onSyncSeek, onTogglePlay, onToggleMute, onDragStart,, showLabels = false }) {
+  onSeek, onSyncSeek, onTogglePlay, onToggleMute, onDragStart, showLabels = false }) {
   const trackRef = useRef(null)
 
   const [dragPct,   setDragPct]   = useState(null)
