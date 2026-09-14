@@ -659,11 +659,27 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
    * groups, possession, open-state pairing — is the live one by construction.
    */
   async function editEvent(ev) {
-    if (!ev || captureStep !== 'idle') return
+    if (!ev) return
+    if (captureStep !== 'idle') {
+      console.warn('[MARK Field] edit ignored — capture in progress:', captureStep)
+      setFlashEvent('Finish the current event first')
+      setTimeout(() => setFlashEvent(null), 1400)
+      return
+    }
     const def = EVENT_BY_ID[ev.eventId] || FIELD_EVENTS.find(e => e.id === ev.eventId)
     if (!def) { console.warn('[MARK Field] edit: unknown eventId', ev.eventId); return }
 
-    const vt = (ev.videoTimeMs != null ? ev.videoTimeMs / 1000 : ev.videoTime) || 0
+    // The stored event uses video_time_ms (snake) and videoTimeSec — there is no
+    // videoTimeMs, which is what this read before, so vt silently fell to 0 and
+    // Edit jumped to the start of the video instead of the event.
+    const vt = ev.videoTimeSec != null ? Number(ev.videoTimeSec)
+             : ev.video_time_ms != null ? Number(ev.video_time_ms) / 1000
+             : 0
+    console.log('[MARK Field] edit:', {
+      eventId: ev.eventId, eventLabel: ev.eventLabel,
+      videoTimeSec: ev.videoTimeSec, video_time_ms: ev.video_time_ms,
+      resolvedVt: vt, defFound: !!def, captureStep,
+    })
     await deleteEvent(ev)
 
     // park the video on the event so the collector sees what they are re-tagging
@@ -1267,7 +1283,7 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
 
       {/* ── Scrub bar ── */}
       <div style={{flexShrink:0,background:'var(--bg-2)',borderTop:'1px solid var(--b-1)',padding:'4px 16px 8px'}}>
-        <ErrorTimeline errors={events} videoDuration={duration} videoRef={videoRef}
+        <ErrorTimeline errors={events} videoDuration={duration} videoRef={videoRef} showLabels
           currentTime={currentTime} playing={playing} muted={muted}
           onSeek={seekTo} onSyncSeek={seekTo} onTogglePlay={togglePlay} onToggleMute={toggleMute}
           onDragStart={()=>{isDraggingRef.current=true}}/>

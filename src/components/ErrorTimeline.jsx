@@ -31,10 +31,24 @@ function SpeakerIcon({ muted }) {
   )
 }
 
+
+// A marker's display name. FIELD passes collected events (eventLabel); Scout
+// passes error tags (triggeredEventLabel / errorType). This component was
+// written for Scout only, so FIELD markers showed "undefined".
+function markerName(err) {
+  return err.eventLabel || err.triggeredEventLabel || err.errorType || 'Event'
+}
+// Short form for an in-bar label — first word, capped, so dense timelines stay
+// legible. The full name is always in the tooltip.
+function markerShort(err) {
+  const n = markerName(err)
+  const first = String(n).split(/[\s(]/)[0]
+  return first.length <= 7 ? first : first.slice(0, 6) + '…'
+}
+
 export default function ErrorTimeline({
   errors, videoDuration, videoRef, currentTime, playing, muted,
-  onSeek, onSyncSeek, onTogglePlay, onToggleMute, onDragStart,
-}) {
+  onSeek, onSyncSeek, onTogglePlay, onToggleMute, onDragStart,, showLabels = false }) {
   const trackRef = useRef(null)
 
   const [dragPct,   setDragPct]   = useState(null)
@@ -212,19 +226,31 @@ export default function ErrorTimeline({
             const color = TYPE_COLORS[err.errorType] || 'var(--p2)'
             return (
               <div key={i}
-                title={`${err.triggeredEventLabel || err.errorType} @ ${fmt(err.videoTimeSec || 0)}`}
-                onMouseEnter={e => { e.stopPropagation(); setTooltip({ x: pct, label: `${err.triggeredEventLabel || err.errorType} · ${fmt(err.videoTimeSec || 0)}` }) }}
+                title={`${markerName(err)} @ ${fmt(err.videoTimeSec || 0)}`}
+                onMouseEnter={e => { e.stopPropagation(); setTooltip({ x: pct, label: `${markerName(err)} · ${fmt(err.videoTimeSec || 0)}` }) }}
                 onMouseLeave={() => setTooltip(null)}
                 onClick={e => { e.stopPropagation(); onSeek?.(err.videoTimeSec || 0); onSyncSeek?.(err.videoTimeSec || 0) }}
                 onPointerDown={e => e.stopPropagation()}
-                style={{
+                style={showLabels ? {
+                  position: 'absolute', left: `${pct}%`, top: '50%',
+                  transform: 'translate(-50%, -50%)',
+                  height: 15, maxWidth: 84, padding: '0 5px',
+                  display: 'flex', alignItems: 'center',
+                  borderRadius: 4, whiteSpace: 'nowrap', overflow: 'hidden',
+                  fontSize: 8, fontWeight: 800, letterSpacing: 0.2,
+                  fontFamily: 'JetBrains Mono, monospace',
+                  color: '#fff', background: color,
+                  border: '1px solid rgba(0,0,0,0.55)',
+                  zIndex: 3, cursor: 'pointer', boxShadow: `0 0 5px ${color}99`,
+                } : {
                   position: 'absolute', left: `${pct}%`, top: '50%',
                   transform: 'translate(-50%, -50%)',
                   width: 8, height: 8, borderRadius: '50%',
                   background: color, border: '1.5px solid rgba(0,0,0,0.6)',
                   zIndex: 3, cursor: 'pointer', boxShadow: `0 0 5px ${color}99`,
-                }}
-              />
+                }}>
+                {showLabels ? markerShort(err) : null}
+              </div>
             )
           })}
 

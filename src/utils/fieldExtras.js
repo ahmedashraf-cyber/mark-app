@@ -224,16 +224,35 @@ const HEIGHT_THROW_IN = grp('height', 'Height', 'single', true, [
   opt(O.HEIGHT_HIGH,        '2'),
 ])
 
+// Conditional extras (see getGroupOptions in FieldPage): an option carrying
+// visibleWhen only appears once every condition is met. ALL entries must match,
+// any code within one entry matches.
+const AERIAL_WHEN_HEAD = {
+  ...opt(O.EXTRA_AERIAL_WON, '4'),
+  visibleWhen: [{ groupId: 'body_part', anyOf: ['BODY_HEAD'] }],
+}
+const LAUNCH_WHEN_HIGH_FOOT = {
+  ...opt(O.LAUNCH_LAUNCH, '5'),
+  visibleWhen: [
+    { groupId: 'height',    anyOf: ['HEIGHT_HIGH'] },
+    { groupId: 'body_part', anyOf: ['BODY_LEFT_FOOT', 'BODY_RIGHT_FOOT'] },
+  ],
+}
+
 const EXTRAS_PASS = grp('extras', 'Extras', 'multi', false, [
   opt(O.EXTRA_THROUGH_BALL,     '1'),
   opt(O.EXTRA_BACKHEEL,         '2'),
   opt(O.EXTRA_INJURY_CLEARANCE, '3'),
+  AERIAL_WHEN_HEAD,
+  LAUNCH_WHEN_HIGH_FOOT,
 ])
 
 const EXTRAS_PASS_NOTOUCHTOO = grp('extras', 'Extras', 'multi', false, [
   opt(O.EXTRA_THROUGH_BALL,     '1'),
   opt(O.EXTRA_BACKHEEL,         '2'),
   opt(O.EXTRA_INJURY_CLEARANCE, '3'),
+  AERIAL_WHEN_HEAD,
+  LAUNCH_WHEN_HIGH_FOOT,
   opt(O.BODY_NO_TOUCH,          '7'),
 ])
 
@@ -470,7 +489,8 @@ export const FIELD_EVENTS = [
       grp('body_part', 'Body part', 'single', true, [
         opt(O.BODY_RIGHT_FOOT,    '2'),
         opt(O.BODY_LEFT_FOOT,     '3'),
-        opt(O.BODY_HEAD,          '4'),  // not in spec block but code 4 is globally consistent for Head
+        opt(O.BODY_HEAD,          '4'),  // code 4 is Head in every event's body-part group
+        opt(O.BODY_OTHER,         '1'),  // code 1 is Other in every event's body-part group
         opt(O.BODY_NO_TOUCH,      '7'),
       ]),
       EXTRAS_PASS,
