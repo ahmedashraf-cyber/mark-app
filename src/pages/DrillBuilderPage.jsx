@@ -22,16 +22,18 @@
 import { useState, useEffect, useMemo } from 'react'
 import { FIELD_EVENTS, EVENT_BY_ID } from '../utils/fieldExtras'
 import {
-  scanFolder, checkAllPlayable, totalSizeBytes, formatBytes,
+  scanFolder, totalSizeBytes, formatBytes,
   parseFolderId, clipUrl as driveClipUrl,
 } from '../utils/drillDrive'
 import { loadTrainees, resolveHrCodes } from '../utils/drillPeople'
+import { assignTrainees } from '../utils/drillAssignments'
 import { appendRows } from '../utils/drillSheet'
 import {
   TAB_QUIZZES, TAB_CLIPS, TAB_ANSWERS,
   QUIZZES_COLUMNS, CLIPS_COLUMNS, ANSWERS_COLUMNS,
-  QUIZ_STATUS, newId, msToClock,
+  QUIZ_STATUS, newId, TAB_ASSIGNMENTS, ASSIGNMENTS_COLUMNS,
 } from '../config/drillConfig'
+import { msToReadable } from '../utils/fieldSheetSync'
 import ClipTagger, { fmtTime } from '../components/ClipTagger'
 
 const SA_EMAIL = 'mark-reporter@mark-app-498618.iam.gserviceaccount.com'
@@ -66,8 +68,6 @@ export default function DrillBuilderPage({ person, onBack, onSaved }) {
   const [scanning, setScanning] = useState(false)
   const [scanMsg,  setScanMsg]  = useState('')
   const [clips,    setClips]    = useState([])
-  const [checked,  setChecked]  = useState(false)
-  const [forced,   setForced]   = useState(new Set())  // clips kept despite a failed probe
 
   const [clipIdx, setClipIdx] = useState(0)
   const [answers, setAnswers] = useState({})
@@ -85,9 +85,11 @@ export default function DrillBuilderPage({ person, onBack, onSaved }) {
 
   const taggable = FIELD_EVENTS.filter(e => e.panel)
   const panels   = [...new Set(taggable.map(e => e.panel))]
-  const playable = useMemo(
-    () => clips.filter(c => c.playable || forced.has(c.drive_file_id)),
-    [clips, forced])
+  // Every clip in the folder is included. The playability probe that used to
+  // filter here rejected sound mp4s whenever a request was slow, and silently
+  // dropping a good clip from an answer key is worse than letting a bad one
+  // through — a bad one is obvious the moment it is opened.
+  const playable = clips
 
   const effectiveScope = useMemo(() => {
     const s = new Set(scope)
@@ -126,7 +128,7 @@ export default function DrillBuilderPage({ person, onBack, onSaved }) {
     if (isNaN(pm) || pm < 0 || pm > 100) return setErr('Pass mark must be between 0 and 100.')
     if (!scope.size)            return setErr('Tick at least one event type for the scope.')
 
-    setScanning(true); setChecked(false); setClips([])
+    setScanning(true); setClips([])
     try {
       setScanMsg('Scanning the folder…')
       const { clips: found } = await scanFolder(folder)
@@ -135,8 +137,6 @@ export default function DrillBuilderPage({ person, onBack, onSaved }) {
         return
       }
       setClips(found); setStep(2)
-      const verified = await checkAllPlayable(found, (d, t) => setScanMsg(`Checking clip ${d} of ${t}…`))
-      setClips(verified); setChecked(true)
     } catch (e) { setErr(e.message || String(e)) }
     finally { setScanning(false); setScanMsg('') }
   }
@@ -198,12 +198,21 @@ export default function DrillBuilderPage({ person, onBack, onSaved }) {
             answer_event_code: ev.event_code,
             answer_team: ev.team || '',
             answer_video_time_ms: ev.video_time_ms,
-            answer_video_time: msToClock(ev.video_time_ms),
+            answer_video_time_readable: msToReadable(ev.video_time_ms),
             ...Object.fromEntries(Object.entries(ev.attrs || {}).map(([k, v]) => ['answer_' + k, v])),
           })
         })
       })
       if (answerRows.length) await appendRows(TAB_ANSWERS, answerRows, ANSWERS_COLUMNS)
+
+      // rows in quiz_assignments are the source of truth from here on;
+      // assigned_hr_codes is written too so an older build still reads it
+      if (assigned.size) {
+        await assignTrainees({
+          quizId, quizRow: { created_at: now, created_by: person?.email || '' },
+          hrCodes: [...assigned], trainees, assignedBy: person?.email || '',
+        }).catch(e => console.warn('[DRILL] writing assignments:', e.message))
+      }
 
       setSaved({ quizId, clips: playable.length, answers: answerRows.length, published: !asDraft })
     } catch (e) {
@@ -365,58 +374,8 @@ export default function DrillBuilderPage({ person, onBack, onSaved }) {
               </div>
             </div>
 
-            {scanning && (
-              <div className="card" style={{ padding:16, marginBottom:14, fontSize:12, color:'var(--t-2)' }}>
-                {scanMsg}
-                <div style={{ fontSize:10, color:'var(--t-3)', marginTop:6, lineHeight:1.5 }}>
-                  Each clip is loaded once to confirm it plays. A .mov or .mkv can open
-                  its container and still have no decodable track, and that fails
-                  silently — better caught now than mid-quiz.
-                </div>
-              </div>
-            )}
 
-            {checked && (
-              <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10, marginBottom:14 }}>
-                <Stat n={playable.length} label="PLAYABLE" color="#30D158"/>
-                <Stat n={clips.length - playable.length} label="WILL NOT PLAY"
-                  color={clips.length - playable.length ? '#FF453A' : 'var(--t-3)'}/>
-              </div>
-            )}
 
-            {checked && clips.length > playable.length && (
-              <div style={{ background:'rgba(255,69,58,0.08)', border:'1px solid rgba(255,69,58,0.3)',
-                borderRadius:8, padding:'12px 14px', marginBottom:14 }}>
-                <div style={{ fontSize:12, fontWeight:700, color:'#FF453A', marginBottom:6 }}>
-                  These will be left out of the quiz
-                </div>
-                {clips.filter(c => c.playable === false).map(c => (
-                  <div key={c.drive_file_id} style={{ display:'flex', alignItems:'center',
-                    gap:10, padding:'4px 0' }}>
-                    <span style={{ flex:1, fontSize:11, color:'var(--t-2)',
-                      fontFamily:'JetBrains Mono,monospace' }}>
-                      {c.video_filename} — {c.unplayable_reason}
-                    </span>
-                    <button onClick={() => setForced(f => {
-                        const n = new Set(f)
-                        n.has(c.drive_file_id) ? n.delete(c.drive_file_id) : n.add(c.drive_file_id)
-                        return n })}
-                      style={{ fontSize:10, fontWeight:700, padding:'4px 9px', borderRadius:5,
-                        cursor:'pointer', whiteSpace:'nowrap',
-                        background: forced.has(c.drive_file_id) ? 'rgba(48,209,88,0.15)' : 'transparent',
-                        border:`1px solid ${forced.has(c.drive_file_id) ? '#30D158' : 'var(--b-1)'}`,
-                        color: forced.has(c.drive_file_id) ? '#30D158' : 'var(--t-3)' }}>
-                      {forced.has(c.drive_file_id) ? 'included' : 'include anyway'}
-                    </button>
-                  </div>
-                ))}
-                <div style={{ fontSize:10, color:'var(--t-3)', marginTop:8, lineHeight:1.5 }}>
-                  A timeout usually means a slow connection, not a bad file — those are
-                  worth including anyway. A codec error means it genuinely will not play
-                  and needs re-exporting as h264 mp4.
-                </div>
-              </div>
-            )}
 
             <div className="card" style={{ padding:16, marginBottom:14 }}>
               <div style={{ fontSize:12, fontWeight:700, marginBottom:10 }}>Clips ({clips.length})</div>
@@ -431,14 +390,6 @@ export default function DrillBuilderPage({ person, onBack, onSaved }) {
                     <span style={{ fontSize:10, color:'var(--t-3)', width:56, textAlign:'right' }}>
                       {c.size_bytes ? (c.size_bytes / 1048576).toFixed(1) + ' MB' : '—'}
                     </span>
-                    <span style={{ width:58, textAlign:'right', fontSize:9, fontWeight:700,
-                      color: c.playable === true ? '#30D158'
-                           : forced.has(c.drive_file_id) ? '#FFD60A'
-                           : c.playable === false ? '#FF453A' : 'var(--t-3)' }}>
-                      {c.playable === true ? 'PLAYS'
-                       : forced.has(c.drive_file_id) ? 'FORCED'
-                       : c.playable === false ? 'FAILS' : '…'}
-                    </span>
                   </div>
                 ))}
               </div>
@@ -447,9 +398,9 @@ export default function DrillBuilderPage({ person, onBack, onSaved }) {
             <div style={{ display:'flex', gap:10 }}>
               <button style={{ ...ghost, flex:1 }} onClick={() => setStep(1)}>← Back to setup</button>
               <button className="btn-orange" style={{ flex:2, padding:'11px 0', fontSize:13 }}
-                disabled={!checked || !playable.length}
+                disabled={!playable.length}
                 onClick={() => { setClipIdx(0); setStep(3) }}>
-                {checked ? `Tag the answer key (${playable.length} clips) →` : 'Checking clips…'}
+                {`Tag the answer key (${playable.length} clips) →`}
               </button>
             </div>
           </>

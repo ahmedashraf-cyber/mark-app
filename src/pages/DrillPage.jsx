@@ -15,8 +15,10 @@ import { readTab, readTabs, appendOrQueue, flushQueue, pendingWriteCount, syncHe
 import {
   TAB_QUIZZES, TAB_CLIPS, TAB_ANSWERS, TAB_SESSIONS, TAB_ANSWERS_GIVEN, TAB_TRAINEE_LOG,
   SESSIONS_COLUMNS, ANSWERS_GIVEN_COLUMNS, TRAINEE_LOG_COLUMNS,
-  QUIZ_STATUS, SESSION_STATUS, msToClock,
+  QUIZ_STATUS, SESSION_STATUS,
 } from '../config/drillConfig'
+// FIELD's formatter, not a second one. Produces MM:SS.mmm (6941 -> 00:06.941).
+import { msToReadable } from '../utils/fieldSheetSync'
 import { createSession, loadSession, clearSession, toScoringInput } from '../utils/drillSession'
 import { scoreAttempt } from '../utils/drillScoring'
 import { canStart, requestRetake, watchMyRequests } from '../utils/drillRetakes'
@@ -24,6 +26,8 @@ import DrillBuilderPage from './DrillBuilderPage'
 import DrillSessionPage from './DrillSessionPage'
 import DrillResultsPage from './DrillResultsPage'
 import RetakeRequests from '../components/RetakeRequests'
+import AssignPanel from '../components/AssignPanel'
+import { quizIdsForTrainee } from '../utils/drillAssignments'
 
 export default function DrillPage({ onBack }) {
   const { profile } = useAuth()
@@ -39,6 +43,7 @@ export default function DrillPage({ onBack }) {
   const [myReqs,  setMyReqs]  = useState([])
   const [creators,setCreators]= useState([])
   const [busy,    setBusy]    = useState('')
+  const [assignFor, setAssignFor] = useState(null)   // quiz row being assigned
 
   // role: login identifies, the Supervisors tab authorises
   useEffect(() => {
@@ -73,10 +78,15 @@ export default function DrillPage({ onBack }) {
     try {
       const { [TAB_QUIZZES]: qs, [TAB_SESSIONS]: ss } =
         await readTabs([TAB_QUIZZES, TAB_SESSIONS])
-      setQuizzes(role === 'creator' ? qs : qs.filter(q =>
-        q.status === QUIZ_STATUS.PUBLISHED &&
-        String(q.assigned_hr_codes || '').split('|').map(s => s.trim().toUpperCase())
-          .includes(String(person?.hrCode || '').toUpperCase())))
+      if (role === 'creator') {
+        setQuizzes(qs)
+      } else {
+        // assignments live in their own tab now; quizIdsForTrainee still reads
+        // the legacy assigned_hr_codes cell for quizzes not yet migrated
+        const mineIds = await quizIdsForTrainee(person?.hrCode)
+        setQuizzes(qs.filter(q =>
+          q.status === QUIZ_STATUS.PUBLISHED && mineIds.has(q.quiz_id)))
+      }
       setSessions(ss)
     } catch (e) { setError(e.message) }
     finally { setLoading(false) }
@@ -177,7 +187,7 @@ export default function DrillPage({ onBack }) {
       wrong_timestamp_count: scored.counts.wrong_timestamp || 0,
       wrong_extra_count: scored.counts.wrong_extra || 0,
       total_time_taken_ms: timeTakenMs,
-      total_time_taken: msToClock(timeTakenMs),
+      total_time_taken_readable: msToReadable(timeTakenMs),
       is_test_run: isTest ? 1 : 0, status: finished.status,
     }], SESSIONS_COLUMNS)
 
@@ -185,9 +195,9 @@ export default function DrillPage({ onBack }) {
       result_id: finished.result_id, ...r,
       attrs_differed: r.attrs_differed || '',
       // readable companions beside the raw ms — the ms stay for arithmetic
-      trainee_video_time: msToClock(r.tag?.video_time_ms),
-      correct_video_time: msToClock(r.key?.video_time_ms),
-      clip_time_taken:    msToClock(r.clip_time_taken_ms),
+      trainee_video_time_readable: msToReadable(r.tag?.video_time_ms),
+      correct_video_time_readable: msToReadable(r.key?.video_time_ms),
+      clip_time_taken_readable: msToReadable(r.clip_time_taken_ms),
     })), ANSWERS_GIVEN_COLUMNS)
 
     // creators testing their own quiz are excluded from the profile log
@@ -207,7 +217,7 @@ export default function DrillPage({ onBack }) {
         wrong_event_count: scored.counts.wrong_event || 0,
         wrong_extra_count: scored.counts.wrong_extra || 0,
         time_taken_ms: timeTakenMs,
-        time_taken: msToClock(timeTakenMs),
+        time_taken_readable: msToReadable(timeTakenMs),
         version: finished.quiz_version,
       }], TRAINEE_LOG_COLUMNS)
     }
@@ -369,6 +379,14 @@ export default function DrillPage({ onBack }) {
                     {q.status || 'draft'}
                   </span>
                 )}
+                {role === 'creator' && q.status === QUIZ_STATUS.PUBLISHED && (
+                  <button style={{ padding:'7px 13px', fontSize:12, background:'transparent',
+                    border:'1px solid var(--b-1)', borderRadius:7, color:'var(--t-2)',
+                    cursor:'pointer' }}
+                    onClick={() => setAssignFor(q)}>
+                    Assign
+                  </button>
+                )}
                 {q.status === QUIZ_STATUS.PUBLISHED && !hasPassed && (
                   <button className="btn-orange" style={{ padding:'7px 14px', fontSize:12 }}
                     disabled={busy === q.quiz_id}
@@ -382,6 +400,11 @@ export default function DrillPage({ onBack }) {
             )
           })}
         </div>
+      )}
+
+      {assignFor && (
+        <AssignPanel quiz={assignFor} assignedBy={person?.email}
+          onClose={() => { setAssignFor(null); refresh() }}/>
       )}
     </Shell>
   )

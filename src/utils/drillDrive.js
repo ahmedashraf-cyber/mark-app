@@ -13,9 +13,14 @@
  * Streaming: a <video> element cannot send an Authorization header, so it
  * cannot play a private Drive file directly. MARK's local axum server proxies
  * it instead (route /drive in main.rs) and attaches the token.
+ *
+ * There is deliberately NO playability probe. Every clip in the folder is
+ * included. The probe it replaced rejected sound mp4s whenever a request was
+ * slow, and silently dropping a good clip from an answer key is worse than
+ * letting a bad one through — a bad one is obvious the moment it is opened.
  */
 import { invoke } from '@tauri-apps/api/core'
-import { SUPPORTED_VIDEO_EXT, PLAYABILITY_TIMEOUT_MS } from '../config/drillConfig'
+import { SUPPORTED_VIDEO_EXT } from '../config/drillConfig'
 
 /**
  * Pull a folder ID out of whatever the trainer pasted.
@@ -51,7 +56,6 @@ export async function scanFolder(folderInput) {
     duration_ms:     c.duration_ms ? Number(c.duration_ms) : null,
     extension:       extensionOf(c.video_filename),
     supported_ext:   SUPPORTED_VIDEO_EXT.includes(extensionOf(c.video_filename)),
-    playable:        null,   // filled by checkPlayability
   }))
   return { folderId, clips }
 }
@@ -59,69 +63,6 @@ export async function scanFolder(folderInput) {
 /** Local proxy URL a <video> can play. */
 export async function clipUrl(driveFileId) {
   return invoke('drill_clip_url', { fileId: driveFileId })
-}
-
-/**
- * Pre-flight playability. The extension alone is not enough: .mov and .mkv are
- * containers, so an h264 .mov plays while a ProRes .mov does not, and WebView2
- * fails silently. The only reliable test is asking the element to load it.
- *
- * Checked at scan time so a trainee never meets a dead clip mid-exam.
- */
-export function checkPlayability(url) {
-  return new Promise(resolve => {
-    const v = document.createElement('video')
-    v.preload = 'metadata'
-    v.muted = true
-    let settled = false
-    const done = (ok, reason) => {
-      if (settled) return
-      settled = true
-      clearTimeout(timer)
-      v.removeAttribute('src')
-      v.load()
-      resolve({ ok, reason })
-    }
-    const timer = setTimeout(() => done(false, 'timed out'), PLAYABILITY_TIMEOUT_MS)
-    v.onloadedmetadata = () => {
-      // duration 0 or NaN means the container opened but there is no usable track
-      if (!isFinite(v.duration) || v.duration <= 0) return done(false, 'no playable track')
-      done(true, '')
-    }
-    v.onerror = () => {
-      const code = v.error?.code
-      done(false, code === 4 ? 'codec not supported' : 'failed to load')
-    }
-    v.src = url
-  })
-}
-
-/**
- * Run the pre-flight over every clip, sequentially — parallel loads thrash the
- * proxy and give false negatives. onProgress(done, total, clip).
- */
-export async function checkAllPlayable(clips, onProgress) {
-  const out = []
-  for (let i = 0; i < clips.length; i++) {
-    const c = clips[i]
-    // One retry. A first-attempt timeout is usually the connection warming up,
-    // not a bad file, and wrongly excluding a good clip is worse than a slower
-    // scan.
-    let result
-    for (let attempt = 0; attempt < 2; attempt++) {
-      try {
-        result = await checkPlayability(await clipUrl(c.drive_file_id))
-      } catch (e) {
-        result = { ok: false, reason: e.message || 'error' }
-      }
-      if (result.ok) break
-      if (attempt === 0) onProgress?.(i + 1, clips.length, { ...c, retrying: true })
-    }
-    const checked = { ...c, playable: result.ok, unplayable_reason: result.reason }
-    out.push(checked)
-    onProgress?.(i + 1, clips.length, checked)
-  }
-  return out
 }
 
 export function totalSizeBytes(clips) {
