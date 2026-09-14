@@ -20,7 +20,7 @@ import {
 // FIELD's formatter, not a second one. Produces MM:SS.mmm (6941 -> 00:06.941).
 import { msToReadable } from '../utils/fieldSheetSync'
 import { createSession, loadSession, clearSession, toScoringInput } from '../utils/drillSession'
-import { scoreAttempt } from '../utils/drillScoring'
+import { scoreAttempt, toAnswerGivenRows } from '../utils/drillScoring'
 import { canStart, requestRetake, watchMyRequests } from '../utils/drillRetakes'
 import DrillBuilderPage from './DrillBuilderPage'
 import DrillSessionPage from './DrillSessionPage'
@@ -191,14 +191,14 @@ export default function DrillPage({ onBack }) {
       is_test_run: isTest ? 1 : 0, status: finished.status,
     }], SESSIONS_COLUMNS)
 
-    await appendOrQueue(TAB_ANSWERS_GIVEN, scored.rows.map(r => ({
-      result_id: finished.result_id, ...r,
-      attrs_differed: r.attrs_differed || '',
-      // readable companions beside the raw ms — the ms stay for arithmetic
-      trainee_video_time_readable: msToReadable(r.tag?.video_time_ms),
-      correct_video_time_readable: msToReadable(r.key?.video_time_ms),
-      clip_time_taken_readable: msToReadable(r.clip_time_taken_ms),
-    })), ANSWERS_GIVEN_COLUMNS)
+    // toAnswerGivenRows lives in drillScoring beside the code that built these
+    // rows, because it has to know that scoreClip stores each side as
+    // { code, team, at, attrs } on `key` and `tag`. Spreading the rows straight
+    // in here is what left every trainee_* and correct_* column blank.
+    await appendOrQueue(
+      TAB_ANSWERS_GIVEN,
+      toAnswerGivenRows(finished.result_id, scored.rows, finished.clip_times || {}),
+      ANSWERS_GIVEN_COLUMNS)
 
     // creators testing their own quiz are excluded from the profile log
     if (!isTest) {

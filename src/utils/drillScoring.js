@@ -26,6 +26,8 @@
  * anything the trainer left empty.)
  */
 import { DRILL_TOLERANCE_MS, DRILL_ATTR_COLUMNS, DRILL_VERDICTS } from '../config/drillConfig'
+// FIELD's formatter — the only one. MM:SS.mmm, e.g. 6941 -> 00:06.941
+import { msToReadable } from './fieldSheetSync'
 
 /** Optimal assignment by brute force. Clips hold a handful of events, so the
  *  permutation count is trivial and this is exactly optimal — no need to pull
@@ -241,4 +243,52 @@ export function scoreAttempt({ clips, keyByClip, tagByClip, passMarkPercent }) {
     rows, counts, totalEvents: total, scorePercent,
     passed: scorePercent !== null && scorePercent >= Number(passMarkPercent || 0),
   }
+}
+
+/**
+ * Serialise scored rows into quiz_answers_given rows.
+ *
+ * This lives HERE, beside scoreClip, deliberately. scoreClip normalises both
+ * sides to an internal { code, team, at, attrs } shape and stores them on each
+ * row as `key` and `tag`. The caller previously spread those rows straight into
+ * the sheet writer, so only the fields that happened to share a column name —
+ * verdict, delta_ms, clip_index, event_index — ever landed, and every
+ * trainee_* and correct_* column came out blank. Keeping the mapping next to
+ * the code that invented the shape means the two cannot drift apart again.
+ *
+ * clipTimes maps clip_index -> ms spent on that clip.
+ */
+export function toAnswerGivenRows(resultId, rows, clipTimes = {}) {
+  return (rows || []).map(r => {
+    const row = {
+      result_id:   resultId,
+      clip_index:  r.clip_index,
+      event_index: r.event_index,
+
+      trainee_event_code:    r.tag?.code ?? '',
+      trainee_team:          r.tag?.team ?? '',
+      trainee_video_time_ms: r.tag ? r.tag.at : '',
+      trainee_video_time_readable: r.tag ? msToReadable(r.tag.at) : '',
+
+      correct_event_code:    r.key?.code ?? '',
+      correct_team:          r.key?.team ?? '',
+      correct_video_time_ms: r.key ? r.key.at : '',
+      correct_video_time_readable: r.key ? msToReadable(r.key.at) : '',
+
+      verdict:        r.verdict,
+      delta_ms:       r.delta_ms ?? '',
+      attrs_differed: Array.isArray(r.attrs_differed)
+        ? r.attrs_differed.join('|')
+        : (r.attrs_differed || ''),
+      clip_time_taken_ms:       clipTimes[r.clip_index] ?? '',
+      clip_time_taken_readable: clipTimes[r.clip_index] != null
+        ? msToReadable(clipTimes[r.clip_index]) : '',
+    }
+    // both sides' attributes, under their own prefixes
+    DRILL_ATTR_COLUMNS.forEach(c => {
+      row['trainee_' + c] = r.tag?.attrs?.[c] ?? ''
+      row['correct_' + c] = r.key?.attrs?.[c] ?? ''
+    })
+    return row
+  })
 }

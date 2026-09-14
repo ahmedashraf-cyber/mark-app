@@ -100,14 +100,16 @@ export function toScoringInput(s, clipRows, keyRows) {
   const keyByClip = {}
   keyRows.forEach(r => {
     const ci = Number(r.clip_index)
-    ;(keyByClip[ci] = keyByClip[ci] || []).push({
-      event_code: r.answer_event_code,
-      team: r.answer_team,
-      video_time_ms: Number(r.answer_video_time_ms || 0),
-      attrs: Object.fromEntries(Object.entries(r)
-        .filter(([k]) => k.startsWith('answer_attr_'))
-        .map(([k, v]) => [k.replace(/^answer_/, ''), v])),
-    })
+    // Pass the RAW sheet row through. scoreClip reads answer_event_code,
+    // answer_team, answer_video_time_ms and answer_attr_* itself.
+    //
+    // This used to rename them to event_code / video_time_ms / attrs here,
+    // which meant scoreClip found undefined for every code and 0 for every
+    // timestamp — so no key ever matched a trainee tag by code, everything
+    // fell through to the wrong-event path, and delta_ms came out as the
+    // trainee's raw time because it was measured against zero. Normalising in
+    // two places is what caused it; now only scoreClip does it.
+    ;(keyByClip[ci] = keyByClip[ci] || []).push(r)
   })
 
   const reached = new Set(s.order.slice(0, s.position))
