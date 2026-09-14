@@ -1,6 +1,6 @@
 {
   "name": "mark-app",
-  "version": "7.8.78",
+  "version": "7.8.79",
   "description": "MARK \u2014 Review App for Hudl Egypt",
   "scripts": {
     "dev": "vite",

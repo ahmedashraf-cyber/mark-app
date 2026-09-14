@@ -77,7 +77,7 @@ export default function DrillSessionPage({
   session: initial, clipRows, onFinish, onAbandon,
 }) {
   const [session, setSession] = useState(initial)
-  const [url,     setUrl]     = useState('')
+  const [urls,    setUrls]    = useState({})   // clip_index -> proxy url
   const [ready,   setReady]   = useState(false)
   const [started, setStarted] = useState(false)
   const [warned,  setWarned]  = useState(false)
@@ -94,32 +94,55 @@ export default function DrillSessionPage({
 
   const tags = session.tags[currentIdx] || []
 
+  // ── the URL must belong to THE CLIP ON SCREEN ─────────────────────────────
+  // Previously `url` was a single value set asynchronously. currentIdx moves the
+  // instant Next is pressed, but the URL arrived a moment later — so for that
+  // gap the trainee was watching clip N while addTag filed against clip N+1.
+  // Keying the URL by clip index makes that impossible: `url` is derived, so it
+  // is either the right clip's video or absent, never the wrong clip's.
+  const url = urls[currentIdx] || ''
+
   // persist on every change — a crash must not lose the attempt
   useEffect(() => { saveSession(session) }, [session])
 
-  // buffer the current clip, and pre-buffer the next so advancing is instant
+  // resolve and buffer the current clip, and pre-resolve the next so the
+  // transition is instant and the gap above never opens in practice
   useEffect(() => {
     if (!clip) return
     let alive = true
-    setReady(false)
-    driveClipUrl(clip.drive_file_id).then(u => {
-      if (!alive) return
-      setUrl(u)
-      const probe = document.createElement('video')
-      probe.preload = 'auto'
-      probe.muted = true
-      probe.oncanplaythrough = () => { if (alive) setReady(true) }
-      probe.onerror = () => { if (alive) setReady(true) }   // let it try anyway
-      probe.src = u
-    }).catch(() => { if (alive) setReady(true) })
 
-    const nextIdx = session.order[session.position + 1]
-    if (nextIdx != null && clipByIndex[nextIdx]) {
-      driveClipUrl(clipByIndex[nextIdx].drive_file_id).then(u => {
-        const pre = document.createElement('video')
-        pre.preload = 'auto'; pre.muted = true; pre.src = u
-      }).catch(() => {})
+    const resolve = async (idx, c) => {
+      if (!c || urls[idx]) return urls[idx]
+      const u = await driveClipUrl(c.drive_file_id)
+      if (!alive) return null
+      setUrls(prev => (prev[idx] ? prev : { ...prev, [idx]: u }))
+      return u
     }
+
+    ;(async () => {
+      setReady(false)
+      try {
+        const u = urls[currentIdx] || await resolve(currentIdx, clip)
+        if (!alive || !u) return
+        const probe = document.createElement('video')
+        probe.preload = 'auto'
+        probe.muted = true
+        probe.oncanplaythrough = () => { if (alive) setReady(true) }
+        probe.onerror = () => { if (alive) setReady(true) }   // let it try anyway
+        probe.src = u
+      } catch { if (alive) setReady(true) }
+
+      // pre-resolve and pre-buffer the next clip
+      const nextIdx = session.order[session.position + 1]
+      if (nextIdx != null && clipByIndex[nextIdx]) {
+        try {
+          const nu = await resolve(nextIdx, clipByIndex[nextIdx])
+          if (nu) { const pre = document.createElement('video')
+            pre.preload = 'auto'; pre.muted = true; pre.src = nu }
+        } catch {}
+      }
+    })()
+
     return () => { alive = false }
   }, [clip?.drive_file_id, session.position])
 
@@ -164,6 +187,9 @@ export default function DrillSessionPage({
   }
 
   function advance() {
+    // Refuse while the video is not up. Advancing here would record "no event"
+    // for a clip the trainee never actually saw.
+    if (!ready || !url) return
     const spent = clipStartRef.current ? Date.now() - clipStartRef.current : null
     clipStartRef.current = Date.now()
     setSession(s => {
@@ -242,20 +268,38 @@ export default function DrillSessionPage({
         <div style={{ display:'flex', gap:18, maxWidth:1060, margin:'0 auto', width:'100%' }}>
 
           <div style={{ flex:1, minWidth:0 }}>
-            <ClipTagger
-              clipUrl={url}
-              scopeIds={session.scope_event_ids}
-              instruction={clip.instruction}
-              events={tags}
-              onAdd={addTag}
-              onRemove={removeTag}
-              onNext={advance}
-              nextLabel={session.position + 1 >= total ? 'Finish' : 'Next clip'}
-            />
+            {ready && url ? (
+              <ClipTagger
+                // key by clip index: a new clip is a new component, so nothing
+                // from the previous one — a part-finished tag, a scrub position
+                // — can leak across a clip boundary
+                key={currentIdx}
+                clipUrl={url}
+                scopeIds={session.scope_event_ids}
+                instruction={clip.instruction}
+                events={tags}
+                onAdd={addTag}
+                onRemove={removeTag}
+                onNext={advance}
+                nextLabel={session.position + 1 >= total ? 'Finish' : 'Next clip'}
+              />
+            ) : (
+              <div className="card" style={{ padding:40, textAlign:'center' }}>
+                <div style={{ fontSize:13, fontWeight:600, marginBottom:6 }}>
+                  Loading clip {session.position + 1} of {total}…
+                </div>
+                <div style={{ fontSize:11, color:'var(--t-3)', lineHeight:1.6 }}>
+                  Tagging is disabled until the video is on screen, so an answer
+                  can never be recorded against the wrong clip.
+                </div>
+              </div>
+            )}
             <button className="btn-orange"
               style={{ width:'100%', padding:'12px 0', fontSize:13, marginTop:14 }}
+              disabled={!ready || !url}
               onClick={advance}>
-              {session.position + 1 >= total
+              {!ready || !url ? 'Loading…'
+                : session.position + 1 >= total
                 ? 'Finish and see my score →'
                 : `Next clip (${session.position + 2} of ${total}) →`}
             </button>
