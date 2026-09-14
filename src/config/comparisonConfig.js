@@ -8,13 +8,17 @@
  * Both are written to the scores tab so historical runs stay reproducible.
  */
 
-export const TOLERANCE_CONFIG_VERSION = '1'
+export const TOLERANCE_CONFIG_VERSION = '2'
 export const ALGORITHM_VERSION        = '1'  // Hungarian optimal assignment
 
 // ── Per-event-type tolerance in milliseconds ──────────────────────────────────
 // Events not listed use DEFAULT_TOLERANCE_MS.
 // To change: update the value AND bump TOLERANCE_CONFIG_VERSION.
-export const EVENT_TOLERANCES = {
+// Flat 2000ms for every event type. Was per-event (pressure 3000, shot 1000,
+// pass 1500); changed on request so Comparison and DRILL judge timing the same
+// way. TOLERANCE_CONFIG_VERSION is bumped to 2 so runs scored under the old
+// per-event windows stay identifiable rather than silently reinterpreted.
+export const EVENT_TOLERANCES_V1_UNUSED = {
   half_start:    500,   // near-exact — click at the whistle
   half_end:      500,
   pressure_start:3000,  // judgement call — "when does pressure start" is subjective
@@ -33,6 +37,9 @@ export const EVENT_TOLERANCES = {
   ball_recovery: 2000,
 }
 export const DEFAULT_TOLERANCE_MS = 2000
+
+// Flat window: every event type now uses DEFAULT_TOLERANCE_MS.
+export const EVENT_TOLERANCES = {}
 
 export function toleranceFor(eventCode) {
   return EVENT_TOLERANCES[eventCode] ?? DEFAULT_TOLERANCE_MS
