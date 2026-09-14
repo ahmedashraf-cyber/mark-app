@@ -110,6 +110,20 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
   // certain=false = uncertain (Block/Clearance/Punch/Miscontrol etc.)
   const [possession,   setPossession]   = useState({ team: null, certain: false })
 
+  // The keydown handler's dependency array (see the effect near the bottom of
+  // this file) does not — and should not — list `possession`: re-registering
+  // the listener on every flip would tear down and rebuild it mid-capture.
+  // But that meant the handler closed over a STALE possession, so pressing 0
+  // updated the header chip (which re-renders) while resolveTeam() inside the
+  // handler still saw the old team and stored it on the event. Header moved,
+  // event did not.
+  //
+  // A ref is read at call time, never captured, so the two can no longer
+  // disagree. Every read inside the handler goes through possessionRef;
+  // rendering still reads `possession` so the UI stays reactive.
+  const possessionRef = useRef({ team: null, certain: false })
+  useEffect(() => { possessionRef.current = possession }, [possession])
+
   // ── Capture state machine ──────────────────────────────────────────────────
   // step: 'idle' | 'type_confirm' | 'group' | 'team'
   const [captureStep,      setCaptureStep]      = useState('idle')
@@ -270,14 +284,14 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
     setCurrentSelections([])
 
     // Resolve team from possession (or keep null for explicit/n/a events)
-    const resolvedTeam = resolveTeam(eventDef.id, possession)
+    const resolvedTeam = resolveTeam(eventDef.id, possessionRef.current)
     const teamSrc = resolvedTeam !== null ? 'inferred' : null
     setPendingTeam(resolvedTeam)
     setPendingTeamSource(teamSrc)
 
     // Pass type inference
     if (eventDef.id === 'pass') {
-      const { type, defaulted } = inferPassType(events, possession)
+      const { type, defaulted } = inferPassType(events, possessionRef.current)
       setPendingType(type)
       setPendingTypeSource(defaulted ? 'inferred_default' : 'inferred')
       setCaptureStep('type_confirm')
@@ -358,6 +372,58 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
       }
     }
 
+    /**
+     * Swap in a variant's group chain and resume from the RIGHT place.
+     *
+     * This used to be setGroupIndex(0) unconditionally. For Shot that pointed
+     * straight back at the discriminator — every Shot variant's groups array
+     * begins with BODY_PART_SHOT, which the collector had just answered — so
+     * the sequence stalled there and Technique never appeared.
+     *
+     * Pass is the opposite case: it discriminates on a synthetic `type` group
+     * that appears in no variant chain, so a blanket "start at 1" would skip a
+     * real question. Hence: find where the discriminator actually sits and
+     * resume after it, or at 0 when it is absent.
+     *
+     * Conditional groups are skipped with the same predicate the normal advance
+     * path uses — selection count on the referenced group — so the two cannot
+     * disagree.
+     */
+    function applyVariantChain(matched, discriminatorId, savedGroups) {
+      const chain = matched.groups || []
+      const at = chain.findIndex(g => g.id === discriminatorId)
+      let idx = at >= 0 ? at + 1 : 0
+
+      const acc = [...savedGroups]
+      while (idx < chain.length) {
+        const g = chain[idx]
+        if (!g.conditionalOn) break
+        const ref = acc.find(x => x.groupId === g.conditionalOn.groupId)
+        const n = ref?.selections?.length || 0
+        if (n >= (g.conditionalOn.minSelections || 1)) break
+        acc.push({ groupId: g.id, groupLabel: g.label, selections: [] })
+        idx++
+      }
+
+      setGroupChain(chain)
+      setCurrentSelections([])
+      setCollectedGroups(acc)
+
+      if (idx < chain.length) {
+        setGroupIndex(idx)
+        setCaptureStep('group')
+        return
+      }
+      // chain exhausted — finish exactly as the normal path does
+      if (needsExplicitTeam(pendingEvent?.id)) {
+        setCaptureStep('team')
+      } else if (teamNotMeaningful(pendingEvent?.id)) {
+        commitEvent(null, undefined, null, acc, null, null, null, null)
+      } else {
+        commitEvent(null, undefined, null, acc, null, null, pendingTeam, pendingTeamSource)
+      }
+    }
+
     // If this group is the discriminator for variants, resolve branch
     if (pendingEvent?.variants && group.id === pendingEvent.variants.discriminatorGroupId) {
       const selectedCodes = selections.map(s=>s.code)
@@ -365,11 +431,7 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
         v.when.some(w => selectedCodes.includes(w))
       ) || pendingEvent.variants.variants[0]
       setResolvedVariant(matched)
-      const remainingChain = matched.groups
-      setGroupChain(remainingChain)
-      setGroupIndex(0)
-      setCurrentSelections([])
-      routeAfterGroups(remainingChain)
+      applyVariantChain(matched, group.id, saved)
       return
     }
 
@@ -379,11 +441,7 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
       const matched = pendingEvent.variants.variants.find(v => v.when.includes(selectedCode))
                    || pendingEvent.variants.variants[0]
       setResolvedVariant(matched)
-      const remainingChain = matched.groups
-      setGroupChain(remainingChain)
-      setGroupIndex(0)
-      setCurrentSelections([])
-      routeAfterGroups(remainingChain)
+      applyVariantChain(matched, group.id, saved)
       return
     }
 
@@ -505,12 +563,18 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
     }
 
     // Apply possession flip AFTER building the event (uses the committed groups)
-    const newPossession = applyFlip(realDef.id, ev, possession)
+    const newPossession = applyFlip(realDef.id, ev, possessionRef.current)
 
     // For Half start: set possession from Team Side explicit prompt result
     if (realDef.id === 'half_start' && realTeam) {
+      possessionRef.current = { team: realTeam, certain: true }
       setPossession({ team: realTeam, certain: true })
     } else {
+      // Inferred flips (successful tackle, interception won, and the rest) must
+      // update the ref as well, not just state. Otherwise the very next event
+      // tagged in the same tick would still resolve against the pre-flip team —
+      // the same fault as the manual 0 toggle, arriving by a different route.
+      possessionRef.current = newPossession
       setPossession(newPossession)
     }
 
@@ -542,6 +606,34 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
   }
 
   // ── Delete event ───────────────────────────────────────────────────────────
+  /**
+   * Re-tag an existing event.
+   *
+   * FIELD had no editor: the Edit button was rendered but FieldPage passed
+   * onEdit={null}, so clicking it called null(tag) and died silently.
+   *
+   * Rather than build a second attribute editor that would drift from the
+   * capture state machine, this removes the event and replays capture for the
+   * same event type at the same video time. Every rule — variants, conditional
+   * groups, possession, open-state pairing — is the live one by construction.
+   */
+  async function editEvent(ev) {
+    if (!ev || captureStep !== 'idle') return
+    const def = EVENT_BY_ID[ev.eventId] || FIELD_EVENTS.find(e => e.id === ev.eventId)
+    if (!def) { console.warn('[MARK Field] edit: unknown eventId', ev.eventId); return }
+
+    const vt = (ev.videoTimeMs != null ? ev.videoTimeMs / 1000 : ev.videoTime) || 0
+    await deleteEvent(ev)
+
+    // park the video on the event so the collector sees what they are re-tagging
+    const v = videoRef.current
+    if (v) { v.pause(); v.currentTime = vt }
+
+    setFlashEvent(`Re-tagging ${def.label}`)
+    setTimeout(() => setFlashEvent(null), 1400)
+    startCapture(def, vt)
+  }
+
   async function deleteEvent(ev) {
     try {
       const q=query(collection(db,'mark_collected_events'),where('id','==',ev.id))
@@ -634,11 +726,14 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
       // Key 0 = manual possession flip
       if (key==='0') {
         e.preventDefault()
-        setPossession(prev => {
-          const flipped = prev.team === 'home' ? 'away' : prev.team === 'away' ? 'home' : null
-          return { team: flipped, certain: true }
-        })
-        setFlashEvent(possession.team === 'home' ? '← Possession: Away' : possession.team === 'away' ? '→ Possession: Home' : 'Possession unknown')
+        const before = possessionRef.current.team
+        const flipped = before === 'home' ? 'away' : before === 'away' ? 'home' : null
+        // write the ref immediately: an event tagged in the same tick must see
+        // the new team, not wait for the state round trip
+        possessionRef.current = { team: flipped, certain: true }
+        setPossession({ team: flipped, certain: true })
+        setFlashEvent(flipped === 'away' ? '← Possession: Away'
+          : flipped === 'home' ? '→ Possession: Home' : 'Possession unknown')
         setTimeout(()=>setFlashEvent(null),1200)
         return
       }
@@ -1139,7 +1234,7 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
 
       {/* ── Events list ── */}
       <TaggedEventsList tags={events} videoDuration={duration} currentTime={currentTime}
-        matchName="Home vs Away" onEdit={null} onDelete={deleteEvent}/>
+        matchName="Home vs Away" onEdit={editEvent} onDelete={deleteEvent}/>
 
       {/* ── Pending upload notification (shown on launch if previous save failed) ── */}
       {pendingUpload && !showDoneModal && (
