@@ -59,7 +59,48 @@ function basename(p) { return p ? (p.split(/[\\/]/).pop()||p) : 'Untitled' }
 // KEYS for group option selection (per spec: verbatim toggleKey, not remapped)
 // The keyboard handler maps the *group's* toggleKey list, not a global array.
 
-function getGroupOptions(group) { return group?.options || [] }
+/**
+ * Options for a group, minus any whose conditions are not met.
+ *
+ * WHY THIS EXISTS
+ * `conditionalOn` gates a WHOLE GROUP on the selection COUNT of another group —
+ * that is what Tackle's Side uses. It cannot express "add Aerial to Extras when
+ * body part is Head", because that is a single OPTION appearing on the basis of
+ * a selected VALUE. So options may now carry:
+ *
+ *   visibleWhen: [{ groupId, anyOf: ['CODE', ...] }, ...]
+ *
+ * ALL entries must match (AND), and within one entry any listed code matches
+ * (OR). That covers both cases asked for:
+ *   Aerial  — visibleWhen: [{ groupId:'body_part', anyOf:[BODY_HEAD] }]
+ *   Launch  — visibleWhen: [{ groupId:'height',    anyOf:[HEIGHT_HIGH] },
+ *                           { groupId:'body_part', anyOf:[L_FOOT, R_FOOT] }]
+ *
+ * An option with no visibleWhen always shows, so every existing option is
+ * unaffected.
+ *
+ * `collected` is the groups answered so far; `live` is the in-progress
+ * selection for the current group, needed when the condition refers to the
+ * group being edited right now.
+ */
+function getGroupOptions(group, collected, live) {
+  const opts = group?.options || []
+  if (!opts.some(o => o.visibleWhen)) return opts   // fast path, nothing to filter
+
+  const codesFor = groupId => {
+    if (group?.id === groupId) return (live || []).map(x => x.code)
+    const g = (collected || []).find(x => x.groupId === groupId)
+    return (g?.selections || []).map(x => x.code)
+  }
+
+  return opts.filter(o => {
+    if (!o.visibleWhen) return true
+    return o.visibleWhen.every(cond => {
+      const chosen = codesFor(cond.groupId)
+      return (cond.anyOf || []).some(c => chosen.includes(c))
+    })
+  })
+}
 
 // ─── Open-state helpers ───────────────────────────────────────────────────────
 function getCloseAction(openStates, key) {
@@ -683,7 +724,7 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
         if (key==='Escape') { abandonCapture(); return }
         const group = groupChain[groupIndex]
         if (!group) return
-        const opts = getGroupOptions(group)
+        const opts = getGroupOptions(group, collectedGroups, currentSelections)
 
         // Enter = skip (if optional) or confirm multi-select
         if (key==='Enter') {
@@ -1169,7 +1210,7 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
                   {currentGroup.label} — {currentGroup.selectType==='single'?'select one':'select any, Enter when done'}{!currentGroup.required?' (optional)':''}
                 </div>
                 <div style={{display:'flex',flexWrap:'wrap',gap:6}}>
-                  {getGroupOptions(currentGroup).map(opt=>{
+                  {getGroupOptions(currentGroup, collectedGroups, currentSelections).map(opt=>{
                     const sel=currentSelections.find(s=>s.code===opt.code)
                     return (
                       <div key={opt.code}
