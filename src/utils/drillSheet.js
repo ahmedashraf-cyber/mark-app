@@ -24,7 +24,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { db } from '../firebase/config'
 import { doc, getDoc, setDoc } from 'firebase/firestore'
 import {
-  DRILL_CONFIG_DOC, DRILL_TABS,
+  DRILL_CONFIG_DOC, DRILL_TABS, DRILL_SHEET_ID_DEFAULT,
 } from '../config/drillConfig'
 
 const SHEETS_BASE = 'https://sheets.googleapis.com/v4/spreadsheets'
@@ -43,10 +43,22 @@ async function token() {
 /** Read the stored ID, or null. */
 export async function getDrillSheetId() {
   if (_sheetId) return _sheetId
-  const snap = await getDoc(doc(db, 'mark_config', DRILL_CONFIG_DOC))
-  const id = snap.exists() ? (snap.data()?.spreadsheetId || null) : null
-  if (id) _sheetId = id
-  return id
+  // Firestore first, so the ID can be changed centrally without a new build.
+  try {
+    const snap = await getDoc(doc(db, 'mark_config', DRILL_CONFIG_DOC))
+    const id = snap.exists() ? (snap.data()?.spreadsheetId || null) : null
+    if (id) { _sheetId = id; return id }
+  } catch (e) {
+    console.warn('[DRILL] could not read mark_config/drill:', e.message)
+  }
+  // Fall back to the spreadsheet that was set up and verified by hand. Without
+  // this, a fresh install fails with "spreadsheet does not exist yet" even
+  // though the sheet is sitting there shared and working.
+  if (DRILL_SHEET_ID_DEFAULT) {
+    _sheetId = DRILL_SHEET_ID_DEFAULT
+    return _sheetId
+  }
+  return null
 }
 
 /**
