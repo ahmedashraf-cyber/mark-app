@@ -123,6 +123,10 @@ export const SESSIONS_COLUMNS = [
   'total_events', 'correct_count', 'missed_count', 'not_needed_count',
   'wrong_event_count', 'wrong_team_count', 'wrong_timestamp_count',
   'wrong_extra_count', 'total_time_taken_ms', 'total_time_taken_readable', 'is_test_run', 'status',
+  // the shuffled order the trainee actually saw, e.g. "1|2|0". Without it a
+  // result cannot be audited — you cannot tell a mapping fault from a trainee
+  // tagging the clips they were shown in an order nobody recorded.
+  'presentation_order',
 ]
 
 export const ANSWERS_GIVEN_COLUMNS = [
@@ -132,6 +136,8 @@ export const ANSWERS_GIVEN_COLUMNS = [
   'correct_event_code', 'correct_team', 'correct_video_time_ms', 'correct_video_time_readable',
   ...DRILL_ATTR_COLUMNS.map(a => 'correct_' + a),
   'verdict', 'delta_ms', 'attrs_differed', 'clip_time_taken_ms', 'clip_time_taken_readable',
+  // which slot this clip occupied in the shuffled run (1-based); '' if never reached
+  'presented_position',
 ]
 
 export const ASSIGNMENTS_COLUMNS = [

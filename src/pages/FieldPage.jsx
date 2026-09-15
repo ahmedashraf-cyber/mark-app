@@ -1283,7 +1283,7 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
 
       {/* ── Scrub bar ── */}
       <div style={{flexShrink:0,background:'var(--bg-2)',borderTop:'1px solid var(--b-1)',padding:'4px 16px 8px'}}>
-        <ErrorTimeline errors={events} videoDuration={duration} videoRef={videoRef} showLabels
+        <ErrorTimeline errors={events} videoDuration={duration} videoRef={videoRef}
           currentTime={currentTime} playing={playing} muted={muted}
           onSeek={seekTo} onSyncSeek={seekTo} onTogglePlay={togglePlay} onToggleMute={toggleMute}
           onDragStart={()=>{isDraggingRef.current=true}}/>

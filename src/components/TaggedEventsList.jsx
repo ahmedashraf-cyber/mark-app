@@ -35,6 +35,14 @@ function getDotColor(index) {
 }
 
 // ── Detail Panel (slides down from top bar) ───────────────────────────────────
+
+// A tag's display name. Scout passes error tags (triggeredEventLabel /
+// errorType); FIELD passes collected events (eventLabel). This component was
+// written for Scout, so FIELD bars rendered empty.
+function tagName(tag) {
+  return tag?.eventLabel || tag?.triggeredEventLabel || tag?.errorType || ''
+}
+
 function DetailPanel({ tag, onEdit, onDelete, onClose, readOnly = false }) {
   const extras = tag.extras || []
 
@@ -62,7 +70,7 @@ function DetailPanel({ tag, onEdit, onDelete, onClose, readOnly = false }) {
         {tag.triggeredKey || '•'}
       </span>
       <span style={{ fontFamily: 'Inter', fontWeight: 700, fontSize: 13, color: 'var(--t-1)', flexShrink: 0 }}>
-        {tag.triggeredEventLabel}
+        {tagName(tag)}
       </span>
 
       {/* Extras as pills */}
@@ -136,7 +144,7 @@ function CommentBox({ tag, onSave, onClose }) {
         borderRadius: 5, padding: '2px 7px', flexShrink: 0,
       }}>{tag.triggeredKey || '•'}</span>
       <span style={{ fontFamily: 'Inter', fontWeight: 700, fontSize: 13, color: 'var(--t-1)', flexShrink: 0 }}>
-        {tag.triggeredEventLabel}
+        {tagName(tag)}
       </span>
       <input
         ref={inputRef}
@@ -278,7 +286,7 @@ function TimelineRow({ label, tags, allTags, videoDuration, currentTime, selecte
                   ))}
                 </div>
                 <div
-                  title={tag.triggeredEventLabel + (tag.comment ? ' — ' + tag.comment : '')}
+                  title={tagName(tag) + (tag.comment ? ' — ' + tag.comment : '')}
                   style={{
                     padding: '4px 8px',
                     borderRadius: 5,
@@ -298,8 +306,11 @@ function TimelineRow({ label, tags, allTags, videoDuration, currentTime, selecte
                     textAlign: 'center',
                     boxShadow: isSelected ? '0 0 8px rgba(232,89,12,0.5)' : 'none',
                     transition: 'all .12s',
-                  }}>
-                  {tag.triggeredEventLabel}
+                  }}
+                  // full name on hover, for when the bar is too narrow to show
+                  // it — the bar already truncates with an ellipsis
+                  title={tagName(tag)}>
+                  {tagName(tag)}
                 </div>
                 <div style={{ fontSize: 9, color: 'var(--t-3)', fontFamily: 'JetBrains Mono, monospace' }}>
                   {fmt(tag.videoTimeSec)}

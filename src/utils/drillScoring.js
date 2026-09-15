@@ -258,7 +258,13 @@ export function scoreAttempt({ clips, keyByClip, tagByClip, passMarkPercent }) {
  *
  * clipTimes maps clip_index -> ms spent on that clip.
  */
-export function toAnswerGivenRows(resultId, rows, clipTimes = {}) {
+export function toAnswerGivenRows(resultId, rows, clipTimes = {}, order = []) {
+  // 1-based slot each clip occupied in the shuffled run, so a row reads
+  // "clip 2, shown 2nd" and a surprising verdict explains itself
+  const slotOf = ci => {
+    const i = (order || []).indexOf(Number(ci))
+    return i >= 0 ? i + 1 : ''
+  }
   return (rows || []).map(r => {
     const row = {
       result_id:   resultId,
@@ -283,6 +289,7 @@ export function toAnswerGivenRows(resultId, rows, clipTimes = {}) {
       clip_time_taken_ms:       clipTimes[r.clip_index] ?? '',
       clip_time_taken_readable: clipTimes[r.clip_index] != null
         ? msToReadable(clipTimes[r.clip_index]) : '',
+      presented_position: slotOf(r.clip_index),
     }
     // both sides' attributes, under their own prefixes
     DRILL_ATTR_COLUMNS.forEach(c => {
