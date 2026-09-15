@@ -25,7 +25,7 @@
  * untouched is wrong. (This overrides the original brief, which said to ignore
  * anything the trainer left empty.)
  */
-import { DRILL_TOLERANCE_MS, DRILL_ATTR_COLUMNS, DRILL_VERDICTS } from '../config/drillConfig'
+import { DRILL_TOLERANCE_MS, DRILL_ATTR_COLUMNS, DRILL_VERDICTS, computeDrillScore } from '../config/drillConfig'
 // FIELD's formatter — the only one. MM:SS.mmm, e.g. 6941 -> 00:06.941
 import { msToReadable } from './fieldSheetSync'
 
@@ -234,13 +234,22 @@ export function scoreAttempt({ clips, keyByClip, tagByClip, passMarkPercent }) {
   })
 
   const counts = tally(rows)
-  const correct = counts.correct || 0
-  const errors  = DRILL_VERDICTS.filter(v => v !== 'correct')
-    .reduce((s, v) => s + (counts[v] || 0), 0)
-  const total = correct + errors
-  const scorePercent = total ? Math.round((correct / total) * 1000) / 10 : null
+
+  // What the answer key expected: one per key event, plus one per no-event clip
+  // (answering a trap correctly is an expectation met, and a quiz of only trap
+  // clips would otherwise have a zero denominator). This is the denominator, so
+  // it does not move with what the trainee did — surplus tags are errors in the
+  // numerator and cannot dilute themselves.
+  const expected = (clips || []).reduce((sum, c) => {
+    const ci = Number(c.clip_index)
+    const n = (keyByClip[ci] || []).length
+    return sum + (n > 0 ? n : 1)
+  }, 0)
+
+  // one formula, shared with the sheet writer and the UI
+  const scorePercent = computeDrillScore(counts, expected)
   return {
-    rows, counts, totalEvents: total, scorePercent,
+    rows, counts, totalEvents: expected, scorePercent, expectedEvents: expected,
     passed: scorePercent !== null && scorePercent >= Number(passMarkPercent || 0),
   }
 }
@@ -258,13 +267,7 @@ export function scoreAttempt({ clips, keyByClip, tagByClip, passMarkPercent }) {
  *
  * clipTimes maps clip_index -> ms spent on that clip.
  */
-export function toAnswerGivenRows(resultId, rows, clipTimes = {}, order = []) {
-  // 1-based slot each clip occupied in the shuffled run, so a row reads
-  // "clip 2, shown 2nd" and a surprising verdict explains itself
-  const slotOf = ci => {
-    const i = (order || []).indexOf(Number(ci))
-    return i >= 0 ? i + 1 : ''
-  }
+export function toAnswerGivenRows(resultId, rows, clipTimes = {}) {
   return (rows || []).map(r => {
     const row = {
       result_id:   resultId,
@@ -289,7 +292,6 @@ export function toAnswerGivenRows(resultId, rows, clipTimes = {}, order = []) {
       clip_time_taken_ms:       clipTimes[r.clip_index] ?? '',
       clip_time_taken_readable: clipTimes[r.clip_index] != null
         ? msToReadable(clipTimes[r.clip_index]) : '',
-      presented_position: slotOf(r.clip_index),
     }
     // both sides' attributes, under their own prefixes
     DRILL_ATTR_COLUMNS.forEach(c => {

@@ -6,8 +6,9 @@
  * Persisted to localStorage after every clip so closing MARK mid-quiz does not
  * lose the attempt. Three things have to survive a restart:
  *
- *   the clip ORDER — shuffled once at start and stored. Re-shuffling on resume
- *   would show clips twice and skip others.
+ *   the clip ORDER — the quiz's own ascending clip_index. Kept on the session so
+ *   a session started before randomisation was removed resumes in the order it
+ *   was actually presented in, rather than reordering under the trainee.
  *
  *   the elapsed TIME — stored as accumulated milliseconds rather than a start
  *   timestamp, because the timer pauses while MARK is closed. A start-time
@@ -19,18 +20,27 @@
  */
 import { DRILL_LS_KEY, RESUME_WINDOW_MS, SESSION_STATUS, newId } from '../config/drillConfig'
 
-/** Fisher-Yates. Order is generated ONCE and then persisted. */
-function shuffle(arr) {
-  const a = [...arr]
-  for (let i = a.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1))
-    ;[a[i], a[j]] = [a[j], a[i]]
-  }
-  return a
+/**
+ * Playback order: the quiz's own clip_index sequence, ascending.
+ *
+ * Randomisation is gone. It was never stored on the quiz, the clips, the answer
+ * key or the assignment — it existed only in memory at session start — but it
+ * meant the clip on screen and the clip being scored were related by a mapping,
+ * and every clip-attribution bug we chased traced back to that indirection.
+ * With this, order[i] === i for a contiguous quiz and there is nothing to map.
+ *
+ * This is still an array rather than a bare counter because clip_index need not
+ * be contiguous: an excluded or missing clip leaves a gap.
+ */
+function playbackOrder(clips) {
+  return clips
+    .map(c => Number(c.clip_index))
+    .filter(n => Number.isFinite(n))
+    .sort((a, b) => a - b)
 }
 
 export function createSession({ quiz, clips, trainee, attemptNumber = 1 }) {
-  const order = shuffle(clips.map(c => Number(c.clip_index)))
+  const order = playbackOrder(clips)
   return {
     result_id: newId('res'),
     quiz_id: quiz.quiz_id,
@@ -44,7 +54,7 @@ export function createSession({ quiz, clips, trainee, attemptNumber = 1 }) {
     attempt_number: attemptNumber,
     started_at: Date.now(),         // for the 24h window
     elapsed_ms: 0,                  // accumulated; the timer pauses when closed
-    order,                          // clip_index values, in the order to show
+    order,                          // clip_index values, ascending
     position: 0,                    // how far through `order`
     tags: {},                       // clip_index -> [tagged events]
     clip_times: {},                 // clip_index -> ms spent on it

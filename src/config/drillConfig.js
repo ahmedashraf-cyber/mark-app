@@ -67,12 +67,27 @@ export const DRILL_VERDICTS = [
 ]
 export const DRILL_ERROR_VERDICTS = DRILL_VERDICTS.filter(v => v !== 'correct')
 
-export function computeDrillScore(counts) {
-  const correct = counts.correct || 0
-  const errors  = DRILL_ERROR_VERDICTS.reduce((s, v) => s + (counts[v] || 0), 0)
-  const total   = correct + errors
-  if (total === 0) return null
-  return Math.round((correct / total) * 1000) / 10
+/**
+ *   score = 100 - (total_errors / total_expected_events) * 100
+ *
+ * The denominator is what the answer key expected, so it does not move with
+ * what the trainee did. The old formula was correct/(correct+errors), which let
+ * a trainee's own surplus tags enlarge their denominator and soften the
+ * penalty — the same fault Comparison had.
+ *
+ * Every error type carries equal weight. Floored at 0: a trainee cannot do
+ * worse than getting every expected event wrong, and surplus tags can push the
+ * error count past the expectation.
+ *
+ * `expected` counts one per answer-key event, plus one per no-event clip — a
+ * trap clip answered correctly is a real expectation met, and without it a
+ * quiz made only of trap clips would have a zero denominator.
+ */
+export function computeDrillScore(counts, expected) {
+  const errors = DRILL_ERROR_VERDICTS.reduce((s, v) => s + (counts[v] || 0), 0)
+  const denom  = Number(expected) || 0
+  if (denom <= 0) return null
+  return Math.max(0, Math.round((100 - (errors / denom) * 100) * 10) / 10)
 }
 
 // ── Session rules ────────────────────────────────────────────────────────────
@@ -123,10 +138,6 @@ export const SESSIONS_COLUMNS = [
   'total_events', 'correct_count', 'missed_count', 'not_needed_count',
   'wrong_event_count', 'wrong_team_count', 'wrong_timestamp_count',
   'wrong_extra_count', 'total_time_taken_ms', 'total_time_taken_readable', 'is_test_run', 'status',
-  // the shuffled order the trainee actually saw, e.g. "1|2|0". Without it a
-  // result cannot be audited — you cannot tell a mapping fault from a trainee
-  // tagging the clips they were shown in an order nobody recorded.
-  'presentation_order',
 ]
 
 export const ANSWERS_GIVEN_COLUMNS = [
@@ -136,8 +147,6 @@ export const ANSWERS_GIVEN_COLUMNS = [
   'correct_event_code', 'correct_team', 'correct_video_time_ms', 'correct_video_time_readable',
   ...DRILL_ATTR_COLUMNS.map(a => 'correct_' + a),
   'verdict', 'delta_ms', 'attrs_differed', 'clip_time_taken_ms', 'clip_time_taken_readable',
-  // which slot this clip occupied in the shuffled run (1-based); '' if never reached
-  'presented_position',
 ]
 
 export const ASSIGNMENTS_COLUMNS = [

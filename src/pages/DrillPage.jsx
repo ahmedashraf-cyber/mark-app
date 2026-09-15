@@ -189,7 +189,6 @@ export default function DrillPage({ onBack }) {
       total_time_taken_ms: timeTakenMs,
       total_time_taken_readable: msToReadable(timeTakenMs),
       is_test_run: isTest ? 1 : 0, status: finished.status,
-      presentation_order: (finished.order || []).join('|'),
     }], SESSIONS_COLUMNS)
 
     // toAnswerGivenRows lives in drillScoring beside the code that built these
@@ -198,7 +197,7 @@ export default function DrillPage({ onBack }) {
     // in here is what left every trainee_* and correct_* column blank.
     await appendOrQueue(
       TAB_ANSWERS_GIVEN,
-      toAnswerGivenRows(finished.result_id, scored.rows, finished.clip_times || {}, finished.order || []),
+      toAnswerGivenRows(finished.result_id, scored.rows, finished.clip_times || {}),
       ANSWERS_GIVEN_COLUMNS)
 
     // creators testing their own quiz are excluded from the profile log
