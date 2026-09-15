@@ -35,6 +35,20 @@ import TagPanel from '../components/TagPanel'
 import TaggedEventsList from '../components/TaggedEventsList'
 import ErrorTimeline from '../components/ErrorTimeline'
 import EventsSidebar from '../components/EventsSidebar'
+import {
+  DT_A_EVENTS  as DT_A_EVENTS_SHARED,
+  DT_B_EVENTS  as DT_B_EVENTS_SHARED,
+  DT_C_EVENTS  as DT_C_EVENTS_SHARED,
+  DT_D_EVENTS  as DT_D_EVENTS_SHARED,
+  DT_TO_EVENTS as DT_TO_EVENTS_SHARED,
+  DT_EXTRA_A   as DT_EXTRA_A_SHARED,
+  DT_EXTRA_B   as DT_EXTRA_B_SHARED,
+  DT_EXTRA_C   as DT_EXTRA_C_SHARED,
+  DT_PASS_D    as DT_PASS_D_SHARED,
+  DT_EXTRA_TO  as DT_EXTRA_TO_SHARED,
+  DT_SEV       as DT_SEV_SHARED,
+  normalizeEventId, classifyEventModule,
+} from '../utils/defectTypes'
 import { exportScoutSession } from '../utils/exportScoutSession'
 import { formatHalf } from '../utils/half.js'
 
@@ -316,54 +330,23 @@ export default function ReviewPage({ session, onDone, onBack, bridgeSyncStatus, 
   // bridge responds with video time + event count — zero Firebase usage
 
   // ── Defect type classification (Python logic — same as MARK Audit) ────────
-  const DT_A_EVENTS  = new Set(['card','foul-committed','end-stoppage','stoppage','player-off','player-on',
-    'referee-ball-drop','shot','end-shot','substitution','tactical-shift','own-goal-against','starting-xi','error'])
-  const DT_B_EVENTS  = new Set(['fifty-fifty','clearance','dribble','interception','miscontrol','shield','block','tackle'])
-  const DT_C_EVENTS  = new Set(['pressure-start','pressure-end','ball-recovery','pressure'])
-  const DT_D_EVENTS  = new Set(['reception'])
-  const DT_TO_EVENTS = new Set(['hold-up-duel','leg-stretch-duel','positioning-duel','separation-duel'])
-  const DT_EXTRA_A   = new Set(['free-kick','kick-off','corner','through-ball','save','offside','conceded-no-save','save-attempt'])
-  const DT_EXTRA_B   = new Set(['interception','keeper-sweeper','smother','collected','punch','recovery'])
-  const DT_EXTRA_C   = new Set(['aerial-won'])
-  const DT_PASS_D    = new Set(['open-play','first-time'])
-  const DT_EXTRA_TO  = new Set(['launch','step-in','right-take-on','left-take-on','sliding','right','left','none'])
-  const DT_SEV       = { 'TO':0,'A':1,'B':2,'C':3,'D':4 }
-
-  // Normalize Scout underscore IDs to MARK Audit hyphen names
-  // e.g. 'foul_committed' → 'foul-committed', 'ball_recovery' → 'ball-recovery'
-  // Special cases: 'pressure' → 'pressure-start', 'pass_first_time' → 'pass' (D via type)
-  // 'pass_interception' → 'interception' (B), 'pass_recovery' → 'ball-recovery' (C)
-  const normalizeScoutId = (id) => {
-    if (!id) return ''
-    const map = {
-      'pressure':         'pressure-start',
-      'pass_first_time':  'pass',
-      'pass_interception':'interception',
-      'pass_recovery':    'ball-recovery',
-      'goal_keeper':      'goal-keeper',
-      'fifty_fifty':      'fifty-fifty',
-      'foul_committed':   'foul-committed',
-      'own_goal_against': 'own-goal-against',
-      'ball_recovery':    'ball-recovery',
-      'hold_up_duel':     'hold-up-duel',
-      'leg_stretch_duel': 'leg-stretch-duel',
-      'positioning_duel': 'positioning-duel',
-      'separation_duel':  'separation-duel',
-    }
-    return map[id] || id.replace(/_/g, '-')
-  }
-
-  const classifyScoutEvent = (triggeredEventId) => {
-    const name = normalizeScoutId(triggeredEventId)
-    if (DT_A_EVENTS.has(name))  return 'A'
-    if (DT_B_EVENTS.has(name))  return 'B'
-    if (DT_C_EVENTS.has(name))  return 'C'
-    if (DT_D_EVENTS.has(name))  return 'D'
-    if (DT_TO_EVENTS.has(name)) return 'TO'
-    // pass variants default to D
-    if (name === 'pass') return 'D'
-    return 'D'
-  }
+  // Defect-type classification now lives in utils/defectTypes.js so Comparison
+  // can use the same mapping instead of duplicating it. These aliases keep
+  // every call site in this file unchanged, and defectTypes.parity.mjs asserts
+  // the imported classifier returns identical modules for all 73 test cases.
+  const DT_A_EVENTS  = DT_A_EVENTS_SHARED
+  const DT_B_EVENTS  = DT_B_EVENTS_SHARED
+  const DT_C_EVENTS  = DT_C_EVENTS_SHARED
+  const DT_D_EVENTS  = DT_D_EVENTS_SHARED
+  const DT_TO_EVENTS = DT_TO_EVENTS_SHARED
+  const DT_EXTRA_A   = DT_EXTRA_A_SHARED
+  const DT_EXTRA_B   = DT_EXTRA_B_SHARED
+  const DT_EXTRA_C   = DT_EXTRA_C_SHARED
+  const DT_PASS_D    = DT_PASS_D_SHARED
+  const DT_EXTRA_TO  = DT_EXTRA_TO_SHARED
+  const DT_SEV       = DT_SEV_SHARED
+  const normalizeScoutId   = normalizeEventId
+  const classifyScoutEvent = classifyEventModule
 
   const mergeClassDT = (c1, c2) => {
     if (!c1) return c2 || 'D'
