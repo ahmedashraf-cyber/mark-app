@@ -19,6 +19,7 @@ import { collection, query, where, getDocs } from 'firebase/firestore'
 import { invoke } from '@tauri-apps/api/core'
 import { useAuth } from '../hooks/useAuth.jsx'
 import { compare } from '../utils/compareEngine'
+import { MODULES_SPLIT, MODULE_LABELS } from '../utils/defectTypes'
 import { writeComparisonResults } from '../utils/comparisonSheet'
 import { FIELD_SHEET_ID, EVENT_COLUMNS } from '../config/fieldConfig'
 import { CURRENT_VERSION } from '../hooks/useUpdateCheck'
@@ -442,6 +443,63 @@ export default function ComparisonPage({ onBack }) {
                 Collector (scoped): {result.collectorEventCount} events
               </div>
             </div>
+
+            {/* ── Module breakdown ─────────────────────────────────────────
+                Pressure is its own module here, lifted out of C, so this will
+                NOT match Audit's C. Deliberate — Audit can follow later.
+                A module the model answer does not cover reads "no data", never
+                0% and never 100%. ───────────────────────────────────────── */}
+            {result.moduleStats && (
+              <div className="card" style={{ padding:16, marginBottom:14 }}>
+                <div style={{ display:'flex', alignItems:'baseline', gap:10, marginBottom:4 }}>
+                  <div style={{ fontSize:14, fontWeight:700 }}>By module</div>
+                  <div style={{ fontSize:10, color:'var(--t-3)' }}>
+                    denominator is the model answer's events for that module
+                  </div>
+                </div>
+                <div style={{ display:'grid', gridTemplateColumns:'repeat(7,1fr)', gap:8, marginTop:10 }}>
+                  {/* Overall first, then the six modules */}
+                  <div style={{ background:'var(--bg-3)', borderRadius:8, padding:'10px 6px',
+                    textAlign:'center', border:'1px solid var(--b-1)' }}>
+                    <div style={{ fontSize:18, fontWeight:900,
+                      color: result.score === null ? 'var(--t-3)'
+                        : result.score >= 90 ? '#30D158' : result.score >= 75 ? '#FFD60A' : '#FF453A' }}>
+                      {result.score !== null ? result.score + '%' : '—'}
+                    </div>
+                    <div style={{ fontSize:9, fontWeight:800, color:'var(--t-2)', marginTop:3,
+                      letterSpacing:0.6 }}>OVERALL</div>
+                    <div style={{ fontSize:8, color:'var(--t-3)', marginTop:2 }}>
+                      {(result.verdictCounts?.correct || 0)}/{result.modelEventCount}
+                    </div>
+                  </div>
+                  {MODULES_SPLIT.map(mod => {
+                    const st = result.moduleStats[mod] || { score:null, correct:0, errors:0, events:0 }
+                    const noData = st.events === 0
+                    return (
+                      <div key={mod} style={{ background:'var(--bg-3)', borderRadius:8,
+                        padding:'10px 6px', textAlign:'center',
+                        opacity: noData ? 0.45 : 1 }}>
+                        <div style={{ fontSize:18, fontWeight:900,
+                          color: noData ? 'var(--t-3)'
+                            : st.score >= 90 ? '#30D158' : st.score >= 75 ? '#FFD60A' : '#FF453A' }}>
+                          {noData ? '—' : st.score + '%'}
+                        </div>
+                        <div style={{ fontSize:9, fontWeight:800, color:'var(--t-2)', marginTop:3,
+                          letterSpacing:0.6 }}>{MODULE_LABELS[mod].toUpperCase()}</div>
+                        <div style={{ fontSize:8, color:'var(--t-3)', marginTop:2 }}>
+                          {noData ? 'no data' : `${st.correct}/${st.events} · ${st.errors} err`}
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+                <div style={{ marginTop:10, fontSize:9, color:'var(--t-3)', lineHeight:1.5 }}>
+                  Module correct counts sum to the overall correct count — the overall score is
+                  across all events, not an average of the module scores. Pressure is separated
+                  from C here, so C covers ball recovery and pass recovery only.
+                </div>
+              </div>
+            )}
 
             {/* Detail table */}
             <div className="card" style={{ padding:16, marginBottom:12 }}>

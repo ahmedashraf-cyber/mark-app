@@ -23,6 +23,7 @@
  */
 
 import { toleranceFor, ERROR_VERDICTS } from '../config/comparisonConfig'
+import { classifyEventModuleSplit, MODULES_SPLIT } from './defectTypes'
 
 // ── Optimal assignment (Jonker-Volgenant / shortest augmenting path) ─────────
 // Handles non-square cost matrices (more rows than cols or vice versa).
@@ -311,10 +312,40 @@ export function compare(sessA, eventsA, sessB, eventsB, config) {
   const total   = correct + errors
   const score   = total > 0 ? Math.round((correct / total) * 1000) / 10 : null
 
+  // ── Stage 6: Module breakdown ─────────────────────────────────────────────
+  // Every detail row is stamped with its module and then tallied. Classifying
+  // the ROWS rather than the model events separately is what makes the numbers
+  // reconcile: each row is counted exactly once, so summing correct across
+  // modules necessarily equals the overall correct count.
+  //
+  // extra_event rows are the one asymmetry — the collector tagged something the
+  // model does not have, so they are errors in the numerator but contribute no
+  // model event to the denominator. That is deliberate: extras must not inflate
+  // what the collector was expected to tag.
+  detailRows.forEach(r => { r.event_module = classifyEventModuleSplit(r.event_code) })
+
+  const moduleStats = {}
+  MODULES_SPLIT.forEach(mod => { moduleStats[mod] = { correct: 0, errors: 0, events: 0 } })
+  detailRows.forEach(r => {
+    const st = moduleStats[r.event_module]
+    if (!st) return
+    if (r.verdict === 'correct') { st.correct++; st.events++ }
+    else if (r.verdict === 'extra_event') { st.errors++ }   // no model event behind it
+    else { st.errors++; st.events++ }
+  })
+  MODULES_SPLIT.forEach(mod => {
+    const st = moduleStats[mod]
+    // events === 0 means the model answer covers nothing in this module, so the
+    // score is unknown, NOT zero. null becomes '' in the sheet and "no data" in
+    // the UI — never 0%, never 100%.
+    st.score = st.events > 0 ? Math.round((st.correct / st.events) * 1000) / 10 : null
+  })
+
   return {
     detailRows,
     verdictCounts,
     score,
+    moduleStats,
     videoMatchStatus: videoMatchStatus(modelSess, collectorSess),
     excludedCollectorCount,
     modelEventCount:     modelEvents.length,

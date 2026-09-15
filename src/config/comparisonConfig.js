@@ -89,6 +89,10 @@ export const DETAIL_COLUMNS = [
   'override_by',
   'override_at_iso',
   'resolution_status',          // pending / upheld_collector / upheld_model / dismissed
+  // APPENDED for the module breakdown. Derived from classifyEventModuleSplit,
+  // so Pressure is its own module rather than sitting inside C. Lets the sheet
+  // answer "which Pressure events do most collectors miss" as a filter.
+  'event_module',               // A | B | C | D | TO | PRESSURE
 ]
 
 // ── scores columns ─────────────────────────────────────────────────────────────
@@ -118,4 +122,14 @@ export const SCORES_COLUMNS = [
   'not_needed_extra',
   'score',                      // 0-100 one decimal
   'video_match_status',         // ok / size_mismatch / duration_mismatch / unknown
+  // APPENDED for the module breakdown. `score` above is unchanged and remains
+  // the OVERALL figure across all modules — not an average of the six below.
+  // A module with no model events writes '' rather than 0, so "no data" stays
+  // distinguishable from a genuine zero.
+  'a_score',        'a_correct',        'a_events',
+  'b_score',        'b_correct',        'b_events',
+  'c_score',        'c_correct',        'c_events',
+  'd_score',        'd_correct',        'd_events',
+  'to_score',       'to_correct',       'to_events',
+  'pressure_score', 'pressure_correct', 'pressure_events',
 ]

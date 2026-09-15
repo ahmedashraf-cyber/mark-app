@@ -30,6 +30,17 @@ async function readHeader(token, tab) {
   return (await r.json()).values?.[0] || []
 }
 
+/** Overwrite row 1 only. Data rows are untouched. */
+async function writeHeaderRow(token, tab, header) {
+  const url = `${BASE}/values/${encodeURIComponent(tab + '!1:1')}?valueInputOption=RAW`
+  const res = await fetch(url, {
+    method: 'PUT',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ values: [header] }),
+  })
+  if (!res.ok) throw new Error(`Could not extend the ${tab} header (${res.status})`)
+}
+
 async function appendRows(token, tab, values) {
   const url = `${BASE}/values/${encodeURIComponent(tab+'!A:A')}:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS`
   const res = await fetch(url, {
@@ -44,12 +55,42 @@ async function appendRows(token, tab, values) {
   return (await res.json()).updates?.updatedRows || 0
 }
 
+/**
+ * Accept a header that is a PREFIX of the expected one, and extend it in place.
+ *
+ * This used to demand an exact length match, which made adding any column a
+ * breaking change: the moment `expected` grew, existing.length !== expected
+ * .length threw and every subsequent run failed — not just missing the new
+ * data, but unable to write at all.
+ *
+ * Columns are only ever APPENDED, so an older header is a strict prefix of the
+ * current one and no existing column changes position. A mismatch in the
+ * overlapping part is still a genuine error and still throws.
+ */
 async function validateOrWriteHeader(token, tab, expected) {
   const existing = await readHeader(token, tab)
   if (!existing.length) { await appendRows(token, tab, [expected]); return }
-  const bad = expected.filter((c,i) => existing[i] !== c)
-  if (bad.length || existing.length !== expected.length)
-    throw new Error(`Header mismatch in ${tab}: ${bad.join(', ')}`)
+
+  // the overlap must agree exactly — a rename or reorder is still fatal
+  const overlap = Math.min(existing.length, expected.length)
+  const bad = []
+  for (let i = 0; i < overlap; i++) {
+    if (existing[i] !== expected[i]) bad.push(`col ${i + 1}: "${existing[i]}" should be "${expected[i]}"`)
+  }
+  if (bad.length) throw new Error(`Header mismatch in ${tab} — ${bad.join('; ')}`)
+
+  if (existing.length > expected.length) {
+    throw new Error(`${tab} has ${existing.length} columns but the code expects ${expected.length}. `
+      + 'A column was removed from the config — that would orphan existing data.')
+  }
+
+  // older, shorter header: widen row 1. Existing rows keep their values and
+  // simply have no cells under the new columns, which reads as empty.
+  if (existing.length < expected.length) {
+    console.log(`[MARK Comparison] extending ${tab} header from `
+      + `${existing.length} to ${expected.length} columns`)
+    await writeHeaderRow(token, tab, expected)
+  }
 }
 
 // ── Serialise a single run result to Sheet rows ────────────────────────────
@@ -81,6 +122,22 @@ function buildScoreRow(runId, modelSess, collectorSess, result, scopeEventIds) {
     score:                      result.score !== null ? String(result.score) : '',
     video_match_status:         result.videoMatchStatus,
   }
+
+  // Module breakdown. A module the model answer does not cover has a null
+  // score, which must reach the sheet as '' — writing 0 would be
+  // indistinguishable from a collector who genuinely got everything wrong.
+  const ms = result.moduleStats || {}
+  const put = (prefix, mod) => {
+    const st = ms[mod]
+    row[prefix + '_score']   = st && st.score !== null ? String(st.score) : ''
+    row[prefix + '_correct'] = st ? String(st.correct) : ''
+    row[prefix + '_events']  = st ? String(st.events)  : ''
+  }
+  put('a','A'); put('b','B'); put('c','C')
+  put('d','D'); put('to','TO'); put('pressure','PRESSURE')
+
+  // String(row[c] ?? '') below would turn a null into "null", so nulls are
+  // normalised above rather than relying on the map.
   return SCORES_COLUMNS.map(c => String(row[c] ?? ''))
 }
 
