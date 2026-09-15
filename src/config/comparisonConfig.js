@@ -46,19 +46,39 @@ export function toleranceFor(eventCode) {
 }
 
 // ── Scoring formula ───────────────────────────────────────────────────────────
-// Matches Scout's formula: score = correct / total_model_events * 100
-// Verdicts that count as errors (denominator = correct + all errors):
+//
+//   score = 100 - (total_errors / total_model_events) * 100
+//
+// The denominator is ALWAYS the model answer's event count. It never moves with
+// what the collector did, so two collectors on the same half are measured
+// against the same yardstick. An extra event is one error in the numerator and
+// contributes nothing to the denominator — it cannot dilute itself.
+//
+// Every error type carries equal weight.
+//
+// This replaced three different formulas: a dead copy here, an inline
+// correct/(correct+errors) in the engine, and a third correct/events variant
+// for the modules. That is why Overall and Pressure disagreed. One function
+// now, used by both.
 export const ERROR_VERDICTS = new Set([
   'missing_event', 'extra_event', 'wrong_side',
   'wrong_timestamp', 'wrong_extra', 'missing_extra', 'not_needed_extra',
 ])
 
-export function computeScore(verdictCounts) {
-  const correct = verdictCounts.correct || 0
-  const errors  = [...ERROR_VERDICTS].reduce((s, v) => s + (verdictCounts[v] || 0), 0)
-  const total   = correct + errors
-  if (total === 0) return null
-  return Math.round((correct / total) * 1000) / 10  // one decimal place
+export function countErrors(verdictCounts) {
+  return [...ERROR_VERDICTS].reduce((s, v) => s + (verdictCounts[v] || 0), 0)
+}
+
+/**
+ * score = 100 - errors/modelEvents, floored at 0, one decimal.
+ * Returns null when modelEvents is 0 — unknown, not zero. Extras can push
+ * errors past modelEvents, which would go negative; a collector cannot do
+ * worse than every event wrong, so it floors.
+ */
+export function computeScore(errors, modelEvents) {
+  if (!modelEvents) return null
+  const pct = 100 - (errors / modelEvents) * 100
+  return Math.max(0, Math.round(pct * 10) / 10)
 }
 
 // ── Sheet tab names for comparison output ─────────────────────────────────────

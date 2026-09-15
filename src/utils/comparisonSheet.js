@@ -150,6 +150,47 @@ function buildDetailRows(detailRows) {
 }
 
 // ── Main write function ────────────────────────────────────────────────────
+/**
+ * Has this exact run already been written?
+ *
+ * Identity is model session + collector session + tolerance config + algorithm
+ * version. Those four fully determine the output: same inputs and same rules
+ * give byte-identical rows, so a second write is pure noise in the sheet and
+ * makes the cross-collector report double-count.
+ *
+ * The two versions are in the key deliberately — after a tolerance or
+ * algorithm change the same pair SHOULD be re-run, and this must not block it.
+ *
+ * → the existing row as an object, or null
+ */
+export async function findExistingRun(modelSessionId, collectorSessionId) {
+  const token = await getToken()
+  const res = await fetch(`${BASE}/values/${encodeURIComponent(TAB_SCORES + '!A:ZZ')}`,
+    { headers: { Authorization: `Bearer ${token}` } })
+  if (!res.ok) return null            // never block a write on a failed read
+  const rows = (await res.json()).values || []
+  if (rows.length < 2) return null
+
+  const hdr = rows[0]
+  const idx = Object.fromEntries(hdr.map((h, i) => [h, i]))
+  const want = {
+    model_session_id:         String(modelSessionId || ''),
+    collector_session_id:     String(collectorSessionId || ''),
+    tolerance_config_version: String(TOLERANCE_CONFIG_VERSION),
+    algorithm_version:        String(ALGORITHM_VERSION),
+  }
+
+  // newest first, so an identical re-run shows the most recent one
+  for (let i = rows.length - 1; i >= 1; i--) {
+    const r = rows[i]
+    const same = Object.entries(want).every(([k, v]) =>
+      idx[k] !== undefined && String(r[idx[k]] ?? '') === v)
+    if (!same) continue
+    return Object.fromEntries(hdr.map((h, j) => [h, r[j] ?? '']))
+  }
+  return null
+}
+
 export async function writeComparisonResults(modelSess, collectorSess, result, scopeEventIds, runId) {
   const token = await getToken()
 

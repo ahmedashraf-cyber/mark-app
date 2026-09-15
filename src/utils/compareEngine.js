@@ -22,7 +22,7 @@
  * model_shape: carried into detail rows for analysis, never scored.
  */
 
-import { toleranceFor, ERROR_VERDICTS } from '../config/comparisonConfig'
+import { toleranceFor, ERROR_VERDICTS, countErrors, computeScore } from '../config/comparisonConfig'
 import { classifyEventModuleSplit, MODULES_SPLIT } from './defectTypes'
 
 // ── Optimal assignment (Jonker-Volgenant / shortest augmenting path) ─────────
@@ -307,10 +307,12 @@ export function compare(sessA, eventsA, sessB, eventsB, config) {
   })
 
   // ── Stage 5: Score ────────────────────────────────────────────────────────
+  // score = 100 - errors/modelEvents. The denominator is the model answer's
+  // event count, never correct+errors — the old formula let a collector's
+  // extras enlarge their own denominator and soften the penalty.
   const correct = verdictCounts.correct
-  const errors  = [...ERROR_VERDICTS].reduce((s, v) => s + (verdictCounts[v] || 0), 0)
-  const total   = correct + errors
-  const score   = total > 0 ? Math.round((correct / total) * 1000) / 10 : null
+  const errors  = countErrors(verdictCounts)
+  const score   = computeScore(errors, modelEvents.length)
 
   // ── Stage 6: Module breakdown ─────────────────────────────────────────────
   // Every detail row is stamped with its module and then tallied. Classifying
@@ -335,10 +337,13 @@ export function compare(sessA, eventsA, sessB, eventsB, config) {
   })
   MODULES_SPLIT.forEach(mod => {
     const st = moduleStats[mod]
-    // events === 0 means the model answer covers nothing in this module, so the
-    // score is unknown, NOT zero. null becomes '' in the sheet and "no data" in
-    // the UI — never 0%, never 100%.
-    st.score = st.events > 0 ? Math.round((st.correct / st.events) * 1000) / 10 : null
+    // Same formula as Overall, so the two agree when the model answer covers a
+    // single module. st.events IS the model event count for this module:
+    // correct and non-extra errors each have a model event behind them, extras
+    // do not and are excluded from it by the tally above.
+    // events === 0 means the model covers nothing here, so the score is
+    // unknown, NOT zero — null becomes '' in the sheet and "no data" in the UI.
+    st.score = computeScore(st.errors, st.events)
   })
 
   return {

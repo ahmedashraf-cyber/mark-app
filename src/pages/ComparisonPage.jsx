@@ -20,7 +20,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { useAuth } from '../hooks/useAuth.jsx'
 import { compare } from '../utils/compareEngine'
 import { MODULES_SPLIT, MODULE_LABELS } from '../utils/defectTypes'
-import { writeComparisonResults } from '../utils/comparisonSheet'
+import { writeComparisonResults, findExistingRun } from '../utils/comparisonSheet'
 import { FIELD_SHEET_ID, EVENT_COLUMNS } from '../config/fieldConfig'
 import { CURRENT_VERSION } from '../hooks/useUpdateCheck'
 import { msToReadable } from '../utils/fieldSheetSync'
@@ -256,6 +256,7 @@ export default function ComparisonPage({ onBack }) {
       )
       console.log('[COMPARE] result:', compResult.score, compResult.verdictCounts)
       setResult({ ...compResult, runId, scopeIds })
+      setWritten(false); setExistingRun(null)
 
     } catch(e) {
       console.error('[COMPARE CRASH]', e, e?.stack)
@@ -277,7 +278,17 @@ export default function ComparisonPage({ onBack }) {
         session_id: collSess.sessionId || collSess.session_id,
         collector_hr_code: collSess.collectorHrCode || collSess.collector_hr_code || '',
       }
+      // Same model + collector + tolerance version + algorithm version means
+      // byte-identical rows. Writing them again just makes the cross-collector
+      // report double-count, so show the earlier run instead.
+      const prior = await findExistingRun(mSessNorm.session_id, cSessNorm.session_id)
+      if (prior) {
+        setExistingRun(prior)
+        setWritten(true)
+        return
+      }
       await writeComparisonResults(mSessNorm, cSessNorm, result, result.scopeIds, result.runId)
+      setExistingRun(null)
       setWritten(true)
     } catch(e) {
       console.error('[COMPARE WRITE CRASH]', e, e?.stack)
@@ -556,6 +567,26 @@ export default function ComparisonPage({ onBack }) {
                 disabled={loading} onClick={handleWriteToSheet}>
                 {loading ? loadingMsg : 'Write Results to Sheet'}
               </button>
+            ) : existingRun ? (
+              <div style={{ textAlign:'center', fontSize:13, color:'#FFD60A',
+                padding:'12px 14px', background:'rgba(255,214,10,0.07)',
+                border:'1px solid rgba(255,214,10,0.28)', borderRadius:8, lineHeight:1.6 }}>
+                Showing previous run from{' '}
+                {existingRun.run_timestamp_iso
+                  ? new Date(existingRun.run_timestamp_iso).toLocaleString()
+                  : 'an earlier session'} — no changes detected.
+                <div style={{ fontSize:10, color:'var(--t-3)', marginTop:6 }}>
+                  Same model and collector sessions, tolerance v{existingRun.tolerance_config_version}
+                  {' '}and algorithm v{existingRun.algorithm_version}, so the rows would be identical.
+                  Nothing was written.
+                  {existingRun.score !== '' && existingRun.score != null &&
+                    ` That run scored ${existingRun.score}%.`}
+                </div>
+                <div style={{ fontSize:10, color:'var(--t-3)', marginTop:4,
+                  fontFamily:'JetBrains Mono,monospace' }}>
+                  run_id {existingRun.run_id}
+                </div>
+              </div>
             ) : (
               <div style={{ textAlign:'center', fontSize:13, color:'#30D158',
                 padding:'12px', background:'rgba(48,209,88,0.08)',
