@@ -178,6 +178,7 @@ export default function ComparisonPage({ onBack }) {
   const [collSess,     setCollSess]     = useState(null)
   const [result,       setResult]       = useState(null)
   const [written,      setWritten]      = useState(false)
+  const [existingRun,  setExistingRun]  = useState(null)   // an identical run already in the sheet
 
   async function handleRun() {
     setError(''); setResult(null); setWritten(false)
@@ -279,16 +280,32 @@ export default function ComparisonPage({ onBack }) {
         collector_hr_code: collSess.collectorHrCode || collSess.collector_hr_code || '',
       }
       // Same model + collector + tolerance version + algorithm version means
-      // byte-identical rows. Writing them again just makes the cross-collector
-      // report double-count, so show the earlier run instead.
-      const prior = await findExistingRun(mSessNorm.session_id, cSessNorm.session_id)
+      // byte-identical rows, so show the earlier run rather than appending a
+      // duplicate the cross-collector report would double-count.
+      //
+      // FAIL CLOSED. If the check itself cannot complete we do not know whether
+      // a duplicate exists, and writing on a guess is the worse outcome — it is
+      // what produced the duplicate rows. So a failed check blocks the write
+      // and reports it.
+      let prior
+      try {
+        prior = await findExistingRun(mSessNorm.session_id, cSessNorm.session_id)
+      } catch (checkErr) {
+        console.error('[COMPARE] duplicate check failed', checkErr)
+        setError('Could not check for an existing run, so nothing was written: '
+          + (checkErr.message || String(checkErr))
+          + ' — the sheet is unchanged. Try again.')
+        return
+      }
+
       if (prior) {
         setExistingRun(prior)
         setWritten(true)
         return
       }
-      await writeComparisonResults(mSessNorm, cSessNorm, result, result.scopeIds, result.runId)
+
       setExistingRun(null)
+      await writeComparisonResults(mSessNorm, cSessNorm, result, result.scopeIds, result.runId)
       setWritten(true)
     } catch(e) {
       console.error('[COMPARE WRITE CRASH]', e, e?.stack)
