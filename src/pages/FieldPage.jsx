@@ -24,6 +24,7 @@ import ErrorTimeline from '../components/ErrorTimeline'
 import EventsSidebar from '../components/EventsSidebar'
 import TaggedEventsList from '../components/TaggedEventsList'
 import { downloadFieldCsv, syncSessionToSheet } from '../utils/fieldSheetSync'
+import { showToast } from '../utils/toast'
 import { FIELD_LS_KEY, FIELD_SHEET_ID, validateMatchId } from '../config/fieldConfig'
 import { importModelAnswers, isModelImportDone } from '../utils/importModelAnswers'
 import { useInternalUser } from '../hooks/useAdmin.js'
@@ -961,10 +962,10 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
     setCsvDlState('saving'); setCsvDlPath(''); setCsvDlError('')
     try {
       const savedPath = await downloadFieldCsv(sess, events)
-      if (savedPath) { setCsvDlPath(savedPath); setCsvDlState('done'); setTimeout(()=>setCsvDlState('idle'), 8000) }
+      if (savedPath) { setCsvDlPath(savedPath); setCsvDlState('done'); showToast(`Saved to ${savedPath}`); setTimeout(()=>setCsvDlState('idle'), 8000) }
       else setCsvDlState('idle')
     } catch(e) {
-      setCsvDlError(e?.message || String(e)); setCsvDlState('error'); setTimeout(()=>setCsvDlState('idle'), 8000)
+      const msg = e?.message || String(e); setCsvDlError(msg); setCsvDlState('error'); showToast(`Download failed: ${msg}`, 'error'); setTimeout(()=>setCsvDlState('idle'), 8000)
     }
   }
 
@@ -1336,9 +1337,9 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
                     const evSnap = await getDocs(query(collection(db,'mark_collected_events'),where('sessionId','==',pendingUpload.sessionId)))
                     const pendingEvs = evSnap.docs.map(d=>d.data())
                     const p = await downloadFieldCsv(pendingUpload, pendingEvs)
-                    if (p) { setCsvDlPath(p); setCsvDlState('done'); setTimeout(()=>setCsvDlState('idle'),8000) }
+                    if (p) { setCsvDlPath(p); setCsvDlState('done'); showToast(`Saved to ${p}`); setTimeout(()=>setCsvDlState('idle'),8000) }
                     else setCsvDlState('idle')
-                  } catch(e) { setCsvDlError(e?.message||String(e)); setCsvDlState('error'); setTimeout(()=>setCsvDlState('idle'),8000) }
+                  } catch(e) { const msg=e?.message||String(e); setCsvDlError(msg); setCsvDlState('error'); showToast(`Download failed: ${msg}`,'error'); setTimeout(()=>setCsvDlState('idle'),8000) }
                 }}>
                 {csvDlState==='saving'
                   ? <><svg style={{animation:'spin 1s linear infinite'}} width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><circle cx="12" cy="12" r="10" strokeOpacity=".3"/><path d="M12 2a10 10 0 0 1 10 10"/></svg> Saving…</>
