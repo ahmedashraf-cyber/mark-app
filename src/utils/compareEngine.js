@@ -136,14 +136,13 @@ function videoMatchStatus(sessA, sessB) {
  * config: {
  *   modelSessionId: string,   // which session is "model" (direction argument)
  *   runId: string,
- *   scopeEventIds: string[],  // from model session; restricts both sides
  * }
  *
  * Events are plain objects with fields matching EVENT_COLUMNS.
- * Returns: { detailRows, verdictCounts, score, videoMatchStatus, excludedCollectorCount }
+ * Returns: { detailRows, verdictCounts, score, moduleStats, videoMatchStatus, modelEventCount, collectorEventCount }
  */
 export function compare(sessA, eventsA, sessB, eventsB, config) {
-  const { modelSessionId, runId, scopeEventIds } = config
+  const { modelSessionId, runId } = config
 
   // Identify model vs collector — normalise both sides
   const sidA = sessA.session_id || sessA.sessionId || ''
@@ -157,15 +156,6 @@ export function compare(sessA, eventsA, sessB, eventsB, config) {
   const collectorSess = isAModel ? sessB : sessA
   let   modelEvents   = isAModel ? [...eventsA] : [...eventsB]
   let   collEvents    = isAModel ? [...eventsB] : [...eventsA]
-
-  // ── Stage 2: Scope ─────────────────────────────────────────────────────────
-  const scope = new Set(scopeEventIds || [])
-  const totalCollectorBefore = collEvents.length
-  if (scope.size > 0) {
-    modelEvents = modelEvents.filter(e => scope.has(e.event_code))
-    collEvents  = collEvents.filter(e => scope.has(e.event_code))
-  }
-  const excludedCollectorCount = totalCollectorBefore - collEvents.length
 
   // ── Stage 3: Align (Hungarian optimal assignment) ─────────────────────────
   const INF = 1e15
@@ -352,7 +342,6 @@ export function compare(sessA, eventsA, sessB, eventsB, config) {
     score,
     moduleStats,
     videoMatchStatus: videoMatchStatus(modelSess, collectorSess),
-    excludedCollectorCount,
     modelEventCount:     modelEvents.length,
     collectorEventCount: collEvents.length,
   }
