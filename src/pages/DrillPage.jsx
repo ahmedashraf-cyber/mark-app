@@ -14,6 +14,7 @@ import { roleForEmail, personForEmail, loadCreators } from '../utils/drillPeople
 import { readTab, readTabs, appendOrQueue, flushQueue, pendingWriteCount, syncHeaders } from '../utils/drillSheet'
 import {
   TAB_QUIZZES, TAB_CLIPS, TAB_ANSWERS, TAB_SESSIONS, TAB_ANSWERS_GIVEN, TAB_TRAINEE_LOG,
+  TAB_ASSIGNMENTS,
   SESSIONS_COLUMNS, ANSWERS_GIVEN_COLUMNS, TRAINEE_LOG_COLUMNS,
   QUIZ_STATUS, SESSION_STATUS,
 } from '../config/drillConfig'
@@ -27,6 +28,9 @@ import DrillSessionPage from './DrillSessionPage'
 import DrillResultsPage from './DrillResultsPage'
 import RetakeRequests from '../components/RetakeRequests'
 import AssignPanel from '../components/AssignPanel'
+import DrillReviewPage from './DrillReviewPage'
+import DrillDashboardPage from './DrillDashboardPage'
+import DrillTraineePage from './DrillTraineePage'
 import { quizIdsForTrainee } from '../utils/drillAssignments'
 
 export default function DrillPage({ onBack }) {
@@ -44,6 +48,12 @@ export default function DrillPage({ onBack }) {
   const [creators,setCreators]= useState([])
   const [busy,    setBusy]    = useState('')
   const [assignFor, setAssignFor] = useState(null)   // quiz row being assigned
+  // Dashboards and review read four tabs at once, so they are fetched on demand
+  // and held for the session rather than re-read per view — quiz_answers_given
+  // is 55 columns and grows per clip per attempt.
+  const [bundle,  setBundle]  = useState(null)
+  const [busyNav, setBusyNav] = useState('')
+  const [target,  setTarget]  = useState(null)   // { view, quiz?, hrCode? }
 
   // role: login identifies, the Supervisors tab authorises
   useEffect(() => {
@@ -122,6 +132,23 @@ export default function DrillPage({ onBack }) {
       setView('take')
     })()
   }, [person?.hrCode, quizzes.length])
+
+  /** Read everything the dashboards and review need, once. */
+  async function openWithData(view, opts = {}) {
+    setBusyNav(view); setError('')
+    try {
+      const d = await readTabs([TAB_CLIPS, TAB_ANSWERS, TAB_ANSWERS_GIVEN, TAB_ASSIGNMENTS])
+      setBundle({
+        clips:        d[TAB_CLIPS] || [],
+        answers:      d[TAB_ANSWERS] || [],
+        answersGiven: d[TAB_ANSWERS_GIVEN] || [],
+        assignments:  d[TAB_ASSIGNMENTS] || [],
+      })
+      setTarget({ view, ...opts })
+    } catch (e) {
+      setError('Could not load the data for that view: ' + e.message)
+    } finally { setBusyNav('') }
+  }
 
   async function startQuiz(quiz, asTestRun) {
     setBusy(quiz.quiz_id); setError('')
@@ -232,6 +259,26 @@ export default function DrillPage({ onBack }) {
   }
 
   // ── sub-views ──
+  if (target && bundle) {
+    const back = () => { setTarget(null) }
+    if (target.view === 'review') return (
+      <DrillReviewPage quiz={target.quiz} sessions={sessions}
+        answersGiven={bundle.answersGiven} clips={bundle.clips} onBack={back}/>
+    )
+    if (target.view === 'dashboard') return (
+      <DrillDashboardPage quiz={target.quiz} sessions={sessions}
+        answersGiven={bundle.answersGiven} assignments={bundle.assignments}
+        clips={bundle.clips} onBack={back}
+        onOpenTrainee={hr => setTarget({ view:'trainee', hrCode: hr })}/>
+    )
+    if (target.view === 'trainee') return (
+      <DrillTraineePage hrCode={target.hrCode || person?.hrCode}
+        sessions={sessions} quizzes={quizzes} assignments={bundle.assignments}
+        answersGiven={bundle.answersGiven} clips={bundle.clips}
+        readOnly={role !== 'creator'} onBack={back}/>
+    )
+  }
+
   if (view === 'build') return (
     <DrillBuilderPage person={person}
       onBack={() => setView('list')}
@@ -277,6 +324,12 @@ export default function DrillPage({ onBack }) {
           </span>
         )}
         <div style={{ flex:1 }}/>
+        <button style={{ padding:'6px 12px', fontSize:11, background:'transparent',
+          border:'1px solid var(--b-1)', borderRadius:6, color:'var(--t-3)', cursor:'pointer' }}
+          disabled={busyNav === 'trainee'}
+          onClick={() => openWithData('trainee', { hrCode: person?.hrCode })}>
+          {busyNav === 'trainee' ? '…' : role === 'creator' ? 'Trainee data' : 'My progress'}
+        </button>
         {role === 'creator' && <RetakeRequests trainerEmail={person?.email}/>}
         {role === 'creator' && (
           <button className="btn-orange" style={{ padding:'6px 14px', fontSize:12 }}
@@ -379,13 +432,33 @@ export default function DrillPage({ onBack }) {
                     {q.status || 'draft'}
                   </span>
                 )}
-                {role === 'creator' && q.status === QUIZ_STATUS.PUBLISHED && (
+                {/* Review is gated on PASSING — a failing trainee must not see
+                    the answers or the retake is meaningless. */}
+                {role !== 'creator' && hasPassed && (
                   <button style={{ padding:'7px 13px', fontSize:12, background:'transparent',
                     border:'1px solid var(--b-1)', borderRadius:7, color:'var(--t-2)',
                     cursor:'pointer' }}
-                    onClick={() => setAssignFor(q)}>
-                    Assign
+                    disabled={busyNav === 'review'}
+                    onClick={() => openWithData('review', { quiz: q })}>
+                    {busyNav === 'review' ? '…' : 'Review'}
                   </button>
+                )}
+                {role === 'creator' && q.status === QUIZ_STATUS.PUBLISHED && (
+                  <>
+                    <button style={{ padding:'7px 13px', fontSize:12, background:'transparent',
+                      border:'1px solid var(--b-1)', borderRadius:7, color:'var(--t-2)',
+                      cursor:'pointer' }}
+                      disabled={busyNav === 'dashboard'}
+                      onClick={() => openWithData('dashboard', { quiz: q })}>
+                      {busyNav === 'dashboard' ? '…' : 'Dashboard'}
+                    </button>
+                    <button style={{ padding:'7px 13px', fontSize:12, background:'transparent',
+                      border:'1px solid var(--b-1)', borderRadius:7, color:'var(--t-2)',
+                      cursor:'pointer' }}
+                      onClick={() => setAssignFor(q)}>
+                      Assign
+                    </button>
+                  </>
                 )}
                 {q.status === QUIZ_STATUS.PUBLISHED && !hasPassed && (
                   <button className="btn-orange" style={{ padding:'7px 14px', fontSize:12 }}
