@@ -425,8 +425,8 @@ export default function ReviewPage({ session, onDone, onBack, bridgeSyncStatus, 
         onProgress: ({ phase, step, total: tot, detail }) =>
           setExportState(s => ({ ...s, phase, step, total: tot, detail: detail || '' })),
       })
-      .then(({ folderUrl }) => {
-        setExportState(s => ({ ...s, phase:'done', driveLink: folderUrl, detail:'' }))
+      .then(({ folderUrl, localFolder }) => {
+        setExportState(s => ({ ...s, phase:'done', driveLink: folderUrl, localFolder: localFolder || '', detail:'' }))
         // Save Drive link to Firestore for session history
         updateDoc(doc(db, 'mark_sessions', session.sessionId), { driveLink: folderUrl })
           .catch(e => console.warn('[MARK] driveLink save failed:', e))
@@ -966,6 +966,15 @@ export default function ReviewPage({ session, onDone, onBack, bridgeSyncStatus, 
                   style={{ display:'block', marginTop:6, fontSize:10, color:'rgba(255,255,255,0.35)', textDecoration:'none' }}>
                   ↗ Open in browser
                 </a>
+              </div>
+            )}
+
+            {/* Done — local Downloads folder link */}
+            {exportState.phase === 'done' && exportState.localFolder && (
+              <div style={{ marginBottom:12, display:'flex', alignItems:'center', gap:8, fontSize:11, color:'rgba(255,255,255,0.5)' }}>
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M3 7v13h18V7M16 3H8L3 7h18L16 3z"/></svg>
+                <span style={{ overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', flex:1 }} title={exportState.localFolder}>{exportState.localFolder}</span>
+                <button onClick={()=>invoke('open_folder',{path:exportState.localFolder})} style={{fontSize:10,color:'var(--p2)',background:'none',border:'none',cursor:'pointer',padding:0,textDecoration:'underline',flexShrink:0}}>Open folder</button>
               </div>
             )}
 

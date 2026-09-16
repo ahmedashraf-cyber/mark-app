@@ -235,6 +235,9 @@ function ScoreCard({ label, score, reviewed, edited, color, isOverall = false })
 // Supports click-to-seek by video timestamp, filter pills, download CSV.
 function ExistingSessionView({ session, onSeek }) {
   const [activeFilter, setActiveFilter] = useState(null)
+  const [dlState, setDlState] = useState('idle') // 'idle'|'saving'|'done'|'error'
+  const [dlPath,  setDlPath]  = useState('')
+  const [dlError, setDlError] = useState('')
 
   const AMEND_COLORS = {
     base:'#E8590C', deletion:'#FF453A', extras:'#FFD60A',
@@ -274,14 +277,21 @@ function ExistingSessionView({ session, onSeek }) {
     return `${m}:${String(s).padStart(2,'0')}`
   }
 
-  function downloadCSV() {
-    const headers = ['Half','Timestamp','Event Name','Error Type']
-    const csvRows = rows.map(r => [r.half, fmtTs(r.vts), r.eventName, r.errorType])
-    const csv = [headers,...csvRows].map(r=>r.map(v=>`"${String(v??'').replace(/"/g,'""')}"`).join(',')).join('\n')
-    const a = document.createElement('a')
-    a.href = URL.createObjectURL(new Blob([csv],{type:'text/csv'}))
-    a.download = `${session.matchId || 'match'}_amendments.csv`
-    a.click()
+  async function downloadCSV() {
+    if (dlState === 'saving') return
+    setDlState('saving'); setDlPath(''); setDlError('')
+    try {
+      const headers = ['Half','Timestamp','Event Name','Error Type']
+      const csvRows = rows.map(r => [r.half, fmtTs(r.vts), r.eventName, r.errorType])
+      const csv = [headers,...csvRows].map(r=>r.map(v=>`"${String(v??'').replace(/"/g,'""')}"`).join(',')).join('\n')
+      const savedPath = await invoke('save_text_file_dialog', {
+        name: `${session.matchId || 'match'}_amendments.csv`, content: csv,
+      })
+      if (savedPath) { setDlPath(savedPath); setDlState('done'); setTimeout(()=>setDlState('idle'), 8000) }
+      else setDlState('idle')
+    } catch(e) {
+      setDlError(e?.message || String(e)); setDlState('error'); setTimeout(()=>setDlState('idle'), 8000)
+    }
   }
 
   return (
@@ -346,12 +356,22 @@ function ExistingSessionView({ session, onSeek }) {
             <div style={{ fontSize:10, fontWeight:800, color:'var(--t-3)', letterSpacing:1.2 }}>
               AMENDMENTS — {rows.length} EVENTS · CLICK ROW TO SEEK VIDEO
             </div>
-            <button className="btn-ghost" style={{ padding:'4px 12px', fontSize:11, display:'flex', alignItems:'center', gap:6 }} onClick={downloadCSV}>
-              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
-                <path d="M12 3v13M6 11l6 6 6-6"/><path d="M4 20h16"/>
-              </svg>
-              Download CSV
+            <button className="btn-ghost" style={{ padding:'4px 12px', fontSize:11, display:'flex', alignItems:'center', gap:6, opacity: dlState==='saving'?0.6:1 }} onClick={downloadCSV} disabled={dlState==='saving'}>
+              {dlState === 'saving'
+                ? <><svg style={{animation:'spin 1s linear infinite'}} width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><circle cx="12" cy="12" r="10" strokeOpacity=".3"/><path d="M12 2a10 10 0 0 1 10 10"/></svg> Saving…</>
+                : <><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><path d="M12 3v13M6 11l6 6 6-6"/><path d="M4 20h16"/></svg> Download CSV</>
+              }
             </button>
+            {dlState === 'done' && (
+              <div className="fade-in" style={{ display:'flex', alignItems:'center', gap:8, fontSize:10, color:'#30D158', marginTop:6 }}>
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#30D158" strokeWidth="2.5" strokeLinecap="round"><path d="M20 6L9 17l-5-5"/></svg>
+                <span title={dlPath}>Saved to {dlPath}</span>
+                <button onClick={()=>invoke('open_folder',{path:dlPath})} style={{fontSize:10,color:'var(--p2)',background:'none',border:'none',cursor:'pointer',padding:0,textDecoration:'underline'}}>Open folder</button>
+              </div>
+            )}
+            {dlState === 'error' && (
+              <div style={{ fontSize:10, color:'#FF453A', marginTop:6 }}>Download failed: {dlError}</div>
+            )}
           </div>
 
           {/* Filter pills */}
@@ -1103,6 +1123,9 @@ function AuditDashboard({ results, score, abcScores, onFullReport, session, iden
 function AmendmentsTable({ results, session, reviewerIds, identityMap, onSeek }) {
   const [activeFilter, setActiveFilter] = useState(null)
   const [expandedKey, setExpandedKey] = useState(null)
+  const [dlState2, setDlState2] = useState('idle') // 'idle'|'saving'|'done'|'error'
+  const [dlPath2,  setDlPath2]  = useState('')
+  const [dlError2, setDlError2] = useState('')
   const { baseEvents } = results
   const reviewerSet = new Set((reviewerIds || []).map(Number))
 
@@ -1697,14 +1720,21 @@ function AmendmentsTable({ results, session, reviewerIds, identityMap, onSeek })
 
     const allRows = [...csvRows, ...ffCsvRows]
     const csv = [headers.map(h=>`"${h}"`), ...allRows].map(row => row.join(',')).join('\r\n')
-    const blob = new Blob([csv], { type: 'text/csv' })
-    const url = URL.createObjectURL(blob)
-    const el = document.createElement('a')
-    el.href = url
-    const s = (v) => String(v||'').replace(/[\/:*?"<>|]/g,'').trim()
-    el.download = `${s(session.matchId)}_${s(session.matchName)}_${s(formatHalf(session.half))}_${s(results.collectorHrCode||'')}.csv`
-    el.click()
-    URL.revokeObjectURL(url)
+    const sv = (v) => String(v||'').replace(/[\/:*?"<>|]/g,'').trim()
+    return { csv, name: `${sv(session.matchId)}_${sv(session.matchName)}_${sv(formatHalf(session.half))}_${sv(results.collectorHrCode||'')}.csv` }
+  }
+
+  const downloadCSV = async () => {
+    if (dlState2 === 'saving') return
+    setDlState2('saving'); setDlPath2(''); setDlError2('')
+    try {
+      const { csv, name } = buildCSV()
+      const savedPath = await invoke('save_text_file_dialog', { name, content: csv })
+      if (savedPath) { setDlPath2(savedPath); setDlState2('done'); setTimeout(()=>setDlState2('idle'), 8000) }
+      else setDlState2('idle')
+    } catch(e) {
+      setDlError2(e?.message || String(e)); setDlState2('error'); setTimeout(()=>setDlState2('idle'), 8000)
+    }
   }
 
   // ── Render ─────────────────────────────────────────────────────────────────
@@ -1715,10 +1745,24 @@ function AmendmentsTable({ results, session, reviewerIds, identityMap, onSeek })
         <div style={{ fontSize:10, fontWeight:800, color:'var(--t-3)', letterSpacing:1.2 }}>
           ERRORS — {rows.length} EVENTS
         </div>
-        <button className="btn-ghost" style={{ padding:'4px 12px', fontSize:11, display:'flex', alignItems:'center', gap:6 }} onClick={downloadCSV}>
-          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><path d="M12 3v13M6 11l6 6 6-6"/><path d="M4 20h16"/></svg>
-          Download CSV
-        </button>
+        <div style={{ display:'flex', flexDirection:'column', alignItems:'flex-end', gap:4 }}>
+          <button className="btn-ghost" style={{ padding:'4px 12px', fontSize:11, display:'flex', alignItems:'center', gap:6, opacity: dlState2==='saving'?0.6:1 }} onClick={downloadCSV} disabled={dlState2==='saving'}>
+            {dlState2 === 'saving'
+              ? <><svg style={{animation:'spin 1s linear infinite'}} width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><circle cx="12" cy="12" r="10" strokeOpacity=".3"/><path d="M12 2a10 10 0 0 1 10 10"/></svg> Saving…</>
+              : <><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><path d="M12 3v13M6 11l6 6 6-6"/><path d="M4 20h16"/></svg> Download CSV</>
+            }
+          </button>
+          {dlState2 === 'done' && (
+            <div className="fade-in" style={{ display:'flex', alignItems:'center', gap:8, fontSize:10, color:'#30D158' }}>
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#30D158" strokeWidth="2.5" strokeLinecap="round"><path d="M20 6L9 17l-5-5"/></svg>
+              <span title={dlPath2}>Saved to {dlPath2}</span>
+              <button onClick={()=>invoke('open_folder',{path:dlPath2})} style={{fontSize:10,color:'var(--p2)',background:'none',border:'none',cursor:'pointer',padding:0,textDecoration:'underline'}}>Open folder</button>
+            </div>
+          )}
+          {dlState2 === 'error' && (
+            <div style={{ fontSize:10, color:'#FF453A' }}>Download failed: {dlError2}</div>
+          )}
+        </div>
       </div>
 
       {/* People summary */}
@@ -2539,7 +2583,8 @@ export default function AuditPage({ session, onBack, onFullReport, initialResult
 
       // ── Done — driveLink points to the folder ────────────────────────────
       const folderUrl = `https://drive.google.com/drive/folders/${subFolderId}`
-      setExportState({ phase: 'done', step: total, total, done: true, driveLink: folderUrl })
+      const localFolder = `${userprofile}\\Downloads\\${folderName}`
+      setExportState({ phase: 'done', step: total, total, done: true, driveLink: folderUrl, localFolder })
 
         // ── Send report email via Gmail API — self-healing via Firestore token ──
         setEmailToast({ status: 'sending', msg: 'Sending quality report email...' })
@@ -3249,8 +3294,11 @@ export default function AuditPage({ session, onBack, onFullReport, initialResult
                       <div style={{ fontSize: 12, fontWeight: 700, color: '#30D158' }}>
                         Uploaded to Drive — {exportState.total - 1} clips + CSV
                       </div>
-                      <div style={{ fontSize: 11, color: 'var(--t-3)', marginTop: 2 }}>
+                      <div style={{ fontSize: 11, color: 'var(--t-3)', marginTop: 2, display:'flex', alignItems:'center', gap:8 }}>
                         Clips saved locally to Downloads folder too
+                        {exportState.localFolder && (
+                          <button onClick={()=>invoke('open_folder',{path:exportState.localFolder})} style={{fontSize:10,color:'var(--p2)',background:'none',border:'none',cursor:'pointer',padding:0,textDecoration:'underline'}}>Open folder</button>
+                        )}
                       </div>
                     </div>
                   </div>

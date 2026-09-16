@@ -499,6 +499,41 @@ fn save_xlsx_file(name: String, data: Vec<u8>) -> Result<Option<String>, String>
     }
 }
 
+// ─── Save text/CSV to user-chosen path via native save dialog ─────────────
+#[command]
+fn save_text_file_dialog(name: String, content: String) -> Result<Option<String>, String> {
+    match rfd::FileDialog::new()
+        .set_file_name(name.as_str())
+        .add_filter("CSV", &["csv"])
+        .add_filter("All files", &["*"])
+        .save_file()
+    {
+        Some(path) => {
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+            }
+            std::fs::write(&path, content.as_bytes()).map_err(|e| e.to_string())?;
+            Ok(Some(path.to_string_lossy().to_string()))
+        }
+        None => Ok(None),
+    }
+}
+
+// ─── Open a folder (or a file's parent folder) in the OS file manager ────────
+#[command]
+fn open_folder(path: String) -> Result<(), String> {
+    let p   = std::path::Path::new(&path);
+    let dir = if p.is_file() { p.parent().unwrap_or(p) } else { p };
+    let dir_str = dir.to_string_lossy().to_string();
+    #[cfg(target_os = "windows")]
+    { std::process::Command::new("explorer").arg(&dir_str).spawn().map_err(|e| e.to_string())?; }
+    #[cfg(target_os = "macos")]
+    { std::process::Command::new("open").arg(&dir_str).spawn().map_err(|e| e.to_string())?; }
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    { std::process::Command::new("xdg-open").arg(&dir_str).spawn().map_err(|e| e.to_string())?; }
+    Ok(())
+}
+
 // ─── Find the collection app window ──────────────────────────────────────────
 #[cfg(target_os = "windows")]
 unsafe fn find_collection_hwnd() -> Option<windows::Win32::Foundation::HWND> {
@@ -2843,6 +2878,8 @@ fn save_binary_file(path: String, data: Vec<u8>) -> Result<(), String> {
             upload_csv_as_sheet,
             save_text_file,
             save_binary_file,
+            save_text_file_dialog,
+            open_folder,
             upload_xlsx_as_sheet,
             get_google_access_token_cmd,
             get_userprofile,
