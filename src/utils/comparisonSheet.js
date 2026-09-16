@@ -94,7 +94,7 @@ async function validateOrWriteHeader(token, tab, expected) {
 }
 
 // ── Serialise a single run result to Sheet rows ────────────────────────────
-function buildScoreRow(runId, modelSess, collectorSess, result, scopeEventIds) {
+function buildScoreRow(runId, modelSess, collectorSess, result) {
   const row = {
     run_id:                     runId,
     run_timestamp_iso:          new Date().toISOString(),
@@ -107,9 +107,9 @@ function buildScoreRow(runId, modelSess, collectorSess, result, scopeEventIds) {
     collector_session_id:       collectorSess.session_id,
     tolerance_config_version:   TOLERANCE_CONFIG_VERSION,
     algorithm_version:          ALGORITHM_VERSION,
-    scope_event_ids:            scopeEventIds.join('|'),
+    scope_event_ids:            '',
     total_model_events:         String(result.modelEventCount),
-    total_collector_events:     String(result.collectorEventCount + result.excludedCollectorCount),
+    total_collector_events:     String(result.collectorEventCount),
     total_scoped_collector_events: String(result.collectorEventCount),
     correct:                    String(result.verdictCounts.correct           || 0),
     missing_event:              String(result.verdictCounts.missing_event     || 0),
@@ -191,13 +191,13 @@ export async function findExistingRun(modelSessionId, collectorSessionId) {
   return null
 }
 
-export async function writeComparisonResults(modelSess, collectorSess, result, scopeEventIds, runId) {
+export async function writeComparisonResults(modelSess, collectorSess, result, runId) {
   const token = await getToken()
 
   await validateOrWriteHeader(token, TAB_COMPARISON_DETAIL, DETAIL_COLUMNS)
   await validateOrWriteHeader(token, TAB_SCORES, SCORES_COLUMNS)
 
-  const scoreRow   = buildScoreRow(runId, modelSess, collectorSess, result, scopeEventIds)
+  const scoreRow   = buildScoreRow(runId, modelSess, collectorSess, result)
   const detailRows = buildDetailRows(result.detailRows)
 
   await appendRows(token, TAB_SCORES, [scoreRow])

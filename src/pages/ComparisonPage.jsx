@@ -239,12 +239,7 @@ export default function ComparisonPage({ onBack }) {
       const cEvents = await loadSessionEvents(cSess.session_id, 'firestore')
       console.log('[COMPARE] cEvents loaded:', cEvents.length)
 
-      // 4. Scope
-      const scopeRaw  = mSess.scope_event_ids || ''
-      const scopeIds  = scopeRaw ? scopeRaw.split('|').filter(Boolean) : []
-      console.log('[COMPARE] scopeIds:', scopeIds)
-
-      // 5. Run comparison
+      // 4. Run comparison
       setLoadingMsg('Running comparison…')
       const runId = `run_${Date.now()}_${Math.random().toString(36).slice(2,6)}`
       console.log('[COMPARE] calling compare(), modelSessionId:', mSess.session_id)
@@ -253,10 +248,10 @@ export default function ComparisonPage({ onBack }) {
         mEvents,
         { ...cSess, session_id: cSess.session_id },
         cEvents,
-        { modelSessionId: mSess.session_id, runId, scopeEventIds: scopeIds }
+        { modelSessionId: mSess.session_id, runId }
       )
       console.log('[COMPARE] result:', compResult.score, compResult.verdictCounts)
-      setResult({ ...compResult, runId, scopeIds })
+      setResult({ ...compResult, runId })
       setWritten(false); setExistingRun(null)
 
     } catch(e) {
@@ -305,7 +300,7 @@ export default function ComparisonPage({ onBack }) {
       }
 
       setExistingRun(null)
-      await writeComparisonResults(mSessNorm, cSessNorm, result, result.scopeIds, result.runId)
+      await writeComparisonResults(mSessNorm, cSessNorm, result, result.runId)
       setWritten(true)
     } catch(e) {
       console.error('[COMPARE WRITE CRASH]', e, e?.stack)
@@ -457,18 +452,11 @@ export default function ComparisonPage({ onBack }) {
                     <div style={{ fontSize:9, color:'var(--t-3)', marginTop:2 }}>{label}</div>
                   </div>
                 ))}
-                <div style={{ background:'var(--bg-3)', borderRadius:8, padding:'8px', textAlign:'center' }}>
-                  <div style={{ fontSize:20, fontWeight:800, color:'var(--t-3)' }}>
-                    {result.excludedCollectorCount}
-                  </div>
-                  <div style={{ fontSize:9, color:'var(--t-3)', marginTop:2 }}>Out of scope</div>
-                </div>
               </div>
 
               <div style={{ marginTop:12, fontSize:10, color:'var(--t-3)' }}>
-                Scope: {result.scopeIds.join(', ')} ·
                 Model: {result.modelEventCount} events ·
-                Collector (scoped): {result.collectorEventCount} events
+                Collector: {result.collectorEventCount} events
               </div>
             </div>
 
@@ -487,19 +475,40 @@ export default function ComparisonPage({ onBack }) {
                 </div>
                 <div style={{ display:'grid', gridTemplateColumns:'repeat(7,1fr)', gap:8, marginTop:10 }}>
                   {/* Overall first, then the six modules */}
-                  <div style={{ background:'var(--bg-3)', borderRadius:8, padding:'10px 6px',
-                    textAlign:'center', border:'1px solid var(--b-1)' }}>
-                    <div style={{ fontSize:18, fontWeight:900,
-                      color: result.score === null ? 'var(--t-3)'
-                        : result.score >= 90 ? '#30D158' : result.score >= 75 ? '#FFD60A' : '#FF453A' }}>
-                      {result.score !== null ? result.score + '%' : '—'}
-                    </div>
-                    <div style={{ fontSize:9, fontWeight:800, color:'var(--t-2)', marginTop:3,
-                      letterSpacing:0.6 }}>OVERALL</div>
-                    <div style={{ fontSize:8, color:'var(--t-3)', marginTop:2 }}>
-                      {(result.verdictCounts?.correct || 0)}/{result.modelEventCount}
-                    </div>
-                  </div>
+                  {(() => {
+                    const coveredMods = MODULES_SPLIT.filter(m => {
+                      const st = result.moduleStats?.[m]
+                      return st && st.events > 0 && st.score > 0
+                    })
+                    const modelMods = MODULES_SPLIT.filter(m => {
+                      const st = result.moduleStats?.[m]
+                      return st && st.events > 0
+                    })
+                    const partialCoverage = coveredMods.length > 0 && coveredMods.length < modelMods.length
+                    return (
+                      <div style={{ background:'var(--bg-3)', borderRadius:8, padding:'10px 6px',
+                        textAlign:'center', border:'1px solid var(--b-1)' }}>
+                        <div style={{ fontSize:18, fontWeight:900,
+                          color: result.score === null ? 'var(--t-3)'
+                            : result.score >= 90 ? '#30D158' : result.score >= 75 ? '#FFD60A' : '#FF453A' }}>
+                          {result.score !== null ? result.score + '%' : '—'}
+                        </div>
+                        <div style={{ fontSize:9, fontWeight:800, color:'var(--t-2)', marginTop:3,
+                          letterSpacing:0.6 }}>OVERALL</div>
+                        <div style={{ fontSize:8, color:'var(--t-3)', marginTop:2 }}>
+                          {(result.verdictCounts?.correct || 0)}/{result.modelEventCount}
+                        </div>
+                        {partialCoverage && (
+                          <div style={{ fontSize:8, color:'#FF9500', marginTop:4, lineHeight:1.4 }}>
+                            {coveredMods.length === 1
+                              ? `${MODULE_LABELS[coveredMods[0]]} only`
+                              : coveredMods.map(m => MODULE_LABELS[m]).join(', ')}
+                            {' — see modules'}
+                          </div>
+                        )}
+                      </div>
+                    )
+                  })()}
                   {MODULES_SPLIT.map(mod => {
                     const st = result.moduleStats[mod] || { score:null, correct:0, errors:0, events:0 }
                     const noData = st.events === 0
