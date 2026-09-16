@@ -50,6 +50,7 @@ import {
   normalizeEventId, classifyEventModule,
 } from '../utils/defectTypes'
 import { exportScoutSession } from '../utils/exportScoutSession'
+import { showToast } from '../utils/toast'
 import { formatHalf } from '../utils/half.js'
 
 export default function ReviewPage({ session, onDone, onBack, bridgeSyncStatus, onBridgeSyncStatus }) {
@@ -427,6 +428,8 @@ export default function ReviewPage({ session, onDone, onBack, bridgeSyncStatus, 
       })
       .then(({ folderUrl, localFolder }) => {
         setExportState(s => ({ ...s, phase:'done', driveLink: folderUrl, localFolder: localFolder || '', detail:'' }))
+        if (localFolder) showToast(`Export saved to ${localFolder}`)
+        else if (folderUrl) showToast('Export uploaded to Google Drive')
         // Save Drive link to Firestore for session history
         updateDoc(doc(db, 'mark_sessions', session.sessionId), { driveLink: folderUrl })
           .catch(e => console.warn('[MARK] driveLink save failed:', e))

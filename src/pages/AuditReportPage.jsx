@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { invoke } from '@tauri-apps/api/core'
+import { showToast } from '../utils/toast'
 import { formatHalf } from '../utils/half.js'
 import { formatPeople } from '../data/roster.js'
 
@@ -408,10 +409,10 @@ export default function AuditReportPage({ results, score, session, onBack }) {
               setDlState('saving'); setDlPath(''); setDlError('')
               try {
                 const p = await exportAuditCSV(results, score, session)
-                if (p) { setDlPath(p); setDlState('done'); setTimeout(()=>setDlState('idle'), 8000) }
+                if (p) { setDlPath(p); setDlState('done'); showToast(`Saved to ${p}`); setTimeout(()=>setDlState('idle'), 8000) }
                 else setDlState('idle')
               } catch(e) {
-                setDlError(e?.message || String(e)); setDlState('error'); setTimeout(()=>setDlState('idle'), 8000)
+                const msg = e?.message || String(e); setDlError(msg); setDlState('error'); showToast(`Download failed: ${msg}`, 'error'); setTimeout(()=>setDlState('idle'), 8000)
               }
             }}>
             {dlState === 'saving'

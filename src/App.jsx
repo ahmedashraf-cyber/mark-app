@@ -14,6 +14,7 @@ import AuditPage from './pages/AuditPage'
 import AuditReportPage from './pages/AuditReportPage'
 import ObserverPage from './pages/ObserverPage'
 import UpdateBanner from './components/UpdateBanner'
+import ToastContainer from './components/ToastContainer'
 
 // Cinematic page wrapper — fades + slides in each time content changes
 function PageTransition({ id, children }) {
@@ -289,6 +290,7 @@ export default function App() {
   return (
     <AuthProvider>
       <AppInner/>
+      <ToastContainer/>
     </AuthProvider>
   )
 }

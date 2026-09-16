@@ -29,6 +29,7 @@ import { useAuth } from '../hooks/useAuth.jsx'
 import { useAdmin } from '../hooks/useAdmin.js'
 import { invoke } from '@tauri-apps/api/core'
 import { exportSessionToXlsx, exportSessionToUserDrive } from '../utils/exportSession'
+import { showToast } from '../utils/toast'
 import { EXTRAS, GK_EXTRAS, GK_WRONG_EXTRAS } from '../components/TagPanel'
 import { SPEED_MIN, SPEED_MAX, SPEED_STEP } from '../data/shortcuts'
 import { formatHalf } from '../utils/half.js'
@@ -800,9 +801,9 @@ function SessionCard({ session, onReview, onExport, onExportSheets, loading, isA
               setXlsxState('saving'); setXlsxPath('')
               try {
                 const p = await onExport(session)
-                if (p) { setXlsxPath(p); setXlsxState('done'); setTimeout(()=>setXlsxState('idle'), 8000) }
+                if (p) { setXlsxPath(p); setXlsxState('done'); showToast(`Saved to ${p}`); setTimeout(()=>setXlsxState('idle'), 8000) }
                 else setXlsxState('idle')
-              } catch { setXlsxState('error'); setTimeout(()=>setXlsxState('idle'), 5000) }
+              } catch(e) { setXlsxState('error'); showToast(`Download failed: ${e?.message||String(e)}`, 'error'); setTimeout(()=>setXlsxState('idle'), 5000) }
             }}
             disabled={xlsxState === 'saving'}
             title={xlsxState === 'done' ? `Saved: ${xlsxPath}` : 'Export XLSX'}
@@ -837,8 +838,8 @@ function SessionCard({ session, onReview, onExport, onExportSheets, loading, isA
               setSheetsState('saving')
               try {
                 await onExportSheets(session)
-                setSheetsState('done'); setTimeout(()=>setSheetsState('idle'), 5000)
-              } catch { setSheetsState('error'); setTimeout(()=>setSheetsState('idle'), 5000) }
+                setSheetsState('done'); showToast('Exported to Google Sheets'); setTimeout(()=>setSheetsState('idle'), 5000)
+              } catch(e) { setSheetsState('error'); showToast(`Sheets export failed: ${e?.message||String(e)}`, 'error'); setTimeout(()=>setSheetsState('idle'), 5000) }
             }}
             disabled={sheetsState === 'saving'}
             title="Export to Google Sheet"

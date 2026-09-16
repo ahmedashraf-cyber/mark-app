@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { invoke } from '@tauri-apps/api/core'
+import { showToast } from '../utils/toast'
 import { db } from '../firebase/config'
 import { collection, addDoc, serverTimestamp, getDocs, query, where, deleteDoc, doc, getDoc, setDoc } from 'firebase/firestore'
 import { useAuth } from '../hooks/useAuth.jsx'
@@ -287,10 +288,10 @@ function ExistingSessionView({ session, onSeek }) {
       const savedPath = await invoke('save_text_file_dialog', {
         name: `${session.matchId || 'match'}_amendments.csv`, content: csv,
       })
-      if (savedPath) { setDlPath(savedPath); setDlState('done'); setTimeout(()=>setDlState('idle'), 8000) }
+      if (savedPath) { setDlPath(savedPath); setDlState('done'); showToast(`Saved to ${savedPath}`); setTimeout(()=>setDlState('idle'), 8000) }
       else setDlState('idle')
     } catch(e) {
-      setDlError(e?.message || String(e)); setDlState('error'); setTimeout(()=>setDlState('idle'), 8000)
+      const msg = e?.message || String(e); setDlError(msg); setDlState('error'); showToast(`Download failed: ${msg}`, 'error'); setTimeout(()=>setDlState('idle'), 8000)
     }
   }
 
@@ -1730,10 +1731,10 @@ function AmendmentsTable({ results, session, reviewerIds, identityMap, onSeek })
     try {
       const { csv, name } = buildCSV()
       const savedPath = await invoke('save_text_file_dialog', { name, content: csv })
-      if (savedPath) { setDlPath2(savedPath); setDlState2('done'); setTimeout(()=>setDlState2('idle'), 8000) }
+      if (savedPath) { setDlPath2(savedPath); setDlState2('done'); showToast(`Saved to ${savedPath}`); setTimeout(()=>setDlState2('idle'), 8000) }
       else setDlState2('idle')
     } catch(e) {
-      setDlError2(e?.message || String(e)); setDlState2('error'); setTimeout(()=>setDlState2('idle'), 8000)
+      const msg = e?.message || String(e); setDlError2(msg); setDlState2('error'); showToast(`Download failed: ${msg}`, 'error'); setTimeout(()=>setDlState2('idle'), 8000)
     }
   }
 
