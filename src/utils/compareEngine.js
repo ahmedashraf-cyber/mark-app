@@ -103,14 +103,42 @@ function hungarian(costMatrix) {
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
-function alignTime(ev) {
-  // Prefer time_from_half_start_ms (integer string) when available
-  if (ev.time_from_half_start_ms !== '' && ev.time_from_half_start_ms !== null &&
-      ev.time_from_half_start_ms !== undefined) {
-    const v = parseInt(ev.time_from_half_start_ms)
-    if (!isNaN(v) && v >= 0) return { ms: v, source: 'half_start' }
+/** Does this event carry a usable time-from-half-start? */
+function hasHalfStart(ev) {
+  const raw = ev.time_from_half_start_ms
+  if (raw === '' || raw === null || raw === undefined) return false
+  const v = parseInt(raw)
+  return !isNaN(v) && v >= 0
+}
+
+/**
+ * Pick ONE time origin for the whole comparison, used by both sides.
+ *
+ * Time from half start is preferred — half start is tagged at roughly the same
+ * moment in both sessions, so it cancels out any difference in how much
+ * pre-kickoff footage each video contains.
+ *
+ * But it is only usable when BOTH sides have it. Previously each event chose
+ * its own origin and fell back to video_time_ms independently, with no check
+ * that the two agreed — so a model measured from kickoff was compared against
+ * a collector measured from video start. With six minutes of warm-up in the
+ * file that is a 360,000 ms gap on every pair, far past any tolerance, and the
+ * entire run collapses to missing + extra with nothing aligned.
+ *
+ * The detail rows render video_time_ms, which is why the timestamps looked
+ * 84 ms apart on screen while the matcher saw minutes.
+ */
+function chooseTimeSource(modelEvents, collEvents) {
+  const modelHas = modelEvents.length > 0 && modelEvents.every(hasHalfStart)
+  const collHas  = collEvents.length  > 0 && collEvents.every(hasHalfStart)
+  if (modelHas && collHas) return 'half_start'
+  return 'video_time'
+}
+
+function alignTimeWith(ev, source) {
+  if (source === 'half_start' && hasHalfStart(ev)) {
+    return { ms: parseInt(ev.time_from_half_start_ms), source: 'half_start' }
   }
-  // Fall back to video_time_ms
   const v = parseInt(ev.video_time_ms || 0)
   return { ms: isNaN(v) ? 0 : v, source: 'video_time' }
 }
@@ -160,18 +188,27 @@ export function compare(sessA, eventsA, sessB, eventsB, config) {
   // ── Stage 3: Align (Hungarian optimal assignment) ─────────────────────────
   const INF = 1e15
 
+  // ONE origin for both sides, decided once. Deciding per event — and never
+  // checking the two agreed — is what collapsed whole runs to missing+extra.
+  const timeSource = chooseTimeSource(modelEvents, collEvents)
+  const alignTime  = ev => alignTimeWith(ev, timeSource)
+
   // Build cost matrix: rows = model events, cols = collector events
   const costs = modelEvents.map(mEv => {
     const tol = toleranceFor(mEv.event_code)
     const mT  = alignTime(mEv)
     return collEvents.map(cEv => {
-      // Must be same event_code
+      // ALIGNMENT CRITERIA: event_code and timestamp ONLY.
+      // Team is deliberately absent — a swapped home/away must produce
+      // wrong_side, not missing+extra, so one metadata error costs one error
+      // per event rather than two.
       if (cEv.event_code !== mEv.event_code) return INF
-      const cT   = alignTime(cEv)
-      // Only pair if both use same alignment source, or fall back gracefully
+      const cT    = alignTime(cEv)
       const delta = Math.abs(mT.ms - cT.ms)
       if (delta > tol) return INF
-      // Cost: timestamp delta. Tie-break: same team slightly cheaper
+      // Cost is the timestamp delta. Same team is a 0.1 tie-break so that when
+      // two candidates sit equally close in time the same-team one wins. It can
+      // never reach INF, so it can never prevent a pair.
       const teamBonus = (mEv.team === cEv.team) ? 0 : 0.1
       return delta + teamBonus
     })
