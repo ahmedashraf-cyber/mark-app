@@ -9,6 +9,7 @@
  * nicely but every pivot then needs the metadata copied down by hand.
  */
 import { DRILL_ATTR_COLUMNS } from '../config/drillConfig'
+import { showToast } from './toast'
 
 /** RFC-4180 quoting, and a BOM so Excel opens UTF-8 correctly. */
 function csvCell(v) {
@@ -24,16 +25,29 @@ function toCsv(headers, rows) {
   return '\ufeff' + lines.join('\r\n')
 }
 
-export function download(filename, text) {
-  const blob = new Blob([text], { type: 'text/csv;charset=utf-8;' })
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url
-  a.download = filename
-  document.body.appendChild(a)
-  a.click()
-  document.body.removeChild(a)
-  setTimeout(() => URL.revokeObjectURL(url), 1000)
+/**
+ * Save through the native dialog, and tell the user where it went.
+ *
+ * This was an <a download> anchor, which is a NO-OP inside the Tauri webview —
+ * the click did nothing at all, no file was written anywhere. exportSession.js
+ * documents the same trap; I should have read it before writing this.
+ *
+ * Returns the chosen path, or null if the user cancelled.
+ */
+export async function download(filename, text) {
+  try {
+    const { invoke } = await import('@tauri-apps/api/core')
+    const savedPath = await invoke('save_text_file_dialog', {
+      name: filename, content: text,
+    })
+    // null means the dialog was dismissed — not a failure, so stay quiet
+    if (savedPath) showToast(`Saved to ${savedPath}`)
+    return savedPath || null
+  } catch (e) {
+    const msg = e?.message || String(e)
+    showToast(`Download failed: ${msg}`, 'error')
+    throw e
+  }
 }
 
 const safeName = s => String(s || 'export').replace(/[^\w.-]+/g, '_').slice(0, 60)

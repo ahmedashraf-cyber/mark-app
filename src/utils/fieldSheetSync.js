@@ -24,6 +24,7 @@ import {
   EVENT_BY_CODE, GROUP_TO_ATTR_COL,
 } from '../config/fieldConfig'
 import { CURRENT_VERSION } from '../hooks/useUpdateCheck'
+import { showToast } from './toast'
 
 const SHEETS_BASE = 'https://sheets.googleapis.com/v4/spreadsheets'
 
@@ -206,7 +207,7 @@ function toCsv(headers, rows) {
   return [headers, ...rows].map(r => r.map(cell).join(',')).join('\r\n') + '\r\n'
 }
 
-export function downloadFieldCsv(session, events) {
+export async function downloadFieldCsv(session, events) {
   const sessionCsv = toCsv(SESSION_COLUMNS, [buildSessionRow(session)])
   const eventsCsv  = toCsv(EVENT_COLUMNS, buildEventRows(events))
 
@@ -215,15 +216,34 @@ export function downloadFieldCsv(session, events) {
   const halfPart = session.half    ? `_H${session.half}`   : ''
   const ts       = new Date().toISOString().slice(0,16).replace(/[T:]/g,'-')
 
-  // Two files: sessions CSV and events CSV
+  // Two files: sessions CSV and events CSV.
+  //
+  // These were <a download> anchors, which do nothing at all inside the Tauri
+  // webview — no file was written anywhere. Each now goes through the native
+  // save dialog so the user picks the location and is told where it landed.
+  //
+  // Two dialogs in a row is deliberate: they are two separate files, and
+  // silently choosing a folder for the second would be worse than asking.
+  // Cancelling the first still offers the second.
+  const { invoke } = await import('@tauri-apps/api/core')
+  const saved = []
   for (const [suffix, csv] of [['_sessions',sessionCsv],['_events',eventsCsv]]) {
-    const blob = new Blob([csv], { type:'text/csv;charset=utf-8;' })
-    const url  = URL.createObjectURL(blob)
-    const a    = document.createElement('a')
-    a.href = url; a.download = `${base}${matchPart}${halfPart}${suffix}_${ts}.csv`
-    document.body.appendChild(a); a.click()
-    document.body.removeChild(a); URL.revokeObjectURL(url)
+    const name = `${base}${matchPart}${halfPart}${suffix}_${ts}.csv`
+    try {
+      const path = await invoke('save_text_file_dialog', { name, content: csv })
+      if (path) saved.push(path)
+    } catch (e) {
+      showToast(`Could not save ${name}: ${e?.message || e}`, 'error')
+    }
   }
+  // FieldPage already toasts the returned path and drives its own button state,
+  // so returning a STRING (not the array) keeps that caller working unchanged
+  // and avoids a second toast on top of its own. The extra path is mentioned
+  // once here because two files were written, which the caller cannot know.
+  if (saved.length > 1) {
+    showToast(`Also saved ${saved[0]}`)
+  }
+  return saved.length ? saved[saved.length - 1] : null
 }
 
 // ── Sheet helpers ─────────────────────────────────────────────────────────

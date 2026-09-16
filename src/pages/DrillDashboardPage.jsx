@@ -160,7 +160,8 @@ export default function DrillDashboardPage({
                 <option value="completed-failed">Failed</option>
               </select>
               <button style={btn} onClick={() => {
-                const c = quizSummaryCsv({ quiz, traineeRows: shown }); download(c.filename, c.text)
+                const c = quizSummaryCsv({ quiz, traineeRows: shown })
+                download(c.filename, c.text).catch(() => {})   // toast already reported it
               }}>Download CSV</button>
             </div>
             <div style={{ overflowX:'auto' }}>
@@ -212,7 +213,8 @@ export default function DrillDashboardPage({
                 Clips, worst first ({analysis.length})
               </div>
               <button style={btn} onClick={() => {
-                const c = clipAnalysisCsv({ quiz, analysis }); download(c.filename, c.text)
+                const c = clipAnalysisCsv({ quiz, analysis })
+                download(c.filename, c.text).catch(() => {})
               }}>Download CSV</button>
             </div>
             <div style={{ fontSize:10, color:'var(--t-3)', marginBottom:10, lineHeight:1.5 }}>

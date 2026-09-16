@@ -135,7 +135,7 @@ export default function DrillReviewPage({ quiz, sessions, answersGiven, clips, o
           <div style={{ flex:1 }}/>
           <button onClick={() => {
               const csv = attemptCsv({ quiz, session, answersGiven, clips })
-              download(csv.filename, csv.text)
+              download(csv.filename, csv.text).catch(() => {})
             }}
             style={{ padding:'6px 12px', fontSize:11, background:'transparent',
               border:'1px solid var(--b-1)', borderRadius:6, color:'var(--t-2)',

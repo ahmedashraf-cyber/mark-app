@@ -125,7 +125,8 @@ export default function DrillTraineePage({
           fontFamily:'JetBrains Mono,monospace' }}>{s.hrCode}</span>
         <div style={{ flex:1 }}/>
         <button onClick={() => {
-            const c = traineeSummaryCsv({ summary: s }); download(c.filename, c.text)
+            const c = traineeSummaryCsv({ summary: s })
+            download(c.filename, c.text).catch(() => {})
           }}
           style={{ padding:'6px 11px', fontSize:11, background:'transparent',
             border:'1px solid var(--b-1)', borderRadius:6, color:'var(--t-2)',
