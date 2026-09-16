@@ -431,5 +431,5 @@ export async function exportScoutSession({
   // ── Done ──────────────────────────────────────────────────────────────────
   const folderUrl = `https://drive.google.com/drive/folders/${subFolderId}`
   report('done', cutFiles.length + 1, cutFiles.length + 1, folderUrl)
-  return { driveLink, folderUrl, clipsCount: cutFiles.length }
+  return { driveLink, folderUrl, clipsCount: cutFiles.length, localFolder }
 }

@@ -695,6 +695,9 @@ function SessionCard({ session, onReview, onExport, onExportSheets, loading, isA
   const score  = session.qualityScore || 0
   const color  = score >= 80 ? '#30D158' : score >= 60 ? '#FFD60A' : '#FF453A'
   const isAudit = session.type === 'audit'
+  const [xlsxState,   setXlsxState]   = useState('idle') // idle|saving|done|error
+  const [xlsxPath,    setXlsxPath]    = useState('')
+  const [sheetsState, setSheetsState] = useState('idle') // idle|saving|done|error
   const date   = session.completedAt?.toDate?.()
     ? session.completedAt.toDate().toLocaleDateString('en-GB', { day:'2-digit', month:'short', year:'numeric' })
     : ''
@@ -788,39 +791,77 @@ function SessionCard({ session, onReview, onExport, onExportSheets, loading, isA
       </div>
 
       {/* Actions */}
-      <div style={{ display:'flex', gap:6, flexShrink:0 }}>
-        <button
-          onClick={e => { e.stopPropagation(); onExport(session) }}
-          title="Export CSV"
-          style={{
-            width:32, height:32, borderRadius:8,
-            background:'rgba(48,209,88,0.08)', border:'1px solid rgba(48,209,88,0.2)',
-            display:'flex', alignItems:'center', justifyContent:'center', cursor:'pointer',
-            transition:'all .15s',
-          }}
-          onMouseEnter={e => e.currentTarget.style.background='rgba(48,209,88,0.16)'}
-          onMouseLeave={e => e.currentTarget.style.background='rgba(48,209,88,0.08)'}
-        >
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#30D158" strokeWidth="2.5" strokeLinecap="round">
-            <path d="M12 3v13M6 11l6 6 6-6"/><path d="M4 20h16"/>
-          </svg>
-        </button>
-        <button
-          onClick={e => { e.stopPropagation(); onExportSheets(session) }}
-          title="Export to Google Sheet"
-          style={{
-            width:32, height:32, borderRadius:8,
-            background:'rgba(10,132,255,0.10)', border:'1px solid rgba(10,132,255,0.28)',
-            display:'flex', alignItems:'center', justifyContent:'center', cursor:'pointer',
-            transition:'all .15s',
-          }}
-          onMouseEnter={e => e.currentTarget.style.background='rgba(10,132,255,0.20)'}
-          onMouseLeave={e => e.currentTarget.style.background='rgba(10,132,255,0.10)'}
-        >
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#0A84FF" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <rect x="4" y="3" width="16" height="18" rx="2"/><path d="M4 9h16M4 15h16M10 3v18"/>
-          </svg>
-        </button>
+      <div style={{ display:'flex', gap:6, flexShrink:0, alignItems:'center' }}>
+        <div style={{ display:'flex', flexDirection:'column', alignItems:'center', gap:3 }}>
+          <button
+            onClick={async e => {
+              e.stopPropagation()
+              if (xlsxState === 'saving') return
+              setXlsxState('saving'); setXlsxPath('')
+              try {
+                const p = await onExport(session)
+                if (p) { setXlsxPath(p); setXlsxState('done'); setTimeout(()=>setXlsxState('idle'), 8000) }
+                else setXlsxState('idle')
+              } catch { setXlsxState('error'); setTimeout(()=>setXlsxState('idle'), 5000) }
+            }}
+            disabled={xlsxState === 'saving'}
+            title={xlsxState === 'done' ? `Saved: ${xlsxPath}` : 'Export XLSX'}
+            style={{
+              width:32, height:32, borderRadius:8,
+              background: xlsxState==='done' ? 'rgba(48,209,88,0.18)' : xlsxState==='error' ? 'rgba(255,69,58,0.1)' : 'rgba(48,209,88,0.08)',
+              border: xlsxState==='done' ? '1px solid rgba(48,209,88,0.4)' : xlsxState==='error' ? '1px solid rgba(255,69,58,0.3)' : '1px solid rgba(48,209,88,0.2)',
+              display:'flex', alignItems:'center', justifyContent:'center', cursor: xlsxState==='saving'?'default':'pointer',
+              transition:'all .15s', opacity: xlsxState==='saving'?0.6:1,
+            }}
+            onMouseEnter={e => { if(xlsxState==='idle') e.currentTarget.style.background='rgba(48,209,88,0.16)' }}
+            onMouseLeave={e => { if(xlsxState==='idle') e.currentTarget.style.background='rgba(48,209,88,0.08)' }}
+          >
+            {xlsxState === 'saving'
+              ? <svg style={{animation:'spin 1s linear infinite'}} width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#30D158" strokeWidth="2.5"><circle cx="12" cy="12" r="10" strokeOpacity=".3"/><path d="M12 2a10 10 0 0 1 10 10"/></svg>
+              : xlsxState === 'done'
+              ? <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#30D158" strokeWidth="2.5" strokeLinecap="round"><path d="M20 6L9 17l-5-5"/></svg>
+              : xlsxState === 'error'
+              ? <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#FF453A" strokeWidth="2.5" strokeLinecap="round"><path d="M18 6L6 18M6 6l12 12"/></svg>
+              : <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#30D158" strokeWidth="2.5" strokeLinecap="round"><path d="M12 3v13M6 11l6 6 6-6"/><path d="M4 20h16"/></svg>
+            }
+          </button>
+          {xlsxState === 'done' && xlsxPath && (
+            <button onClick={async e => { e.stopPropagation(); const { invoke } = await import('@tauri-apps/api/core'); invoke('open_folder',{path:xlsxPath}) }} style={{fontSize:9,color:'var(--p2)',background:'none',border:'none',cursor:'pointer',padding:0,textDecoration:'underline',whiteSpace:'nowrap'}}>Open folder</button>
+          )}
+        </div>
+        <div style={{ display:'flex', flexDirection:'column', alignItems:'center', gap:3 }}>
+          <button
+            onClick={async e => {
+              e.stopPropagation()
+              if (sheetsState === 'saving') return
+              setSheetsState('saving')
+              try {
+                await onExportSheets(session)
+                setSheetsState('done'); setTimeout(()=>setSheetsState('idle'), 5000)
+              } catch { setSheetsState('error'); setTimeout(()=>setSheetsState('idle'), 5000) }
+            }}
+            disabled={sheetsState === 'saving'}
+            title="Export to Google Sheet"
+            style={{
+              width:32, height:32, borderRadius:8,
+              background: sheetsState==='done' ? 'rgba(10,132,255,0.20)' : sheetsState==='error' ? 'rgba(255,69,58,0.1)' : 'rgba(10,132,255,0.10)',
+              border: sheetsState==='done' ? '1px solid rgba(10,132,255,0.4)' : sheetsState==='error' ? '1px solid rgba(255,69,58,0.3)' : '1px solid rgba(10,132,255,0.28)',
+              display:'flex', alignItems:'center', justifyContent:'center', cursor: sheetsState==='saving'?'default':'pointer',
+              transition:'all .15s', opacity: sheetsState==='saving'?0.6:1,
+            }}
+            onMouseEnter={e => { if(sheetsState==='idle') e.currentTarget.style.background='rgba(10,132,255,0.20)' }}
+            onMouseLeave={e => { if(sheetsState==='idle') e.currentTarget.style.background='rgba(10,132,255,0.10)' }}
+          >
+            {sheetsState === 'saving'
+              ? <svg style={{animation:'spin 1s linear infinite'}} width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#0A84FF" strokeWidth="2.5"><circle cx="12" cy="12" r="10" strokeOpacity=".3"/><path d="M12 2a10 10 0 0 1 10 10"/></svg>
+              : sheetsState === 'done'
+              ? <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#0A84FF" strokeWidth="2.5" strokeLinecap="round"><path d="M20 6L9 17l-5-5"/></svg>
+              : sheetsState === 'error'
+              ? <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#FF453A" strokeWidth="2.5" strokeLinecap="round"><path d="M18 6L6 18M6 6l12 12"/></svg>
+              : <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#0A84FF" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="4" y="3" width="16" height="18" rx="2"/><path d="M4 9h16M4 15h16M10 3v18"/></svg>
+            }
+          </button>
+        </div>
         <button
           onClick={e => { e.stopPropagation(); onReview(session) }}
           style={{
@@ -1038,21 +1079,18 @@ export default function SessionHistoryPage({ onBack, initialSession }) {
   }, [profile?.uid])
 
   async function handleExport(session) {
-    try {
-      const q    = query(collection(db, 'mark_error_tags'), where('sessionId', '==', session.sessionId))
-      const snap = await getDocs(q)
-      const tags = snap.docs.map(d => ({ id: d.id, ...d.data() }))
-      await exportSessionToXlsx({
-        session,
-        tags,
-        quality: session.qualityScore || 0,
-        tagCount: session.totalTaggedErrors || 0,
-        total: session.totalReviewedEvents || 0,
-        videoPath: null,
-      })
-    } catch(e) {
-      console.error('[MARK] export failed:', e)
-    }
+    const q    = query(collection(db, 'mark_error_tags'), where('sessionId', '==', session.sessionId))
+    const snap = await getDocs(q)
+    const tags = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+    const savedPath = await exportSessionToXlsx({
+      session,
+      tags,
+      quality: session.qualityScore || 0,
+      tagCount: session.totalTaggedErrors || 0,
+      total: session.totalReviewedEvents || 0,
+      videoPath: null,
+    })
+    return savedPath || null
   }
 
   // STAGE 1 — Google Sheet in the reviewer's OWN Drive (OAuth sign-in, drive.file).

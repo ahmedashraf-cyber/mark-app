@@ -951,11 +951,21 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
     setSubmitting(false)
   }
 
-  function handleExportCsvOnly() {
+  const [csvDlState, setCsvDlState] = useState('idle') // idle|saving|done|error
+  const [csvDlPath,  setCsvDlPath]  = useState('')
+  const [csvDlError, setCsvDlError] = useState('')
+
+  async function handleExportCsvOnly() {
     const sess = session || pendingUpload
-    if (!sess) return
-    try { downloadFieldCsv(sess, events) }
-    catch(e) { console.error('[MARK Field] CSV export:', e) }
+    if (!sess || csvDlState === 'saving') return
+    setCsvDlState('saving'); setCsvDlPath(''); setCsvDlError('')
+    try {
+      const savedPath = await downloadFieldCsv(sess, events)
+      if (savedPath) { setCsvDlPath(savedPath); setCsvDlState('done'); setTimeout(()=>setCsvDlState('idle'), 8000) }
+      else setCsvDlState('idle')
+    } catch(e) {
+      setCsvDlError(e?.message || String(e)); setCsvDlState('error'); setTimeout(()=>setCsvDlState('idle'), 8000)
+    }
   }
 
   function handleDiscard() {
@@ -1314,15 +1324,35 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
               }}>
               {submitting ? 'Uploading…' : 'Retry upload to Sheet'}
             </button>
-            <button style={{flex:1,padding:'7px 0',fontSize:12,background:'var(--bg-3)',
-              border:'1px solid var(--b-1)',borderRadius:7,color:'var(--t-2)',cursor:'pointer'}}
-              onClick={async()=>{
-                const evSnap = await getDocs(query(collection(db,'mark_collected_events'),where('sessionId','==',pendingUpload.sessionId)))
-                const pendingEvs = evSnap.docs.map(d=>d.data())
-                downloadFieldCsv(pendingUpload, pendingEvs)
-              }}>
-              Export CSV
-            </button>
+            <div style={{flex:1,display:'flex',flexDirection:'column',gap:3}}>
+              <button style={{padding:'7px 0',fontSize:12,background:'var(--bg-3)',
+                border:'1px solid var(--b-1)',borderRadius:7,color:'var(--t-2)',cursor:csvDlState==='saving'?'default':'pointer',
+                opacity:csvDlState==='saving'?0.6:1,display:'flex',alignItems:'center',justifyContent:'center',gap:5,width:'100%'}}
+                disabled={csvDlState==='saving'}
+                onClick={async()=>{
+                  if (csvDlState === 'saving') return
+                  setCsvDlState('saving'); setCsvDlPath(''); setCsvDlError('')
+                  try {
+                    const evSnap = await getDocs(query(collection(db,'mark_collected_events'),where('sessionId','==',pendingUpload.sessionId)))
+                    const pendingEvs = evSnap.docs.map(d=>d.data())
+                    const p = await downloadFieldCsv(pendingUpload, pendingEvs)
+                    if (p) { setCsvDlPath(p); setCsvDlState('done'); setTimeout(()=>setCsvDlState('idle'),8000) }
+                    else setCsvDlState('idle')
+                  } catch(e) { setCsvDlError(e?.message||String(e)); setCsvDlState('error'); setTimeout(()=>setCsvDlState('idle'),8000) }
+                }}>
+                {csvDlState==='saving'
+                  ? <><svg style={{animation:'spin 1s linear infinite'}} width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><circle cx="12" cy="12" r="10" strokeOpacity=".3"/><path d="M12 2a10 10 0 0 1 10 10"/></svg> Saving…</>
+                  : 'Export CSV'
+                }
+              </button>
+              {csvDlState === 'done' && csvDlPath && (
+                <div style={{fontSize:9,color:'#30D158',display:'flex',alignItems:'center',gap:4}}>
+                  <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="#30D158" strokeWidth="2.5" strokeLinecap="round"><path d="M20 6L9 17l-5-5"/></svg>
+                  <button onClick={async()=>{const {invoke}=await import('@tauri-apps/api/core');invoke('open_folder',{path:csvDlPath})}} style={{fontSize:9,color:'var(--p2)',background:'none',border:'none',cursor:'pointer',padding:0,textDecoration:'underline'}}>Open folder</button>
+                </div>
+              )}
+              {csvDlState === 'error' && <div style={{fontSize:9,color:'#FF453A'}}>{csvDlError}</div>}
+            </div>
             <button style={{flex:1,padding:'7px 0',fontSize:12,background:'transparent',
               border:'1px solid rgba(255,69,58,0.3)',borderRadius:7,color:'#FF453A',cursor:'pointer'}}
               onClick={()=>{
@@ -1369,11 +1399,26 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
                   </div>
                 )}
                 <div style={{display:'flex',gap:10}}>
-                  <button style={{flex:1,padding:'10px 0',fontSize:13,background:'var(--bg-3)',
-                    border:'1px solid var(--b-1)',borderRadius:8,color:'var(--t-2)',cursor:'pointer'}}
-                    onClick={handleExportCsvOnly}>
-                    Download CSV
-                  </button>
+                  <div style={{flex:1,display:'flex',flexDirection:'column',gap:4}}>
+                    <button style={{padding:'10px 0',fontSize:13,background:'var(--bg-3)',
+                      border:'1px solid var(--b-1)',borderRadius:8,color:'var(--t-2)',cursor:csvDlState==='saving'?'default':'pointer',
+                      opacity:csvDlState==='saving'?0.6:1,display:'flex',alignItems:'center',justifyContent:'center',gap:6,width:'100%'}}
+                      disabled={csvDlState==='saving'}
+                      onClick={handleExportCsvOnly}>
+                      {csvDlState==='saving'
+                        ? <><svg style={{animation:'spin 1s linear infinite'}} width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><circle cx="12" cy="12" r="10" strokeOpacity=".3"/><path d="M12 2a10 10 0 0 1 10 10"/></svg> Saving…</>
+                        : 'Download CSV'
+                      }
+                    </button>
+                    {csvDlState === 'done' && csvDlPath && (
+                      <div style={{fontSize:10,color:'#30D158',display:'flex',alignItems:'center',gap:6}}>
+                        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="#30D158" strokeWidth="2.5" strokeLinecap="round"><path d="M20 6L9 17l-5-5"/></svg>
+                        <span style={{overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}} title={csvDlPath}>Saved</span>
+                        <button onClick={async()=>{const {invoke}=await import('@tauri-apps/api/core');invoke('open_folder',{path:csvDlPath})}} style={{fontSize:10,color:'var(--p2)',background:'none',border:'none',cursor:'pointer',padding:0,textDecoration:'underline'}}>Open folder</button>
+                      </div>
+                    )}
+                    {csvDlState === 'error' && <div style={{fontSize:10,color:'#FF453A'}}>{csvDlError}</div>}
+                  </div>
                   <button className="btn-orange" style={{flex:2,padding:'10px 0',fontSize:13}}
                     onClick={handleStartFresh}>
                     Start New Session
@@ -1400,11 +1445,26 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
                     disabled={submitting} onClick={handleSaveToSheet}>
                     {submitting ? 'Retrying…' : 'Retry Upload'}
                   </button>
-                  <button style={{padding:'10px 0',fontSize:13,background:'var(--bg-3)',
-                    border:'1px solid var(--b-1)',borderRadius:8,color:'var(--t-2)',cursor:'pointer'}}
-                    onClick={handleExportCsvOnly}>
-                    Export as CSV (offline fallback)
-                  </button>
+                  <div style={{display:'flex',flexDirection:'column',gap:4}}>
+                    <button style={{padding:'10px 0',fontSize:13,background:'var(--bg-3)',
+                      border:'1px solid var(--b-1)',borderRadius:8,color:'var(--t-2)',cursor:csvDlState==='saving'?'default':'pointer',
+                      opacity:csvDlState==='saving'?0.6:1,display:'flex',alignItems:'center',justifyContent:'center',gap:6,width:'100%'}}
+                      disabled={csvDlState==='saving'}
+                      onClick={handleExportCsvOnly}>
+                      {csvDlState==='saving'
+                        ? <><svg style={{animation:'spin 1s linear infinite'}} width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><circle cx="12" cy="12" r="10" strokeOpacity=".3"/><path d="M12 2a10 10 0 0 1 10 10"/></svg> Saving…</>
+                        : 'Export as CSV (offline fallback)'
+                      }
+                    </button>
+                    {csvDlState === 'done' && csvDlPath && (
+                      <div style={{fontSize:10,color:'#30D158',display:'flex',alignItems:'center',gap:6}}>
+                        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="#30D158" strokeWidth="2.5" strokeLinecap="round"><path d="M20 6L9 17l-5-5"/></svg>
+                        <span style={{overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',flex:1}} title={csvDlPath}>{csvDlPath}</span>
+                        <button onClick={async()=>{const {invoke}=await import('@tauri-apps/api/core');invoke('open_folder',{path:csvDlPath})}} style={{fontSize:10,color:'var(--p2)',background:'none',border:'none',cursor:'pointer',padding:0,textDecoration:'underline',flexShrink:0}}>Open folder</button>
+                      </div>
+                    )}
+                    {csvDlState === 'error' && <div style={{fontSize:10,color:'#FF453A'}}>{csvDlError}</div>}
+                  </div>
                   <button style={{padding:'10px 0',fontSize:13,background:'transparent',
                     border:'1px solid rgba(255,255,255,0.08)',borderRadius:8,color:'var(--t-3)',cursor:'pointer'}}
                     onClick={()=>setShowDoneModal(false)}>
@@ -1551,11 +1611,26 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
                     onClick={()=>setShowDoneModal(false)}>
                     Cancel
                   </button>
-                  <button style={{flex:1,padding:'10px 0',fontSize:13,background:'var(--bg-3)',
-                    border:'1px solid var(--b-1)',borderRadius:8,color:'var(--t-2)',cursor:'pointer'}}
-                    onClick={handleExportCsvOnly}>
-                    CSV only
-                  </button>
+                  <div style={{flex:1,display:'flex',flexDirection:'column',gap:4}}>
+                    <button style={{padding:'10px 0',fontSize:13,background:'var(--bg-3)',
+                      border:'1px solid var(--b-1)',borderRadius:8,color:'var(--t-2)',cursor:csvDlState==='saving'?'default':'pointer',
+                      opacity:csvDlState==='saving'?0.6:1,display:'flex',alignItems:'center',justifyContent:'center',gap:6,width:'100%'}}
+                      disabled={csvDlState==='saving'}
+                      onClick={handleExportCsvOnly}>
+                      {csvDlState==='saving'
+                        ? <><svg style={{animation:'spin 1s linear infinite'}} width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><circle cx="12" cy="12" r="10" strokeOpacity=".3"/><path d="M12 2a10 10 0 0 1 10 10"/></svg> Saving…</>
+                        : 'CSV only'
+                      }
+                    </button>
+                    {csvDlState === 'done' && csvDlPath && (
+                      <div style={{fontSize:10,color:'#30D158',display:'flex',alignItems:'center',gap:6}}>
+                        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="#30D158" strokeWidth="2.5" strokeLinecap="round"><path d="M20 6L9 17l-5-5"/></svg>
+                        <span style={{overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',flex:1}} title={csvDlPath}>Saved</span>
+                        <button onClick={async()=>{const {invoke}=await import('@tauri-apps/api/core');invoke('open_folder',{path:csvDlPath})}} style={{fontSize:10,color:'var(--p2)',background:'none',border:'none',cursor:'pointer',padding:0,textDecoration:'underline',flexShrink:0}}>Open folder</button>
+                      </div>
+                    )}
+                    {csvDlState === 'error' && <div style={{fontSize:10,color:'#FF453A'}}>{csvDlError}</div>}
+                  </div>
                   <button className="btn-orange" style={{flex:2,padding:'10px 0',fontSize:13}}
                     disabled={submitting} onClick={handleSaveToSheet}>
                     {submitting ? 'Saving…' : 'Save to Sheet'}

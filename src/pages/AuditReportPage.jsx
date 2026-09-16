@@ -319,18 +319,17 @@ async function exportAuditCSV(results, score, session) {
   ]
 
   const csv = rows.map(r => r.map(v => `"${String(v).replace(/"/g,'""')}"`).join(',')).join('\n')
-  const blob = new Blob([csv], { type: 'text/csv' })
-  const url  = URL.createObjectURL(blob)
-  const a    = document.createElement('a')
-  a.href     = url
-  a.download = `audit_${session.matchId}_${session.half}_${Date.now()}.csv`
-  a.click()
-  URL.revokeObjectURL(url)
+  const name = `audit_${session.matchId || 'match'}_${session.half || 'h'}_${Date.now()}.csv`
+  const savedPath = await invoke('save_text_file_dialog', { name, content: csv })
+  return savedPath || null
 }
 
 // ── Main AuditReportPage ───────────────────────────────────────────────────────
 export default function AuditReportPage({ results, score, session, onBack }) {
   const [tab, setTab] = useState('overview') // 'overview' | 'events'
+  const [dlState, setDlState] = useState('idle')
+  const [dlPath,  setDlPath]  = useState('')
+  const [dlError, setDlError] = useState('')
 
   const uniqueEdited = new Set(results.amendments.map(a => a.key)).size
   const total        = results.baseEvents.length
@@ -401,13 +400,36 @@ export default function AuditReportPage({ results, score, session, onBack }) {
         </div>
 
         {/* Export */}
-        <button className="btn-ghost" style={{ padding:'5px 14px', fontSize:12, display:'flex', alignItems:'center', gap:6 }}
-          onClick={() => exportAuditCSV(results, score, session)}>
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
-            <path d="M12 3v13M6 11l6 6 6-6"/><path d="M4 20h16"/>
-          </svg>
-          Export CSV
-        </button>
+        <div style={{ display:'flex', flexDirection:'column', alignItems:'flex-end', gap:4 }}>
+          <button className="btn-ghost" style={{ padding:'5px 14px', fontSize:12, display:'flex', alignItems:'center', gap:6, opacity: dlState==='saving'?0.6:1 }}
+            disabled={dlState==='saving'}
+            onClick={async () => {
+              if (dlState === 'saving') return
+              setDlState('saving'); setDlPath(''); setDlError('')
+              try {
+                const p = await exportAuditCSV(results, score, session)
+                if (p) { setDlPath(p); setDlState('done'); setTimeout(()=>setDlState('idle'), 8000) }
+                else setDlState('idle')
+              } catch(e) {
+                setDlError(e?.message || String(e)); setDlState('error'); setTimeout(()=>setDlState('idle'), 8000)
+              }
+            }}>
+            {dlState === 'saving'
+              ? <><svg style={{animation:'spin 1s linear infinite'}} width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><circle cx="12" cy="12" r="10" strokeOpacity=".3"/><path d="M12 2a10 10 0 0 1 10 10"/></svg> Saving…</>
+              : <><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><path d="M12 3v13M6 11l6 6 6-6"/><path d="M4 20h16"/></svg> Export CSV</>
+            }
+          </button>
+          {dlState === 'done' && (
+            <div className="fade-in" style={{ display:'flex', alignItems:'center', gap:8, fontSize:10, color:'#30D158' }}>
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#30D158" strokeWidth="2.5" strokeLinecap="round"><path d="M20 6L9 17l-5-5"/></svg>
+              <span title={dlPath}>Saved to {dlPath}</span>
+              <button onClick={()=>invoke('open_folder',{path:dlPath})} style={{fontSize:10,color:'var(--p2)',background:'none',border:'none',cursor:'pointer',padding:0,textDecoration:'underline'}}>Open folder</button>
+            </div>
+          )}
+          {dlState === 'error' && (
+            <div style={{ fontSize:10, color:'#FF453A' }}>Export failed: {dlError}</div>
+          )}
+        </div>
       </header>
 
       {/* ── Content ── */}

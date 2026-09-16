@@ -196,19 +196,15 @@ export function buildFieldCsv(session, events) {
  * Triggers a browser download of the CSV file.
  * Returns the filename used.
  */
-export function downloadFieldCsv(session, events) {
+export async function downloadFieldCsv(session, events) {
   const csv = buildFieldCsv(session, events)
   const videoBase = (session.videoName || 'field_session')
-    .replace(/\.[^.]+$/, '')           // strip extension
-    .replace(/[/\\?%*:|"<>]/g, '-')    // safe filename
+    .replace(/\.[^.]+$/, '')
+    .replace(/[/\\?%*:|"<>]/g, '-')
   const ts = new Date().toISOString().slice(0,16).replace(/[T:]/g, '-')
   const filename = `${videoBase}_${ts}.csv`
 
-  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
-  const url  = URL.createObjectURL(blob)
-  const a    = document.createElement('a')
-  a.href = url; a.download = filename
-  document.body.appendChild(a); a.click()
-  document.body.removeChild(a); URL.revokeObjectURL(url)
-  return filename
+  const { invoke } = await import('@tauri-apps/api/core')
+  const savedPath = await invoke('save_text_file_dialog', { name: filename, content: csv })
+  return savedPath // null if user cancelled
 }
