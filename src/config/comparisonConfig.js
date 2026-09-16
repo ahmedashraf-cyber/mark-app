@@ -9,7 +9,15 @@
  */
 
 export const TOLERANCE_CONFIG_VERSION = '2'
-export const ALGORITHM_VERSION        = '1'  // Hungarian optimal assignment
+// 2: alignment no longer requires team to match. Pairs form on event_code and
+// timestamp alone, with team evaluated afterwards as wrong_side — so an
+// inverted home/away mapping yields ~22 wrong_side instead of 1000+
+// missing+extra. Scope filtering was removed at the same time.
+//
+// This MUST be bumped whenever alignment changes, or the duplicate-run guard
+// (which keys on it) shows an old run scored by different rules instead of
+// re-scoring, and the sheet cannot distinguish the two.
+export const ALGORITHM_VERSION        = '2'  // Hungarian, team-agnostic alignment
 
 // ── Per-event-type tolerance in milliseconds ──────────────────────────────────
 // Events not listed use DEFAULT_TOLERANCE_MS.
@@ -128,6 +136,9 @@ export const SCORES_COLUMNS = [
   'collector_session_id',
   'tolerance_config_version',
   'algorithm_version',
+  // Retained for column position only: existing rows have values and removing
+  // it would shift every later column. New runs write '' — scope no longer
+  // exists in the engine.
   'scope_event_ids',
   'total_model_events',
   'total_collector_events',

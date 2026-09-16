@@ -473,6 +473,35 @@ export default function ComparisonPage({ onBack }) {
                     denominator is the model answer's events for that module
                   </div>
                 </div>
+
+                {/* Scope filtering is gone, so a collector who only worked one
+                    module now shows 0% on the rest and a low overall. That is
+                    arithmetically right but easy to misread as bad work, so say
+                    plainly what the collector actually covered. */}
+                {(() => {
+                  // A detail row exists for every model event; verdict
+                  // 'missing_event' means the collector tagged nothing there.
+                  // So a module is "covered" if it has any row that is NOT
+                  // missing_event — that is the only evidence the collector
+                  // worked in it. There is no collector_event_code field.
+                  const rows = result.detailRows || []
+                  const covered = MODULES_SPLIT.filter(m =>
+                    rows.some(r => r.event_module === m && r.verdict !== 'missing_event'))
+                  const withModel = MODULES_SPLIT.filter(m => (result.moduleStats?.[m]?.events || 0) > 0)
+                  if (!withModel.length || !covered.length || covered.length === withModel.length) return null
+                  return (
+                    <div style={{ background:'rgba(255,214,10,0.07)',
+                      border:'1px solid rgba(255,214,10,0.25)', borderRadius:7,
+                      padding:'9px 12px', marginTop:10, fontSize:11,
+                      color:'var(--t-2)', lineHeight:1.5 }}>
+                      Collector covered{' '}
+                      <b>{covered.map(m => MODULE_LABELS[m]).join(', ')}</b> only —
+                      read the module scores rather than the overall. The other modules
+                      are 0% because every model event in them is missing, which drags
+                      the overall down.
+                    </div>
+                  )
+                })()}
                 <div style={{ display:'grid', gridTemplateColumns:'repeat(7,1fr)', gap:8, marginTop:10 }}>
                   {/* Overall first, then the six modules */}
                   {(() => {
