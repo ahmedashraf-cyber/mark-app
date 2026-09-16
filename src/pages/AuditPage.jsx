@@ -1647,7 +1647,7 @@ function AmendmentsTable({ results, session, reviewerIds, identityMap, onSeek })
   const visibleRows = activeFilter ? rows.filter(r => r.errorType === activeFilter) : rows
 
   // ── CSV export ─────────────────────────────────────────────────────────────
-  const downloadCSV = () => {
+  const buildCSV = () => {
     const safe = (s) => String(s ?? '').replace(/"/g, '""')
     const resolveHr  = (id) => { const e = idMap[String(id)]; return e ? (e.hrcode || e.hrCode || String(id)) : String(id || '—') }
     const resolveName = (id) => { const e = idMap[String(id)]; return e ? (e.name || '') : '' }
