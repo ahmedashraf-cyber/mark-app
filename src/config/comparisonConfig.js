@@ -17,7 +17,7 @@ export const TOLERANCE_CONFIG_VERSION = '2'
 // This MUST be bumped whenever alignment changes, or the duplicate-run guard
 // (which keys on it) shows an old run scored by different rules instead of
 // re-scoring, and the sheet cannot distinguish the two.
-export const ALGORITHM_VERSION        = '4'  // Hungarian, team-agnostic alignment
+export const ALGORITHM_VERSION        = '5'  // Hungarian, team-agnostic alignment
 
 // ── Per-event-type tolerance in milliseconds ──────────────────────────────────
 // Events not listed use DEFAULT_TOLERANCE_MS.
@@ -121,6 +121,10 @@ export const DETAIL_COLUMNS = [
   // so Pressure is its own module rather than sitting inside C. Lets the sheet
   // answer "which Pressure events do most collectors miss" as a filter.
   'event_module',               // A | B | C | D | TO | PRESSURE
+  // How many errors this row represents. 1 for everything except an attribute
+  // fault, where it is the number of attributes that differ — so an event with
+  // three wrong attributes costs three errors while still being one row.
+  'error_weight',
 ]
 
 // ── scores columns ─────────────────────────────────────────────────────────────

@@ -284,7 +284,28 @@ export function compare(sessA, eventsA, sessB, eventsB, config) {
       verdict = attrVerdict
     }
 
-    verdictCounts[verdict] = (verdictCounts[verdict] || 0) + 1
+    // ── How many errors this one pair represents ──────────────────────────
+    // An attribute fault costs ONE ERROR PER ATTRIBUTE, so an event with three
+    // wrong attributes is three errors, not one. Team and timestamp faults cost
+    // one each, because there is only one of each to get wrong.
+    //
+    // The pair still produces ONE detail row carrying the most severe verdict,
+    // with every difference listed in attrs_differed — the weight is what the
+    // score uses, the row is what you read.
+    //
+    // When the verdict is wrong_side or wrong_timestamp the attribute
+    // differences are recorded but NOT charged: the pair is already counted
+    // once for the more severe fault, and charging both would mean a single
+    // mis-set team costs more than the team error itself.
+    const errorWeight =
+      (verdict === 'correct') ? 0
+      : (verdict === 'wrong_extra' || verdict === 'missing_extra')
+        ? Math.max(1, attrsDiffered.length)
+        : 1
+
+    // weight, not 1: the score counts attribute faults per attribute
+    verdictCounts[verdict] = (verdictCounts[verdict] || 0) +
+      (verdict === 'correct' ? 1 : errorWeight)
 
     detailRows.push({
       run_id:                runId,
@@ -302,6 +323,7 @@ export function compare(sessA, eventsA, sessB, eventsB, config) {
       collector_team:        cEv.team || '',
       model_shape:           mEv.model_shape || '',
       attrs_differed:        attrsDiffered.join('|'),
+      error_weight:          String(errorWeight),
       override_verdict: '', override_by: '', override_at_iso: '', resolution_status: '',
     })
   }
@@ -319,6 +341,7 @@ export function compare(sessA, eventsA, sessB, eventsB, config) {
       event_code: mEv.event_code, verdict: 'missing_event',
       model_video_time_ms: mEv.video_time_ms || '', collector_video_time_ms: '',
       delta_ms: '', model_team: mEv.team || '', collector_team: '',
+      error_weight: '1',   // one missing event is one error
       model_shape: mEv.model_shape || '', attrs_differed: '',
       override_verdict: '', override_by: '', override_at_iso: '', resolution_status: '',
     })
@@ -337,6 +360,7 @@ export function compare(sessA, eventsA, sessB, eventsB, config) {
       event_code: cEv.event_code, verdict: 'extra_event',
       model_video_time_ms: '', collector_video_time_ms: cEv.video_time_ms || '',
       delta_ms: '', model_team: '', collector_team: cEv.team || '',
+      error_weight: '1',   // one extra event is one error
       model_shape: '', attrs_differed: '',
       override_verdict: '', override_by: '', override_at_iso: '', resolution_status: '',
     })
@@ -374,9 +398,13 @@ export function compare(sessA, eventsA, sessB, eventsB, config) {
   detailRows.forEach(r => {
     const st = moduleStats[r.event_module]
     if (!st) return
+    // error_weight is 1 for everything except an attribute fault, where it is
+    // the number of attributes that differ. Using it here keeps the module
+    // error counts in step with the overall count.
+    const w = Number(r.error_weight || 1)
     if (r.verdict === 'correct') { st.correct++; st.events++ }
-    else if (r.verdict === 'extra_event') { st.errors++ }   // no model event behind it
-    else { st.errors++; st.events++ }
+    else if (r.verdict === 'extra_event') { st.errors += w }   // no model event behind it
+    else { st.errors += w; st.events++ }
   })
   MODULES_SPLIT.forEach(mod => {
     const st = moduleStats[mod]
