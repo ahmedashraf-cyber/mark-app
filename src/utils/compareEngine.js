@@ -240,32 +240,48 @@ export function compare(sessA, eventsA, sessB, eventsB, config) {
     const delta = Math.abs(mT.ms - cT.ms)
     const tol   = toleranceFor(mEv.event_code)
 
-    let verdict = 'correct'
+    // ── Attribute comparison ──────────────────────────────────────────────
+    // This used to be wrapped in:
+    //     if (mEv.groups || mEv.attr_extras || mEv.attr_outcome)
+    // `groups` is not a field on a sheet row at all, so the gate only opened
+    // when the model happened to populate extras or outcome. A separation_duel
+    // carries attr_direction and nothing else, so the whole block was skipped
+    // and attrs_differed came out empty — which is why wrong_extra was 0 on
+    // every run ever recorded.
+    //
+    // There is no reason to gate it: the per-column check below already skips
+    // any attribute the model left blank.
+    const attrsDiffered = []
+    const attrCols = Object.keys(mEv).filter(k => k.startsWith('attr_'))
+    let attrVerdict = null
+    for (const col of attrCols) {
+      const mVal = String(mEv[col] ?? '').trim()
+      const cVal = String(cEv[col] ?? '').trim()
+      // Model blank means the model did not specify it, so it is not assessed.
+      // A collector value there is extra detail, not an error.
+      if (mVal === '') continue
+      // Multi-select values are pipe-joined; order must not matter.
+      const mSet = mVal.split('|').map(x => x.trim()).filter(Boolean).sort().join('|')
+      const cSet = cVal.split('|').map(x => x.trim()).filter(Boolean).sort().join('|')
+      if (mSet === cSet) continue
+      attrsDiffered.push(col.replace('attr_', ''))
+      // wrong_extra outranks missing_extra: a wrong value is worse than an
+      // absent one, so one wrong value sets the verdict for the pair.
+      if (cSet === '') { if (attrVerdict === null) attrVerdict = 'missing_extra' }
+      else attrVerdict = 'wrong_extra'
+    }
 
-    // Team mismatch (after matching on code+timestamp)
+    // ── Verdict, most severe first ────────────────────────────────────────
+    //   wrong_side > wrong_timestamp > wrong_extra > missing_extra > correct
+    // One row per pair; attrs_differed lists every attribute that differs, so
+    // nothing is lost by reporting a single verdict.
+    let verdict = 'correct'
     if (mEv.team && cEv.team && mEv.team !== cEv.team) {
       verdict = 'wrong_side'
-    }
-    // Timestamp within tolerance but meaningful drift
-    else if (delta > tol * 0.5 && delta <= tol) {
+    } else if (delta > tol * 0.5 && delta <= tol) {
       verdict = 'wrong_timestamp'
-    }
-
-    // Attribute comparison — only groups model actually populated
-    const attrsDiffered = []
-    if (mEv.groups || mEv.attr_extras || mEv.attr_outcome) {
-      const attrCols = Object.keys(mEv).filter(k => k.startsWith('attr_'))
-      for (const col of attrCols) {
-        const mVal = mEv[col] || ''
-        const cVal = cEv[col] || ''
-        if (mVal === '') continue  // model didn't populate — skip
-        if (mVal !== cVal) {
-          attrsDiffered.push(col.replace('attr_', ''))
-          if (verdict === 'correct' || verdict === 'wrong_timestamp') {
-            verdict = cVal === '' ? 'missing_extra' : 'wrong_extra'
-          }
-        }
-      }
+    } else if (attrVerdict) {
+      verdict = attrVerdict
     }
 
     verdictCounts[verdict] = (verdictCounts[verdict] || 0) + 1
