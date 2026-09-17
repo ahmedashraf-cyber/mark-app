@@ -13,13 +13,14 @@
  *
  * FIELD only. Scout and Audit untouched.
  */
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { db } from '../firebase/config'
 import { collection, query, where, getDocs } from 'firebase/firestore'
 import { invoke } from '@tauri-apps/api/core'
 import { useAuth } from '../hooks/useAuth.jsx'
 import { compare } from '../utils/compareEngine'
 import { MODULES_SPLIT, MODULE_LABELS } from '../utils/defectTypes'
+import VideoPanel from '../components/VideoPanel'
 import { writeComparisonResults, findExistingRun } from '../utils/comparisonSheet'
 import { FIELD_SHEET_ID, EVENT_COLUMNS, GROUP_TO_ATTR_COL } from '../config/fieldConfig'
 import { CURRENT_VERSION } from '../hooks/useUpdateCheck'
@@ -220,12 +221,39 @@ export default function ComparisonPage({ onBack }) {
   const [result,       setResult]       = useState(null)
   const [written,      setWritten]      = useState(false)
   const [existingRun,  setExistingRun]  = useState(null)   // an identical run already in the sheet
+  // Local review video. Cleared at the start of every run so a new picker
+  // opens and the previous file is unloaded — the next comparison may be a
+  // different match entirely.
+  const [videoUrl,  setVideoUrl]  = useState('')
+  const [videoName, setVideoName] = useState('')
+  const [videoNote, setVideoNote] = useState('')
+  const [splitPct,  setSplitPct]  = useState(45)   // video width, draggable
+  const videoRef = useRef(null)
 
   async function handleRun() {
     setError(''); setResult(null); setWritten(false)
     if (!matchId.trim() || !half || !hrCode.trim()) {
       setError('Match ID, Half and Collector HR-Code are all required.'); return
     }
+
+    // Fresh video every run — never reuse the previous file.
+    setVideoUrl(''); setVideoName(''); setVideoNote('')
+    try {
+      setLoadingMsg('Choose the match video…')
+      const path = await invoke('pick_video_file')
+      if (path) {
+        const url = await invoke('get_video_url', { path })
+        setVideoUrl(url)
+        setVideoName(String(path).split(/[/\\]/).pop())
+      } else {
+        // Cancelling does not block the run: the scores never needed the video,
+        // it is only there for the reviewer to verify events by eye.
+        setVideoNote('No video loaded — the seek buttons are disabled. Results are unaffected.')
+      }
+    } catch (e) {
+      setVideoNote('Could not open that video: ' + (e?.message || e))
+    }
+
     setLoading(true)
 
     try {
@@ -436,8 +464,53 @@ export default function ComparisonPage({ onBack }) {
         </div>
 
         {/* Results */}
+        {videoNote && (
+          <div style={{ background:'rgba(255,214,10,0.07)', border:'1px solid rgba(255,214,10,0.25)',
+            borderRadius:7, padding:'9px 12px', marginBottom:12, fontSize:11, color:'var(--t-2)' }}>
+            {videoNote}
+          </div>
+        )}
+
         {result && (
-          <>
+          /* Resizable horizontal split. The detail table is wide — two
+             timestamps, verdict, teams, shape — so stacking vertically would
+             push it below the fold and squeezing it wraps every row. The video
+             sits in a 16:9 box on the left and can be dragged narrow or closed
+             when the reviewer is scanning many rows. */
+          <div style={{ display:'flex', gap:0, alignItems:'flex-start' }}>
+            {videoUrl && (
+              <>
+                <div style={{ width:`${splitPct}%`, flexShrink:0, position:'sticky', top:0,
+                  paddingRight:12 }}>
+                  <div className="card" style={{ padding:12 }}>
+                    <VideoPanel ref={videoRef} url={videoUrl} filename={videoName}
+                      matchStatus={result.videoMatchStatus}
+                      onClose={() => { setVideoUrl(''); setVideoName('')
+                        setVideoNote('Video unloaded — the seek buttons are disabled.') }}/>
+                  </div>
+                </div>
+                <div
+                  onMouseDown={e => {
+                    const startX = e.clientX
+                    const startPct = splitPct
+                    const parentW = e.currentTarget.parentElement.getBoundingClientRect().width
+                    const move = ev => {
+                      const next = startPct + ((ev.clientX - startX) / parentW) * 100
+                      setSplitPct(Math.max(25, Math.min(70, next)))
+                    }
+                    const up = () => {
+                      window.removeEventListener('mousemove', move)
+                      window.removeEventListener('mouseup', up)
+                    }
+                    window.addEventListener('mousemove', move)
+                    window.addEventListener('mouseup', up)
+                  }}
+                  title="Drag to resize"
+                  style={{ width:6, alignSelf:'stretch', cursor:'col-resize', flexShrink:0,
+                    background:'var(--b-1)', borderRadius:3, marginRight:12 }}/>
+              </>
+            )}
+            <div style={{ flex:1, minWidth:0 }}>
             {/* Session info */}
             <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10, marginBottom:12 }}>
               {[
@@ -617,6 +690,7 @@ export default function ComparisonPage({ onBack }) {
                 <table style={{ width:'100%', borderCollapse:'collapse', fontSize:11 }}>
                   <thead>
                     <tr style={{ borderBottom:'1px solid var(--b-1)' }}>
+                      <th style={{ width:30 }}/>
                       {['Verdict','Event','Model time','Collector time','Δms','Model team','Coll team','Shape'].map(h => (
                         <th key={h} style={{ padding:'4px 8px', textAlign:'left',
                           fontSize:9, fontWeight:700, color:'var(--t-3)', letterSpacing:0.5,
@@ -627,6 +701,34 @@ export default function ComparisonPage({ onBack }) {
                   <tbody>
                     {result.detailRows.slice(0,100).map((row, i) => (
                       <tr key={i} style={{ borderBottom:'1px solid rgba(255,255,255,0.04)' }}>
+                        <td style={{ padding:'4px 4px 4px 8px' }}>
+                          {(() => {
+                            // extra_event has no model timestamp — the collector
+                            // tagged something the model does not have, so the
+                            // moment to inspect is theirs. Everything else is
+                            // anchored on the model, which is the reference.
+                            const ms = row.verdict === 'extra_event'
+                              ? row.collector_video_time_ms
+                              : (row.model_video_time_ms || row.collector_video_time_ms)
+                            const has = ms !== '' && ms != null
+                            const ready = !!videoUrl
+                            return (
+                              <button
+                                disabled={!ready || !has}
+                                title={!ready ? 'Load video to seek'
+                                  : !has ? 'No timestamp on this row'
+                                  : `Seek to ${msToReadable(ms)}`}
+                                onClick={() => videoRef.current?.seekTo(ms, row.event_code)}
+                                style={{ width:22, height:22, borderRadius:5, cursor: (ready && has) ? 'pointer' : 'default',
+                                  background: (ready && has) ? 'rgba(232,89,12,0.14)' : 'transparent',
+                                  border:`1px solid ${(ready && has) ? 'var(--p2)' : 'var(--b-1)'}`,
+                                  color: (ready && has) ? 'var(--p2)' : 'var(--b-2)',
+                                  fontSize:9, lineHeight:1, padding:0 }}>
+                                ▶
+                              </button>
+                            )
+                          })()}
+                        </td>
                         <td style={{ padding:'4px 8px' }}><VerdictBadge verdict={row.verdict}/></td>
                         <td style={{ padding:'4px 8px', fontFamily:'JetBrains Mono,monospace',
                           color:'var(--t-2)' }}>{row.event_code}</td>
@@ -690,7 +792,8 @@ export default function ComparisonPage({ onBack }) {
                 ✓ Written to Sheet — comparison_detail + scores tabs updated
               </div>
             )}
-          </>
+            </div>
+          </div>
         )}
       </div>
     </div>
