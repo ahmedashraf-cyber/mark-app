@@ -17,7 +17,7 @@ export const TOLERANCE_CONFIG_VERSION = '2'
 // This MUST be bumped whenever alignment changes, or the duplicate-run guard
 // (which keys on it) shows an old run scored by different rules instead of
 // re-scoring, and the sheet cannot distinguish the two.
-export const ALGORITHM_VERSION        = '5'  // Hungarian, team-agnostic alignment
+export const ALGORITHM_VERSION        = '6'  // Hungarian, team-agnostic alignment
 
 // ── Per-event-type tolerance in milliseconds ──────────────────────────────────
 // Events not listed use DEFAULT_TOLERANCE_MS.

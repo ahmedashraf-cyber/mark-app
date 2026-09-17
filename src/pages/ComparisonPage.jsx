@@ -21,7 +21,7 @@ import { useAuth } from '../hooks/useAuth.jsx'
 import { compare } from '../utils/compareEngine'
 import { MODULES_SPLIT, MODULE_LABELS } from '../utils/defectTypes'
 import { writeComparisonResults, findExistingRun } from '../utils/comparisonSheet'
-import { FIELD_SHEET_ID, EVENT_COLUMNS } from '../config/fieldConfig'
+import { FIELD_SHEET_ID, EVENT_COLUMNS, GROUP_TO_ATTR_COL } from '../config/fieldConfig'
 import { CURRENT_VERSION } from '../hooks/useUpdateCheck'
 import { msToReadable } from '../utils/fieldSheetSync'
 
@@ -31,6 +31,35 @@ async function getToken() {
   const token = await invoke('get_google_access_token_cmd')
   if (!token) throw new Error('Google auth required.')
   return token
+}
+
+/**
+ * Flatten a Firestore event's nested `groups` into attr_* columns.
+ *
+ * Mirrors fieldSheetSync.buildEventRows exactly — same GROUP_TO_ATTR_COL
+ * mapping, same pipe-joining, same legacy `extras` fallback — so an event
+ * compared here and the same event written to the sheet produce identical
+ * attribute values.
+ */
+function groupsToAttrCols(ev) {
+  const out = Object.fromEntries(
+    EVENT_COLUMNS.filter(c => c.startsWith('attr_')).map(c => [c, '']))
+
+  if (ev.groups && ev.groups.length > 0) {
+    ev.groups.forEach(g => {
+      const col = GROUP_TO_ATTR_COL[g.groupId]
+      if (!col) return
+      const codes = (g.selections || []).map(sel => sel.code || sel.label || '').filter(Boolean)
+      if (codes.length > 0) out[col] = codes.join('|')
+    })
+  } else if (ev.extras && ev.extras.length > 0) {
+    // legacy v1/v2 events kept a flat extras array
+    out['attr_extras'] = ev.extras.map(x => String(x)).join('|')
+  }
+
+  // an already-flat event (re-read from the sheet) keeps its own values
+  Object.keys(out).forEach(c => { if (ev[c]) out[c] = ev[c] })
+  return out
 }
 
 // Read events from Firestore by session_id
@@ -140,6 +169,18 @@ async function loadSessionEvents(sessionId, source) {
       team:           ev.team || '',
       team_source:    ev.teamSource || ev.team_source || '',
       model_shape:    ev.model_shape || '',
+      // ── Attributes ──────────────────────────────────────────────────────
+      // Firestore stores them as a nested `groups` array; the sheet stores flat
+      // attr_* columns. This normaliser mapped the field NAMES but never the
+      // attributes, so every collector event reached the engine with
+      // attr_direction and friends undefined.
+      //
+      // The engine then read the collector value as empty and returned
+      // missing_extra for every attribute the model had populated — even when
+      // the two were identical, and even when they genuinely differed (which
+      // should have been wrong_extra). Same mapping as fieldSheetSync uses when
+      // writing these events to the sheet, so both paths agree.
+      ...groupsToAttrCols(ev),
     }))
   }
   return loadSheetEvents(sessionId)
