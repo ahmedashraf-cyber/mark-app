@@ -227,8 +227,9 @@ export default function ComparisonPage({ onBack }) {
   const [videoUrl,  setVideoUrl]  = useState('')
   const [videoName, setVideoName] = useState('')
   const [videoNote, setVideoNote] = useState('')
-  const [splitPct,  setSplitPct]  = useState(45)   // video width, draggable
   const videoRef = useRef(null)
+  const resultsScrollRef = useRef(null)
+  const [seekRow, setSeekRow] = useState(-1)   // briefly highlighted row
 
   async function handleRun() {
     setError(''); setResult(null); setWritten(false)
@@ -401,7 +402,27 @@ export default function ComparisonPage({ onBack }) {
       </div>
 
       {/* Content */}
-      <div style={{ flex:1, overflowY:'auto', padding:24, maxWidth:760, margin:'0 auto', width:'100%' }}>
+      {/* Video on top at full width, results scrolling independently beneath.
+          The video is OUTSIDE the scroll container so it stays put while the
+          reviewer works down the table — that is the whole point of the layout.
+          minHeight:0 on both is what lets the lower pane actually scroll rather
+          than growing the page. */}
+      <div style={{ flex:1, display:'flex', flexDirection:'column', minHeight:0 }}>
+
+        {result && videoUrl && (
+          <div style={{ flexShrink:0, height:'60vh', padding:'12px 24px 0',
+            boxSizing:'border-box' }}>
+            <div className="card" style={{ padding:12, height:'100%', boxSizing:'border-box' }}>
+              <VideoPanel ref={videoRef} url={videoUrl} filename={videoName}
+                matchStatus={result.videoMatchStatus} fill
+                onClose={() => { setVideoUrl(''); setVideoName('')
+                  setVideoNote('Video unloaded — the seek buttons are disabled. Results are unaffected.') }}/>
+            </div>
+          </div>
+        )}
+
+        <div style={{ flex:1, overflowY:'auto', minHeight:0, padding:24,
+          maxWidth:760, margin:'0 auto', width:'100%' }} ref={resultsScrollRef}>
 
         {/* Input form */}
         <div className="card" style={{ padding:20, marginBottom:16 }}>
@@ -472,45 +493,7 @@ export default function ComparisonPage({ onBack }) {
         )}
 
         {result && (
-          /* Resizable horizontal split. The detail table is wide — two
-             timestamps, verdict, teams, shape — so stacking vertically would
-             push it below the fold and squeezing it wraps every row. The video
-             sits in a 16:9 box on the left and can be dragged narrow or closed
-             when the reviewer is scanning many rows. */
-          <div style={{ display:'flex', gap:0, alignItems:'flex-start' }}>
-            {videoUrl && (
-              <>
-                <div style={{ width:`${splitPct}%`, flexShrink:0, position:'sticky', top:0,
-                  paddingRight:12 }}>
-                  <div className="card" style={{ padding:12 }}>
-                    <VideoPanel ref={videoRef} url={videoUrl} filename={videoName}
-                      matchStatus={result.videoMatchStatus}
-                      onClose={() => { setVideoUrl(''); setVideoName('')
-                        setVideoNote('Video unloaded — the seek buttons are disabled.') }}/>
-                  </div>
-                </div>
-                <div
-                  onMouseDown={e => {
-                    const startX = e.clientX
-                    const startPct = splitPct
-                    const parentW = e.currentTarget.parentElement.getBoundingClientRect().width
-                    const move = ev => {
-                      const next = startPct + ((ev.clientX - startX) / parentW) * 100
-                      setSplitPct(Math.max(25, Math.min(70, next)))
-                    }
-                    const up = () => {
-                      window.removeEventListener('mousemove', move)
-                      window.removeEventListener('mouseup', up)
-                    }
-                    window.addEventListener('mousemove', move)
-                    window.addEventListener('mouseup', up)
-                  }}
-                  title="Drag to resize"
-                  style={{ width:6, alignSelf:'stretch', cursor:'col-resize', flexShrink:0,
-                    background:'var(--b-1)', borderRadius:3, marginRight:12 }}/>
-              </>
-            )}
-            <div style={{ flex:1, minWidth:0 }}>
+          <>
             {/* Session info */}
             <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10, marginBottom:12 }}>
               {[
@@ -700,7 +683,11 @@ export default function ComparisonPage({ onBack }) {
                   </thead>
                   <tbody>
                     {result.detailRows.slice(0,100).map((row, i) => (
-                      <tr key={i} style={{ borderBottom:'1px solid rgba(255,255,255,0.04)' }}>
+                      <tr key={i} style={{
+                        borderBottom:'1px solid rgba(255,255,255,0.04)',
+                        background: seekRow === i ? 'rgba(232,89,12,0.13)' : 'transparent',
+                        transition: 'background .25s',
+                      }}>
                         <td style={{ padding:'4px 4px 4px 8px' }}>
                           {(() => {
                             // extra_event has no model timestamp — the collector
@@ -718,7 +705,17 @@ export default function ComparisonPage({ onBack }) {
                                 title={!ready ? 'Load video to seek'
                                   : !has ? 'No timestamp on this row'
                                   : `Seek to ${msToReadable(ms)}`}
-                                onClick={() => videoRef.current?.seekTo(ms, row.event_code)}
+                                onClick={e => {
+                                  videoRef.current?.seekTo(ms, row.event_code)
+                                  // bring the row into view and mark it, so the
+                                  // reviewer sees the verdict and the video
+                                  // moment together without hunting for either
+                                  setSeekRow(i)
+                                  setTimeout(() => setSeekRow(r => r === i ? -1 : r), 2200)
+                                  e.currentTarget.closest('tr')?.scrollIntoView({
+                                    block: 'center', behavior: 'smooth',
+                                  })
+                                }}
                                 style={{ width:22, height:22, borderRadius:5, cursor: (ready && has) ? 'pointer' : 'default',
                                   background: (ready && has) ? 'rgba(232,89,12,0.14)' : 'transparent',
                                   border:`1px solid ${(ready && has) ? 'var(--p2)' : 'var(--b-1)'}`,
@@ -792,9 +789,9 @@ export default function ComparisonPage({ onBack }) {
                 ✓ Written to Sheet — comparison_detail + scores tabs updated
               </div>
             )}
-            </div>
-          </div>
+          </>
         )}
+        </div>
       </div>
     </div>
   )

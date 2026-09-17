@@ -27,7 +27,7 @@ function fmt(sec) {
   return `${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}.${String(ms).padStart(3,'0')}`
 }
 
-const VideoPanel = forwardRef(function VideoPanel({ url, filename, matchStatus, onClose }, ref) {
+const VideoPanel = forwardRef(function VideoPanel({ url, filename, matchStatus, onClose, fill = false }, ref) {
   const vidRef = useRef(null)
   const [time, setTime]         = useState(0)
   const [duration, setDuration] = useState(0)
@@ -121,12 +121,16 @@ const VideoPanel = forwardRef(function VideoPanel({ url, filename, matchStatus, 
         {matchStatus || 'unknown'} — {st.t}
       </div>
 
-      <div style={{ position:'relative', background:'#000', borderRadius:8, overflow:'hidden' }}>
+      <div style={{ position:'relative', background:'#000', borderRadius:8, overflow:'hidden',
+        ...(fill ? { flex:1, minHeight:0, display:'flex', alignItems:'center',
+                     justifyContent:'center' } : {}) }}>
         <video ref={vidRef} src={url} playsInline muted
           onTimeUpdate={() => setTime(vidRef.current?.currentTime || 0)}
           onLoadedMetadata={() => setDuration(vidRef.current?.duration || 0)}
           onClick={toggle}
-          style={{ width:'100%', display:'block', maxHeight:'46vh', cursor:'pointer' }}/>
+          style={fill
+            ? { maxWidth:'100%', maxHeight:'100%', display:'block', cursor:'pointer' }
+            : { width:'100%', display:'block', maxHeight:'46vh', cursor:'pointer' }}/>
         {flash && (
           <div style={{ position:'absolute', top:8, left:8, background:'rgba(232,89,12,0.92)',
             color:'#fff', fontSize:10, fontWeight:700, padding:'4px 9px', borderRadius:5,
