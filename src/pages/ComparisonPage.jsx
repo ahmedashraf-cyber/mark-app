@@ -717,22 +717,35 @@ export default function ComparisonPage({ onBack }) {
                   { key:'correct',       label:'Correct',    color:'#30D158' },
                   { key:'missing_event', label:'Missing',    color:'#FF453A' },
                   { key:'extra_event',   label:'Extra',      color:'#FF9500' },
-                  { key:'wrong_side',    label:'Wrong side', color:'#BF5AF2' },
+                  { key:'wrong_event',   label:'Wrong event',color:'#FF453A' },
+                  // recorded for feedback, excluded from the percentage
+                  { key:'wrong_side',    label:'Wrong side', color:'#BF5AF2', unscored:true },
                   { key:'wrong_timestamp',label:'Wrong time',color:'#64D2FF' },
                   { key:'wrong_extra',   label:'Wrong extra',color:'#FF9F0A' },
                   { key:'missing_extra', label:'Miss extra', color:'#FF6B6B' },
-                ].map(({ key, label, color }) => (
+                ].map(({ key, label, color, unscored }) => (
                   <div key={key} style={{ background:'var(--bg-3)', borderRadius:8,
-                    padding:'8px', textAlign:'center' }}>
+                    padding:'8px', textAlign:'center',
+                    // dimmed and outlined so it reads as information, not a penalty
+                    opacity: unscored ? 0.55 : 1,
+                    border: unscored ? '1px dashed var(--b-2)' : 'none' }}
+                    title={unscored ? 'Recorded for review but excluded from the score' : ''}>
                     <div style={{ fontSize:20, fontWeight:800, color }}>{vc[key] || 0}</div>
                     <div style={{ fontSize:9, color:'var(--t-3)', marginTop:2 }}>{label}</div>
+                    {unscored && (
+                      <div style={{ fontSize:8, color:'var(--t-3)', marginTop:1,
+                        fontStyle:'italic' }}>not scored</div>
+                    )}
                   </div>
                 ))}
               </div>
 
               <div style={{ marginTop:12, fontSize:10, color:'var(--t-3)' }}>
                 Model: {result.modelEventCount} events ·
-                Collector: {result.collectorEventCount} events
+                Collector: {result.collectorEventCount} events ·
+                {result.errorUnits} scored errors
+                {(vc.wrong_side || 0) > 0 &&
+                  ` · ${vc.wrong_side} wrong side excluded from the score`}
               </div>
             </div>
 

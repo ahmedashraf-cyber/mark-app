@@ -198,19 +198,27 @@ export function compare(sessA, eventsA, sessB, eventsB, config) {
     const tol = toleranceFor(mEv.event_code)
     const mT  = alignTime(mEv)
     return collEvents.map(cEv => {
-      // ALIGNMENT CRITERIA: event_code and timestamp ONLY.
-      // Team is deliberately absent — a swapped home/away must produce
-      // wrong_side, not missing+extra, so one metadata error costs one error
-      // per event rather than two.
-      if (cEv.event_code !== mEv.event_code) return INF
+      // ALIGNMENT CRITERIA: TIMESTAMP ONLY.
+      //
+      // Neither event_code nor team gates a pair. Alignment answers one
+      // question — "did both sides record something at this moment?" — and
+      // everything about WHAT happened is judged afterwards. So a tackle logged
+      // as a positioning_duel at the same instant is one wrong_event, not one
+      // missing plus one extra.
       const cT    = alignTime(cEv)
       const delta = Math.abs(mT.ms - cT.ms)
       if (delta > tol) return INF
-      // Cost is the timestamp delta. Same team is a 0.1 tie-break so that when
-      // two candidates sit equally close in time the same-team one wins. It can
-      // never reach INF, so it can never prevent a pair.
+
+      // Cost ordering matters. CODE_PENALTY exceeds the largest delta that can
+      // survive the tolerance gate, so a same-code candidate ALWAYS beats a
+      // different-code one however much closer the latter sits. Without that, a
+      // mis-coded event 50ms away would steal the pairing from the correct code
+      // 1.5s away and manufacture a missing+extra out of a clean match.
+      const CODE_PENALTY = 1e6
+      const codeCost = (cEv.event_code === mEv.event_code) ? 0 : CODE_PENALTY
+      // Team is only a 0.1 nudge, to settle two otherwise identical candidates.
       const teamBonus = (mEv.team === cEv.team) ? 0 : 0.1
-      return delta + teamBonus
+      return codeCost + delta + teamBonus
     })
   })
 
@@ -226,6 +234,7 @@ export function compare(sessA, eventsA, sessB, eventsB, config) {
 
   // ── Stage 4: Classify ─────────────────────────────────────────────────────
   const detailRows = []
+  let errorUnits = 0
   const verdictCounts = {
     correct:0, missing_event:0, extra_event:0,
     wrong_side:0, wrong_timestamp:0, wrong_extra:0, missing_extra:0, not_needed_extra:0,
@@ -275,14 +284,30 @@ export function compare(sessA, eventsA, sessB, eventsB, config) {
     //   wrong_side > wrong_timestamp > wrong_extra > missing_extra > correct
     // One row per pair; attrs_differed lists every attribute that differs, so
     // nothing is lost by reporting a single verdict.
+    const codeDiffers = cEv.event_code !== mEv.event_code
+    const teamDiffers  = !!(mEv.team && cEv.team && mEv.team !== cEv.team)
+    const timeDrifted  = delta > tol * 0.5 && delta <= tol
+
+    // ── Verdict, most severe first ────────────────────────────────────────
+    //   wrong_event > wrong_timestamp > wrong_extra/missing_extra > wrong_side
+    //
+    // NOTE ON ORDER — this departs from the hierarchy as written, deliberately.
+    // wrong_side is no longer scored, so placing it ABOVE the attribute faults
+    // would let it erase them: get the team wrong and your three wrong
+    // attributes would vanish from the score with it. Scored faults therefore
+    // outrank the unscored one, and wrong_side becomes the verdict only when
+    // nothing scoreable is wrong. Nothing is lost either way, because every
+    // fault is listed in attrs_differed regardless of which one names the row.
     let verdict = 'correct'
-    if (mEv.team && cEv.team && mEv.team !== cEv.team) {
-      verdict = 'wrong_side'
-    } else if (delta > tol * 0.5 && delta <= tol) {
-      verdict = 'wrong_timestamp'
-    } else if (attrVerdict) {
-      verdict = attrVerdict
-    }
+    if (codeDiffers)        verdict = 'wrong_event'
+    else if (timeDrifted)   verdict = 'wrong_timestamp'
+    else if (attrVerdict)   verdict = attrVerdict
+    else if (teamDiffers)   verdict = 'wrong_side'
+
+    // Faults that did not win the verdict are still recorded, so a feedback
+    // session can see everything that was wrong with one event.
+    if (codeDiffers && verdict !== 'wrong_event') attrsDiffered.unshift('event_code')
+    if (teamDiffers && verdict !== 'wrong_side')  attrsDiffered.push('team')
 
     // ── How many errors this one pair represents ──────────────────────────
     // An attribute fault costs ONE ERROR PER ATTRIBUTE, so an event with three
@@ -297,15 +322,28 @@ export function compare(sessA, eventsA, sessB, eventsB, config) {
     // differences are recorded but NOT charged: the pair is already counted
     // once for the more severe fault, and charging both would mean a single
     // mis-set team costs more than the team error itself.
+    // wrong_side carries weight 0: recorded for feedback, never scored. A
+    // collector who tagged the right event at the right moment with the right
+    // detail but picked the wrong team made a metadata slip, not a collection
+    // error.
     const errorWeight =
-      (verdict === 'correct') ? 0
+      (verdict === 'correct' || verdict === 'wrong_side') ? 0
       : (verdict === 'wrong_extra' || verdict === 'missing_extra')
-        ? Math.max(1, attrsDiffered.length)
+        // one error per differing attribute; event_code and team entries in
+        // attrsDiffered are annotations, not attribute faults, so they are
+        // excluded from the count
+        ? Math.max(1, attrsDiffered.filter(a => a !== 'event_code' && a !== 'team').length)
         : 1
 
-    // weight, not 1: the score counts attribute faults per attribute
-    verdictCounts[verdict] = (verdictCounts[verdict] || 0) +
-      (verdict === 'correct' ? 1 : errorWeight)
+    // OCCURRENCES here — one per pair — so the score card reports what actually
+    // happened. Conflating this with the score's error units was a mistake:
+    // wrong_side has weight 0, so it stopped appearing on the card at all, and
+    // an event with three wrong attributes showed as three wrong_extra events
+    // rather than one event with three faults.
+    verdictCounts[verdict] = (verdictCounts[verdict] || 0) + 1
+    // Error UNITS accumulate separately: per attribute for attribute faults,
+    // zero for wrong_side, one for everything else.
+    errorUnits += errorWeight
 
     detailRows.push({
       run_id:                runId,
@@ -333,6 +371,7 @@ export function compare(sessA, eventsA, sessB, eventsB, config) {
     if (matchedModelIdxs.has(mi)) continue
     const mEv = modelEvents[mi]
     verdictCounts.missing_event++
+    errorUnits += 1   // one missing event is one error
     detailRows.push({
       run_id: runId, model_session_id: modelSess.session_id,
       collector_session_id: collectorSess.session_id,
@@ -352,6 +391,7 @@ export function compare(sessA, eventsA, sessB, eventsB, config) {
     if (matchedCollectorIdxs.has(ci)) continue
     const cEv = collEvents[ci]
     verdictCounts.extra_event++
+    errorUnits += 1   // one extra event is one error
     detailRows.push({
       run_id: runId, model_session_id: modelSess.session_id,
       collector_session_id: collectorSess.session_id,
@@ -378,7 +418,10 @@ export function compare(sessA, eventsA, sessB, eventsB, config) {
   // event count, never correct+errors — the old formula let a collector's
   // extras enlarge their own denominator and soften the penalty.
   const correct = verdictCounts.correct
-  const errors  = countErrors(verdictCounts)
+  // errorUnits already excludes wrong_side (weight 0) and counts attribute
+  // faults per attribute, so it is the figure the formula needs. countErrors on
+  // the occurrence counts would charge one per event and re-include wrong_side.
+  const errors  = errorUnits
   const score   = computeScore(errors, modelEvents.length)
 
   // ── Stage 6: Module breakdown ─────────────────────────────────────────────
@@ -420,6 +463,7 @@ export function compare(sessA, eventsA, sessB, eventsB, config) {
   return {
     detailRows,
     verdictCounts,
+    errorUnits,
     score,
     moduleStats,
     videoMatchStatus: videoMatchStatus(modelSess, collectorSess),

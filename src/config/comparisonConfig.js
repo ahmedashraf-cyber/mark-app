@@ -17,7 +17,7 @@ export const TOLERANCE_CONFIG_VERSION = '2'
 // This MUST be bumped whenever alignment changes, or the duplicate-run guard
 // (which keys on it) shows an old run scored by different rules instead of
 // re-scoring, and the sheet cannot distinguish the two.
-export const ALGORITHM_VERSION        = '6'  // Hungarian, team-agnostic alignment
+export const ALGORITHM_VERSION        = '7'  // Hungarian, team-agnostic alignment
 
 // ── Per-event-type tolerance in milliseconds ──────────────────────────────────
 // Events not listed use DEFAULT_TOLERANCE_MS.
@@ -68,13 +68,26 @@ export function toleranceFor(eventCode) {
 // correct/(correct+errors) in the engine, and a third correct/events variant
 // for the modules. That is why Overall and Pressure disagreed. One function
 // now, used by both.
+/** Every verdict that is not 'correct'. Used for display and filtering. */
 export const ERROR_VERDICTS = new Set([
-  'missing_event', 'extra_event', 'wrong_side',
+  'missing_event', 'extra_event', 'wrong_event', 'wrong_side',
   'wrong_timestamp', 'wrong_extra', 'missing_extra', 'not_needed_extra',
 ])
 
+/**
+ * The verdicts that count against the score.
+ *
+ * wrong_side is deliberately absent. Tagging the right event at the right
+ * moment with the right detail but the wrong team is a metadata slip, not a
+ * collection failure — and a single inverted home/away mapping would otherwise
+ * wipe out an entire run. It is still recorded on every detail row and still
+ * shown on the score card, marked as not scored.
+ */
+export const SCORED_ERROR_VERDICTS = new Set(
+  [...ERROR_VERDICTS].filter(v => v !== 'wrong_side'))
+
 export function countErrors(verdictCounts) {
-  return [...ERROR_VERDICTS].reduce((s, v) => s + (verdictCounts[v] || 0), 0)
+  return [...SCORED_ERROR_VERDICTS].reduce((s, v) => s + (verdictCounts[v] || 0), 0)
 }
 
 /**
