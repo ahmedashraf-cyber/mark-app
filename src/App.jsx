@@ -9,6 +9,7 @@ import ReviewPage from './pages/ReviewPage'
 import FieldPage from './pages/FieldPage'
 import ComparisonPage from './pages/ComparisonPage'
 import DrillPage from './pages/DrillPage'
+import VideoWindow from './components/VideoWindow'
 import SessionHistoryPage from './pages/SessionHistoryPage'
 import AuditPage from './pages/AuditPage'
 import AuditReportPage from './pages/AuditReportPage'
@@ -287,6 +288,13 @@ function AppInner() {
 }
 
 export default function App() {
+  // The Comparison video pop-out is a second Tauri window loading this same
+  // bundle. It must render the player ONLY — no auth, no providers, no mode
+  // picker — so this check comes before anything else in the tree.
+  if (new URLSearchParams(window.location.search).get('window') === 'video') {
+    return <VideoWindow/>
+  }
+
   return (
     <AuthProvider>
       <AppInner/>

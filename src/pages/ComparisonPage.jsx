@@ -20,7 +20,6 @@ import { invoke } from '@tauri-apps/api/core'
 import { useAuth } from '../hooks/useAuth.jsx'
 import { compare } from '../utils/compareEngine'
 import { MODULES_SPLIT, MODULE_LABELS } from '../utils/defectTypes'
-import VideoPanel from '../components/VideoPanel'
 import { writeComparisonResults, findExistingRun } from '../utils/comparisonSheet'
 import { FIELD_SHEET_ID, EVENT_COLUMNS, GROUP_TO_ATTR_COL } from '../config/fieldConfig'
 import { CURRENT_VERSION } from '../hooks/useUpdateCheck'
@@ -226,10 +225,63 @@ export default function ComparisonPage({ onBack }) {
   // different match entirely.
   const [videoUrl,  setVideoUrl]  = useState('')
   const [videoName, setVideoName] = useState('')
+  // Remembered so "Reopen video" needs no second file picker.
+  const [videoPath, setVideoPath] = useState('')
+  const [popOpen,   setPopOpen]   = useState(false)
   const [videoNote, setVideoNote] = useState('')
-  const videoRef = useRef(null)
   const resultsScrollRef = useRef(null)
   const [seekRow, setSeekRow] = useState(-1)   // briefly highlighted row
+
+  /**
+   * Open the player in its own OS window.
+   *
+   * A second Tauri window loads index.html fresh, so the video URL, filename
+   * and match status are passed in the query string — the two windows share no
+   * React state. Seeks then travel as Tauri events.
+   *
+   * The URL is MARK's own local server (http://127.0.0.1:port/video), which is
+   * reachable from either window, so nothing needs re-serving.
+   */
+  async function openVideoWindow(url, name, status) {
+    try {
+      const { WebviewWindow } = await import('@tauri-apps/api/webviewWindow')
+      // close any existing one first: a new run means a new match
+      const existing = await WebviewWindow.getByLabel('mark-video')
+      if (existing) { try { await existing.close() } catch {} }
+
+      const qs = new URLSearchParams({
+        window: 'video', url, name: name || '', status: status || 'unknown',
+      })
+      const win = new WebviewWindow('mark-video', {
+        url: 'index.html?' + qs.toString(),
+        title: 'MARK — ' + (name || 'video'),
+        width: 960, height: 620, resizable: true, maximizable: true,
+        // dies with the parent, so no orphan window is left behind
+        parent: 'main',
+      })
+      win.once('tauri://created', () => setPopOpen(true))
+      win.once('tauri://error', e => {
+        console.error('[COMPARE] video window failed:', e)
+        setVideoNote('Could not open the video window: ' + (e?.payload || 'unknown error'))
+        setPopOpen(false)
+      })
+      win.once('tauri://destroyed', () => setPopOpen(false))
+      return true
+    } catch (e) {
+      setVideoNote('Could not open the video window: ' + (e?.message || e))
+      setPopOpen(false)
+      return false
+    }
+  }
+
+  async function closeVideoWindow() {
+    try {
+      const { WebviewWindow } = await import('@tauri-apps/api/webviewWindow')
+      const w = await WebviewWindow.getByLabel('mark-video')
+      if (w) await w.close()
+    } catch {}
+    setPopOpen(false)
+  }
 
   async function handleRun() {
     setError(''); setResult(null); setWritten(false)
@@ -238,14 +290,16 @@ export default function ComparisonPage({ onBack }) {
     }
 
     // Fresh video every run — never reuse the previous file.
-    setVideoUrl(''); setVideoName(''); setVideoNote('')
+    // a new run closes the old pop-out and forgets the old file
+    await closeVideoWindow()
+    setVideoUrl(''); setVideoName(''); setVideoPath(''); setVideoNote('')
     try {
       setLoadingMsg('Choose the match video…')
       const path = await invoke('pick_video_file')
       if (path) {
         const url = await invoke('get_video_url', { path })
-        setVideoUrl(url)
-        setVideoName(String(path).split(/[/\\]/).pop())
+        const name = String(path).split(/[/\\]/).pop()
+        setVideoUrl(url); setVideoName(name); setVideoPath(path)
       } else {
         // Cancelling does not block the run: the scores never needed the video,
         // it is only there for the reviewer to verify events by eye.
@@ -322,6 +376,12 @@ export default function ComparisonPage({ onBack }) {
       )
       console.log('[COMPARE] result:', compResult.score, compResult.verdictCounts)
       setResult({ ...compResult, runId })
+
+      // The pop-out needs videoMatchStatus, which only exists after compare(),
+      // so it opens here rather than at file-pick time.
+      if (videoUrl) {
+        await openVideoWindow(videoUrl, videoName, compResult.videoMatchStatus)
+      }
       setWritten(false); setExistingRun(null)
 
     } catch(e) {
@@ -409,14 +469,36 @@ export default function ComparisonPage({ onBack }) {
           than growing the page. */}
       <div style={{ flex:1, display:'flex', flexDirection:'column', minHeight:0 }}>
 
-        {result && videoUrl && (
-          <div style={{ flexShrink:0, height:'60vh', padding:'12px 24px 0',
-            boxSizing:'border-box' }}>
-            <div className="card" style={{ padding:12, height:'100%', boxSizing:'border-box' }}>
-              <VideoPanel ref={videoRef} url={videoUrl} filename={videoName}
-                matchStatus={result.videoMatchStatus} fill
-                onClose={() => { setVideoUrl(''); setVideoName('')
-                  setVideoNote('Video unloaded — the seek buttons are disabled. Results are unaffected.') }}/>
+        {/* The player lives in its own OS window now, so the main window only
+            reports the link and offers to reopen it. Reopening reuses the
+            remembered path — no second file picker. */}
+        {result && videoPath && (
+          <div style={{ flexShrink:0, padding:'10px 24px 0' }}>
+            <div className="card" style={{ padding:'9px 14px', display:'flex',
+              alignItems:'center', gap:10 }}>
+              <span style={{ width:7, height:7, borderRadius:'50%', flexShrink:0,
+                background: popOpen ? '#30D158' : 'var(--t-3)' }}/>
+              <span style={{ fontSize:11, color:'var(--t-2)', flex:1, overflow:'hidden',
+                textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
+                {popOpen
+                  ? <>Video window open — <b>{videoName}</b>. Seek buttons control it.</>
+                  : <>Video window closed. Seek buttons are disabled.</>}
+              </span>
+              {popOpen ? (
+                <button onClick={closeVideoWindow}
+                  style={{ padding:'5px 11px', fontSize:11, background:'transparent',
+                    border:'1px solid var(--b-1)', borderRadius:6, color:'var(--t-3)',
+                    cursor:'pointer' }}>Close video</button>
+              ) : (
+                <button onClick={async () => {
+                    setVideoNote('')
+                    const url = videoUrl || await invoke('get_video_url', { path: videoPath })
+                    setVideoUrl(url)
+                    await openVideoWindow(url, videoName, result.videoMatchStatus)
+                  }}
+                  className="btn-orange"
+                  style={{ padding:'5px 12px', fontSize:11 }}>Reopen video</button>
+              )}
             </div>
           </div>
         )}
@@ -698,15 +780,23 @@ export default function ComparisonPage({ onBack }) {
                               ? row.collector_video_time_ms
                               : (row.model_video_time_ms || row.collector_video_time_ms)
                             const has = ms !== '' && ms != null
-                            const ready = !!videoUrl
+                            const ready = popOpen
                             return (
                               <button
                                 disabled={!ready || !has}
                                 title={!ready ? 'Load video to seek'
                                   : !has ? 'No timestamp on this row'
                                   : `Seek to ${msToReadable(ms)}`}
-                                onClick={e => {
-                                  videoRef.current?.seekTo(ms, row.event_code)
+                                onClick={async e => {
+                                  // cross-window: the player is a separate
+                                  // React root, so this goes over Tauri events
+                                  try {
+                                    const { emit } = await import('@tauri-apps/api/event')
+                                    await emit('mark:video-seek',
+                                      { ms: Number(ms), label: row.event_code })
+                                  } catch (err) {
+                                    console.warn('[COMPARE] seek emit failed:', err)
+                                  }
                                   // bring the row into view and mark it, so the
                                   // reviewer sees the verdict and the video
                                   // moment together without hunting for either
