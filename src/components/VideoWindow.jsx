@@ -1,14 +1,15 @@
 /**
  * VideoWindow.jsx — the pop-out player window
  * ============================================================================
- * Rendered when index.html is opened with ?window=video, which App.jsx checks
- * BEFORE any auth. A second Tauri window loads the bundle fresh — a separate
- * React root with no shared state — so without that guard it would boot
- * straight into the login screen.
+ * Rendered when index.html is opened with the #video-player hash, which
+ * main.jsx routes BEFORE importing App at all. That matters: App statically
+ * imports every page module plus Firebase and the auth provider, so a guard
+ * inside App() stopped them rendering but not loading. Here, nothing of the
+ * application is fetched — only this component and VideoPanel.
  *
  * It takes no props. Everything it needs arrives in the query string, because
  * the two windows share no memory:
- *     ?window=video&url=<proxy url>&name=<filename>&status=<videoMatchStatus>
+ *     #video-player?url=<proxy url>&name=<filename>&status=<videoMatchStatus>
  *
  * Seeks arrive as Tauri events on 'mark:video-seek' from the main window.
  */
@@ -16,7 +17,11 @@ import { useEffect, useRef, useState } from 'react'
 import VideoPanel from './VideoPanel'
 
 export default function VideoWindow() {
-  const params = new URLSearchParams(window.location.search)
+  // Params live in the HASH — see main.jsx for why. Falls back to the query
+  // string so an older pop-out URL still works.
+  const hash = window.location.hash || ''
+  const params = new URLSearchParams(
+    hash.includes('?') ? hash.slice(hash.indexOf('?') + 1) : window.location.search)
   // Seeded from the query string, then replaceable by a mark:video-load event —
   // the main window reuses this window rather than recreating it, so the file
   // can change without a reload.

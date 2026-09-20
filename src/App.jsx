@@ -288,10 +288,12 @@ function AppInner() {
 }
 
 export default function App() {
-  // The Comparison video pop-out is a second Tauri window loading this same
-  // bundle. It must render the player ONLY — no auth, no providers, no mode
-  // picker — so this check comes before anything else in the tree.
-  if (new URLSearchParams(window.location.search).get('window') === 'video') {
+  // Second line of defence only. main.jsx routes the pop-out on the
+  // #video-player hash BEFORE importing this module, so in normal operation
+  // App is never even loaded in that window. This stays in case App is reached
+  // by some other path — it must never boot the app tree in a video window.
+  if (window.location.hash.startsWith('#video-player') ||
+      new URLSearchParams(window.location.search).get('window') === 'video') {
     return <VideoWindow/>
   }
 

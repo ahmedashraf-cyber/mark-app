@@ -272,11 +272,15 @@ export default function ComparisonPage({ onBack }) {
       // way a create call ends up navigating the window that issued it rather
       // than opening a new one.
       const qs = new URLSearchParams({
-        window: 'video', url, name: name || '', status: status || 'unknown',
+        url, name: name || '', status: status || 'unknown',
       })
+      // Everything goes in the HASH. main.jsx routes on it before importing the
+      // app, so the pop-out never loads a page module, Firebase, or the auth
+      // provider — and a hash cannot be stripped by URL normalisation the way a
+      // query string can.
       const target = new URL(window.location.href)
-      target.hash = ''
-      target.search = '?' + qs.toString()
+      target.search = ''
+      target.hash = '#video-player?' + qs.toString()
       console.log('[COMPARE][video] creating window at', target.href)
 
       const win = new WebviewWindow('mark-video', {
