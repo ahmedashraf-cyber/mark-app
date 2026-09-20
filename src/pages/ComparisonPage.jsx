@@ -228,6 +228,10 @@ export default function ComparisonPage({ onBack }) {
   // Remembered so "Reopen video" needs no second file picker.
   const [videoPath, setVideoPath] = useState('')
   const [popOpen,   setPopOpen]   = useState(false)
+  // Confirmed by a pong from the pop-out. popOpen only says we created a
+  // window; this says the channel actually carries messages, which is the thing
+  // that was silently false while the banner claimed otherwise.
+  const [popLinked, setPopLinked] = useState(false)
   const [videoNote, setVideoNote] = useState('')
   const resultsScrollRef = useRef(null)
   const [seekRow, setSeekRow] = useState(-1)   // briefly highlighted row
@@ -307,6 +311,16 @@ export default function ComparisonPage({ onBack }) {
         setPopOpen(false)
       })
 
+      // Ping once the window has had a moment to register its listeners, and
+      // let the pong confirm the channel.
+      setTimeout(async () => {
+        try {
+          const { emit } = await import('@tauri-apps/api/event')
+          console.log('[COMPARE][link] pinging video window')
+          await emit('mark:video-ping', { at: Date.now() })
+        } catch (e) { console.warn('[COMPARE][link] ping failed:', e) }
+      }, 900)
+
       // Belt and braces: if neither event lands, ask Tauri directly.
       setTimeout(async () => {
         try {
@@ -326,6 +340,7 @@ export default function ComparisonPage({ onBack }) {
   }
 
   async function closeVideoWindow() {
+    setPopLinked(false)
     try {
       const { WebviewWindow } = await import('@tauri-apps/api/webviewWindow')
       const w = await WebviewWindow.getByLabel('mark-video')
@@ -333,6 +348,23 @@ export default function ComparisonPage({ onBack }) {
     } catch {}
     setPopOpen(false)
   }
+
+  // Listen for the pop-out's reply for as long as Comparison is open.
+  useEffect(() => {
+    let un = null, alive = true
+    ;(async () => {
+      try {
+        const { listen } = await import('@tauri-apps/api/event')
+        un = await listen('mark:video-pong', ev => {
+          console.log('[COMPARE][link] pong from video window', ev.payload)
+          if (alive) setPopLinked(true)
+        })
+      } catch (e) {
+        console.warn('[COMPARE][link] could not listen for pong:', e)
+      }
+    })()
+    return () => { alive = false; if (un) un() }
+  }, [])
 
   async function handleRun() {
     setError(''); setResult(null); setWritten(false)
@@ -539,12 +571,15 @@ export default function ComparisonPage({ onBack }) {
             <div className="card" style={{ padding:'9px 14px', display:'flex',
               alignItems:'center', gap:10 }}>
               <span style={{ width:7, height:7, borderRadius:'50%', flexShrink:0,
-                background: popOpen ? '#30D158' : 'var(--t-3)' }}/>
+                background: popLinked ? '#30D158' : popOpen ? '#FFD60A' : 'var(--t-3)' }}/>
               <span style={{ fontSize:11, color:'var(--t-2)', flex:1, overflow:'hidden',
                 textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
-                {popOpen
-                  ? <>Video window open — <b>{videoName}</b>. Seek buttons control it.</>
-                  : <>Video window closed. Seek buttons are disabled.</>}
+                {!popOpen
+                  ? <>Video window closed. Seek buttons are disabled.</>
+                  : popLinked
+                    ? <>Video window linked — <b>{videoName}</b>. Seek buttons control it.</>
+                    : <>Video window open — <b>{videoName}</b> — but not answering yet.
+                        If seeks do nothing, close and reopen it.</>}
               </span>
               {popOpen ? (
                 <button onClick={closeVideoWindow}
@@ -854,10 +889,13 @@ export default function ComparisonPage({ onBack }) {
                                   // React root, so this goes over Tauri events
                                   try {
                                     const { emit } = await import('@tauri-apps/api/event')
-                                    await emit('mark:video-seek',
-                                      { ms: Number(ms), label: row.event_code })
+                                    const payload = { ms: Number(ms), label: row.event_code }
+                                    console.log('[COMPARE][seek] emitting mark:video-seek',
+                                      payload, '-> window mark-video')
+                                    await emit('mark:video-seek', payload)
+                                    console.log('[COMPARE][seek] emit resolved')
                                   } catch (err) {
-                                    console.warn('[COMPARE] seek emit failed:', err)
+                                    console.error('[COMPARE][seek] emit FAILED:', err)
                                   }
                                   // bring the row into view and mark it, so the
                                   // reviewer sees the verdict and the video

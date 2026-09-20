@@ -35,32 +35,64 @@ export default function VideoWindow() {
   const [lastSeek, setLastSeek] = useState(null)
   const [listening, setListening] = useState(false)
 
+  const [linkError, setLinkError] = useState('')
+
   useEffect(() => {
-    let unlisten = null
-    let unlistenLoad = null
+    let unlisten = null, unlistenLoad = null, unlistenPing = null
     let alive = true
     ;(async () => {
       try {
-        const { listen } = await import('@tauri-apps/api/event')
+        console.log('[VIDEO WIN] registering listeners…')
+        const { listen, emit } = await import('@tauri-apps/api/event')
+
         unlistenLoad = await listen('mark:video-load', ev => {
+          console.log('[VIDEO WIN] received mark:video-load', ev.payload)
           const { url, name, status } = ev.payload || {}
           if (url) setSrc({ url, name: name || 'video', status: status || 'unknown' })
         })
+
         unlisten = await listen('mark:video-seek', ev => {
+          console.log('[VIDEO WIN] received mark:video-seek', ev.payload)
           const { ms, label } = ev.payload || {}
-          if (ms == null) return
-          playerRef.current?.seekTo(ms, label)
-          // Seeking then playing is the point of the pop-out: the reviewer
-          // clicks a row in the other window and the moment plays here.
+          if (ms == null) { console.warn('[VIDEO WIN] seek had no ms, ignoring'); return }
+          const ok = playerRef.current?.seekTo(ms, label)
+          console.log('[VIDEO WIN] seekTo applied:', ok)
+          // seek then play — the reviewer clicks a row in the other window and
+          // the moment plays here rather than sitting on a frozen frame
           setTimeout(() => playerRef.current?.play?.(), 60)
           setLastSeek({ ms, label, at: Date.now() })
         })
-        if (alive) setListening(true)
+
+        // The main window pings; replying is what proves the channel works in
+        // BOTH directions instead of the pop-out assuming it does because
+        // listen() happened to resolve.
+        unlistenPing = await listen('mark:video-ping', async () => {
+          console.log('[VIDEO WIN] received ping, replying')
+          try { await emit('mark:video-pong', { at: Date.now() }) }
+          catch (e) { console.warn('[VIDEO WIN] could not reply:', e) }
+        })
+
+        if (alive) {
+          setListening(true)
+          console.log('[VIDEO WIN] listeners registered — linked')
+          // announce ourselves, in case the opener is already waiting
+          try { await emit('mark:video-pong', { at: Date.now(), hello: true }) } catch {}
+        }
       } catch (e) {
-        console.error('[MARK video window] could not listen for seeks:', e)
+        // What actually happened before v7.9.3: Tauri capabilities are scoped
+        // by WINDOW LABEL and only "main" was listed, so listen() was denied
+        // here. The pop-out could never link, while the main window's emit
+        // still succeeded — hence a link that looked one-directional.
+        console.error('[VIDEO WIN] could not register listeners:', e)
+        if (alive) setLinkError(e?.message || String(e))
       }
     })()
-    return () => { alive = false; if (unlisten) unlisten(); if (unlistenLoad) unlistenLoad() }
+    return () => {
+      alive = false
+      if (unlisten) unlisten()
+      if (unlistenLoad) unlistenLoad()
+      if (unlistenPing) unlistenPing()
+    }
   }, [])
 
   if (!src.url) return (
@@ -81,8 +113,11 @@ export default function VideoWindow() {
           padding:'2px 7px', borderRadius:4 }}>MARK VIDEO</div>
         <span style={{ fontSize:10, color:'var(--t-3)', flex:1, overflow:'hidden',
           textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{src.name}</span>
-        <span style={{ fontSize:9, color: listening ? '#30D158' : '#FF9500' }}>
-          {listening ? 'linked to results' : 'not linked'}
+        <span style={{ fontSize:9, color: listening ? '#30D158' : '#FF453A' }}
+          title={linkError || ''}>
+          {listening ? 'linked to results'
+            : linkError ? 'not linked — ' + linkError.slice(0, 60)
+            : 'linking…'}
         </span>
       </div>
 
