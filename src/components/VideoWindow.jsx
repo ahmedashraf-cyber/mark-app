@@ -17,9 +17,14 @@ import VideoPanel from './VideoPanel'
 
 export default function VideoWindow() {
   const params = new URLSearchParams(window.location.search)
-  const url    = params.get('url') || ''
-  const name   = params.get('name') || 'video'
-  const status = params.get('status') || 'unknown'
+  // Seeded from the query string, then replaceable by a mark:video-load event —
+  // the main window reuses this window rather than recreating it, so the file
+  // can change without a reload.
+  const [src, setSrc] = useState({
+    url:    params.get('url') || '',
+    name:   params.get('name') || 'video',
+    status: params.get('status') || 'unknown',
+  })
 
   const playerRef = useRef(null)
   const [lastSeek, setLastSeek] = useState(null)
@@ -27,10 +32,15 @@ export default function VideoWindow() {
 
   useEffect(() => {
     let unlisten = null
+    let unlistenLoad = null
     let alive = true
     ;(async () => {
       try {
         const { listen } = await import('@tauri-apps/api/event')
+        unlistenLoad = await listen('mark:video-load', ev => {
+          const { url, name, status } = ev.payload || {}
+          if (url) setSrc({ url, name: name || 'video', status: status || 'unknown' })
+        })
         unlisten = await listen('mark:video-seek', ev => {
           const { ms, label } = ev.payload || {}
           if (ms == null) return
@@ -45,10 +55,10 @@ export default function VideoWindow() {
         console.error('[MARK video window] could not listen for seeks:', e)
       }
     })()
-    return () => { alive = false; if (unlisten) unlisten() }
+    return () => { alive = false; if (unlisten) unlisten(); if (unlistenLoad) unlistenLoad() }
   }, [])
 
-  if (!url) return (
+  if (!src.url) return (
     <div style={{ height:'100vh', display:'flex', alignItems:'center', justifyContent:'center',
       background:'var(--bg)', color:'var(--t-3)', fontSize:13, padding:24, textAlign:'center' }}>
       No video was passed to this window. Close it and press Run Comparison again.
@@ -65,15 +75,15 @@ export default function VideoWindow() {
           color:'var(--p2)', letterSpacing:1.4, background:'rgba(232,89,12,0.12)',
           padding:'2px 7px', borderRadius:4 }}>MARK VIDEO</div>
         <span style={{ fontSize:10, color:'var(--t-3)', flex:1, overflow:'hidden',
-          textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{name}</span>
+          textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{src.name}</span>
         <span style={{ fontSize:9, color: listening ? '#30D158' : '#FF9500' }}>
           {listening ? 'linked to results' : 'not linked'}
         </span>
       </div>
 
       <div style={{ flex:1, minHeight:0, padding:12 }}>
-        <VideoPanel ref={playerRef} url={url} filename={name}
-          matchStatus={status} fill/>
+        <VideoPanel key={src.url} ref={playerRef} url={src.url} filename={src.name}
+          matchStatus={src.status} fill/>
       </div>
 
       {lastSeek && (

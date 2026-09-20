@@ -243,31 +243,78 @@ export default function ComparisonPage({ onBack }) {
    * reachable from either window, so nothing needs re-serving.
    */
   async function openVideoWindow(url, name, status) {
+    console.log('[COMPARE][video] open requested', { url, name, status })
     try {
       const { WebviewWindow } = await import('@tauri-apps/api/webviewWindow')
-      // close any existing one first: a new run means a new match
-      const existing = await WebviewWindow.getByLabel('mark-video')
-      if (existing) { try { await existing.close() } catch {} }
 
+      // Reuse rather than recreate. Constructing a second WebviewWindow with a
+      // label that already exists is the one operation here whose failure mode
+      // is not well defined, and the previous version always closed-then-created
+      // — a needless round trip that also left a window in flight.
+      const existing = await WebviewWindow.getByLabel('mark-video')
+      if (existing) {
+        console.log('[COMPARE][video] reusing existing window')
+        try {
+          await existing.setFocus()
+          // the file may have changed, so tell it what to load
+          const { emit } = await import('@tauri-apps/api/event')
+          await emit('mark:video-load', { url, name, status })
+          setPopOpen(true)
+          return true
+        } catch (e) {
+          console.warn('[COMPARE][video] reuse failed, recreating:', e)
+          try { await existing.close() } catch {}
+        }
+      }
+
+      // ABSOLUTE url. A relative 'index.html?…' is resolved by the webview
+      // against the current document, and getting that wrong is the likeliest
+      // way a create call ends up navigating the window that issued it rather
+      // than opening a new one.
       const qs = new URLSearchParams({
         window: 'video', url, name: name || '', status: status || 'unknown',
       })
+      const target = new URL(window.location.href)
+      target.hash = ''
+      target.search = '?' + qs.toString()
+      console.log('[COMPARE][video] creating window at', target.href)
+
       const win = new WebviewWindow('mark-video', {
-        url: 'index.html?' + qs.toString(),
+        url: target.href,
         title: 'MARK — ' + (name || 'video'),
         width: 960, height: 620, resizable: true, maximizable: true,
-        // dies with the parent, so no orphan window is left behind
-        parent: 'main',
       })
-      win.once('tauri://created', () => setPopOpen(true))
-      win.once('tauri://error', e => {
-        console.error('[COMPARE] video window failed:', e)
-        setVideoNote('Could not open the video window: ' + (e?.payload || 'unknown error'))
+
+      // Listeners must be awaited. `.once()` returns a promise for the
+      // unlisten fn; firing before it resolves means the event is missed, which
+      // would leave popOpen false for a window that did open.
+      await win.once('tauri://created', () => {
+        console.log('[COMPARE][video] created OK')
+        setPopOpen(true)
+      })
+      await win.once('tauri://error', e => {
+        console.error('[COMPARE][video] creation error:', e)
+        setVideoNote('Could not open the video window: ' +
+          (e?.payload || e?.message || 'unknown error'))
         setPopOpen(false)
       })
-      win.once('tauri://destroyed', () => setPopOpen(false))
+      await win.once('tauri://destroyed', () => {
+        console.log('[COMPARE][video] window destroyed')
+        setPopOpen(false)
+      })
+
+      // Belt and braces: if neither event lands, ask Tauri directly.
+      setTimeout(async () => {
+        try {
+          const w = await WebviewWindow.getByLabel('mark-video')
+          console.log('[COMPARE][video] post-create check, exists:', !!w)
+          if (w) setPopOpen(true)
+        } catch {}
+      }, 700)
+
       return true
     } catch (e) {
+      console.error('[COMPARE][video] open threw:', e)
       setVideoNote('Could not open the video window: ' + (e?.message || e))
       setPopOpen(false)
       return false
@@ -290,6 +337,10 @@ export default function ComparisonPage({ onBack }) {
     }
 
     // Fresh video every run — never reuse the previous file.
+    // Locals, because the values are needed later in this same invocation and
+    // state will not have flushed by then.
+    let pickedUrl = '', pickedName = ''
+
     // a new run closes the old pop-out and forgets the old file
     await closeVideoWindow()
     setVideoUrl(''); setVideoName(''); setVideoPath(''); setVideoNote('')
@@ -300,6 +351,13 @@ export default function ComparisonPage({ onBack }) {
         const url = await invoke('get_video_url', { path })
         const name = String(path).split(/[/\\]/).pop()
         setVideoUrl(url); setVideoName(name); setVideoPath(path)
+        // Held in LOCALS as well. The open call further down used to read the
+        // `videoUrl` state, which is still '' in this same invocation — React
+        // has not re-rendered yet — so the `if` never fired and the window was
+        // never created. The banner then reported it "closed" for a window that
+        // had never existed.
+        pickedUrl  = url
+        pickedName = name
       } else {
         // Cancelling does not block the run: the scores never needed the video,
         // it is only there for the reviewer to verify events by eye.
@@ -379,8 +437,8 @@ export default function ComparisonPage({ onBack }) {
 
       // The pop-out needs videoMatchStatus, which only exists after compare(),
       // so it opens here rather than at file-pick time.
-      if (videoUrl) {
-        await openVideoWindow(videoUrl, videoName, compResult.videoMatchStatus)
+      if (pickedUrl) {
+        await openVideoWindow(pickedUrl, pickedName, compResult.videoMatchStatus)
       }
       setWritten(false); setExistingRun(null)
 
