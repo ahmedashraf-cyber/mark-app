@@ -20,6 +20,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { useAuth } from '../hooks/useAuth.jsx'
 import { compare } from '../utils/compareEngine'
 import { MODULES_SPLIT, MODULE_LABELS } from '../utils/defectTypes'
+import MultiFilter from '../components/MultiFilter'
 import { writeComparisonResults, findExistingRun } from '../utils/comparisonSheet'
 import { FIELD_SHEET_ID, EVENT_COLUMNS, GROUP_TO_ATTR_COL } from '../config/fieldConfig'
 import { CURRENT_VERSION } from '../hooks/useUpdateCheck'
@@ -251,10 +252,12 @@ export default function ComparisonPage({ onBack }) {
   const [videoNote, setVideoNote] = useState('')
   const resultsScrollRef = useRef(null)
   const [seekRow, setSeekRow] = useState(-1)   // briefly highlighted row
-  // Detail-table filters. Empty string means "all".
-  const [fEvent,   setFEvent]   = useState('')
-  const [fVerdict, setFVerdict] = useState('')
-  const [fModule,  setFModule]  = useState('')
+  // Detail-table filters. Arrays now, and an EMPTY array means "all" rather
+  // than "none" — so a filter starts inert and clearing it stops filtering
+  // instead of hiding every row.
+  const [fEvents,   setFEvents]   = useState([])
+  const [fVerdicts, setFVerdicts] = useState([])
+  const [fModules,  setFModules]  = useState([])
 
   /**
    * Open the player in its own OS window.
@@ -404,27 +407,30 @@ export default function ComparisonPage({ onBack }) {
     }
   }, [result])
 
-  // All three filters AND together. The original index is carried along so the
-  // seek highlight still matches the right row after filtering.
+  // ANY within a filter, AND across filters: a row must match one of the
+  // selected events AND one of the selected verdicts AND one of the selected
+  // modules. The original index is carried along so the seek highlight still
+  // targets the right row after filtering.
   const shownRows = useMemo(() => {
     const rows = result?.detailRows || []
     return rows
       .map((row, i) => ({ row, i }))
       .filter(({ row }) => {
-        if (fEvent && row.model_event_code !== fEvent &&
-            row.collector_event_code !== fEvent) return false
-        if (fVerdict && row.verdict !== fVerdict) return false
-        if (fModule && row.event_module !== fModule) return false
+        if (fEvents.length &&
+            !fEvents.includes(row.model_event_code) &&
+            !fEvents.includes(row.collector_event_code)) return false
+        if (fVerdicts.length && !fVerdicts.includes(row.verdict)) return false
+        if (fModules.length && !fModules.includes(row.event_module)) return false
         return true
       })
-  }, [result, fEvent, fVerdict, fModule])
+  }, [result, fEvents, fVerdicts, fModules])
 
   const anyShape = useMemo(
     () => (result?.detailRows || []).some(r => r.model_shape), [result])
 
   async function handleRun() {
     setError(''); setResult(null); setWritten(false)
-    setFEvent(''); setFVerdict(''); setFModule('')
+    setFEvents([]); setFVerdicts([]); setFModules([])
     if (!matchId.trim() || !half || !hrCode.trim()) {
       setError('Match ID, Half and Collector HR-Code are all required.'); return
     }
@@ -935,27 +941,20 @@ export default function ComparisonPage({ onBack }) {
                     : `${shownRows.length} of ${result.detailRows.length} rows`})
                 </div>
                 <div style={{ flex:1 }}/>
-                <select value={fEvent} onChange={e => setFEvent(e.target.value)}
-                  style={selStyle} title="Matches either side's event code">
-                  <option value="">All events</option>
-                  {filterOptions.events.map(v => <option key={v} value={v}>{v}</option>)}
-                </select>
-                <select value={fVerdict} onChange={e => setFVerdict(e.target.value)}
-                  style={selStyle}>
-                  <option value="">All verdicts</option>
-                  {filterOptions.verdicts.map(v => <option key={v} value={v}>{v}</option>)}
-                </select>
-                <select value={fModule} onChange={e => setFModule(e.target.value)}
-                  style={selStyle}>
-                  <option value="">All modules</option>
-                  {filterOptions.modules.map(v => (
-                    <option key={v} value={v}>{MODULE_LABELS[v] || v}</option>
-                  ))}
-                </select>
-                {(fEvent || fVerdict || fModule) && (
-                  <button onClick={() => { setFEvent(''); setFVerdict(''); setFModule('') }}
-                    style={{ ...selStyle, cursor:'pointer', color:'var(--p2)' }}>Clear</button>
-                )}
+                <MultiFilter label="All events" options={filterOptions.events}
+                  selected={fEvents} onChange={setFEvents} width={186}
+                  title="Matches either side's event code"/>
+                <MultiFilter label="All verdicts" options={filterOptions.verdicts}
+                  selected={fVerdicts} onChange={setFVerdicts} width={168}/>
+                <MultiFilter label="All modules"
+                  options={filterOptions.modules.map(v => ({ value: v, label: MODULE_LABELS[v] || v }))}
+                  selected={fModules} onChange={setFModules} width={132}
+                  labelFor={v => MODULE_LABELS[v] || v}/>
+                {(fEvents.length || fVerdicts.length || fModules.length) ? (
+                  <button onClick={() => { setFEvents([]); setFVerdicts([]); setFModules([]) }}
+                    style={{ ...selStyle, cursor:'pointer', color:'var(--p2)',
+                      maxWidth:'none', width:'auto' }}>Clear filters</button>
+                ) : null}
               </div>
 
               <div>
