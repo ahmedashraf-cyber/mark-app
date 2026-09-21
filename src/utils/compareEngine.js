@@ -112,6 +112,31 @@ function hasHalfStart(ev) {
 }
 
 /**
+ * Compact attribute summary for the detail table.
+ *
+ * Returns { short, full }. `short` strips the group prefix from each code —
+ * SIDE_RIGHT becomes RIGHT — because the column header already says which side
+ * it belongs to and the width is tight. `full` keeps group=value for the
+ * tooltip, so nothing is hidden, only shortened.
+ *
+ * These land on the IN-MEMORY detail rows only. DETAIL_COLUMNS is untouched, so
+ * the sheet writer ignores them and existing sheet data is unaffected.
+ */
+function attrSummary(ev) {
+  if (!ev) return { short: '', full: '' }
+  const shorts = [], fulls = []
+  Object.keys(ev).filter(k => k.startsWith('attr_')).forEach(k => {
+    const raw = String(ev[k] ?? '').trim()
+    if (!raw) return
+    const group = k.replace(/^attr_/, '')
+    const vals = raw.split('|').map(x => x.trim()).filter(Boolean)
+    shorts.push(vals.map(v => v.includes('_') ? v.slice(v.indexOf('_') + 1) : v).join('+'))
+    fulls.push(group + '=' + vals.join('+'))
+  })
+  return { short: shorts.join(', '), full: fulls.join('  ·  ') }
+}
+
+/**
  * Pick ONE time origin for the whole comparison, used by both sides.
  *
  * Time from half start is preferred — half start is tagged at roughly the same
@@ -353,6 +378,13 @@ export function compare(sessA, eventsA, sessB, eventsB, config) {
       half:                  modelSess.half     || '',
       collector_hr_code:     collectorSess.collector_hr_code || '',
       event_code:            mEv.event_code,
+      // separate sides, so the table can show and compare them independently
+      model_event_code:      mEv.event_code,
+      collector_event_code:  cEv.event_code,
+      model_attrs:           attrSummary(mEv).short,
+      model_attrs_full:      attrSummary(mEv).full,
+      collector_attrs:       attrSummary(cEv).short,
+      collector_attrs_full:  attrSummary(cEv).full,
       verdict,
       model_video_time_ms:   mEv.video_time_ms    || '',
       collector_video_time_ms: cEv.video_time_ms  || '',
@@ -378,6 +410,9 @@ export function compare(sessA, eventsA, sessB, eventsB, config) {
       match_id: modelSess.match_id || '', half: modelSess.half || '',
       collector_hr_code: collectorSess.collector_hr_code || '',
       event_code: mEv.event_code, verdict: 'missing_event',
+      model_event_code: mEv.event_code, collector_event_code: '',
+      model_attrs: attrSummary(mEv).short, model_attrs_full: attrSummary(mEv).full,
+      collector_attrs: '', collector_attrs_full: '',
       model_video_time_ms: mEv.video_time_ms || '', collector_video_time_ms: '',
       delta_ms: '', model_team: mEv.team || '', collector_team: '',
       error_weight: '1',   // one missing event is one error
@@ -398,6 +433,9 @@ export function compare(sessA, eventsA, sessB, eventsB, config) {
       match_id: modelSess.match_id || '', half: modelSess.half || '',
       collector_hr_code: collectorSess.collector_hr_code || '',
       event_code: cEv.event_code, verdict: 'extra_event',
+      model_event_code: '', collector_event_code: cEv.event_code,
+      model_attrs: '', model_attrs_full: '',
+      collector_attrs: attrSummary(cEv).short, collector_attrs_full: attrSummary(cEv).full,
       model_video_time_ms: '', collector_video_time_ms: cEv.video_time_ms || '',
       delta_ms: '', model_team: '', collector_team: cEv.team || '',
       error_weight: '1',   // one extra event is one error

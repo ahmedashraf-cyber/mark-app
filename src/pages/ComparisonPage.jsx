@@ -13,7 +13,7 @@
  *
  * FIELD only. Scout and Audit untouched.
  */
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useMemo } from 'react'
 import { db } from '../firebase/config'
 import { collection, query, where, getDocs } from 'firebase/firestore'
 import { invoke } from '@tauri-apps/api/core'
@@ -205,6 +205,22 @@ function VerdictBadge({ verdict }) {
   )
 }
 
+// Same palette as the module breakdown cards, so a badge in the table and a
+// card above it read as the same thing.
+const MODULE_COLOR = {
+  A:'#FF453A', B:'#30D158', C:'#64D2FF', D:'#FFD60A', TO:'#BF5AF2', PRESSURE:'#E8590C',
+}
+
+const cellStyle = {
+  padding:'3px 6px', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis',
+}
+
+const selStyle = {
+  background:'var(--bg-3)', border:'1px solid var(--b-1)', borderRadius:6,
+  padding:'5px 8px', fontSize:10, color:'var(--t-1)', outline:'none',
+  maxWidth:150,
+}
+
 export default function ComparisonPage({ onBack }) {
   const { profile } = useAuth()
 
@@ -235,6 +251,10 @@ export default function ComparisonPage({ onBack }) {
   const [videoNote, setVideoNote] = useState('')
   const resultsScrollRef = useRef(null)
   const [seekRow, setSeekRow] = useState(-1)   // briefly highlighted row
+  // Detail-table filters. Empty string means "all".
+  const [fEvent,   setFEvent]   = useState('')
+  const [fVerdict, setFVerdict] = useState('')
+  const [fModule,  setFModule]  = useState('')
 
   /**
    * Open the player in its own OS window.
@@ -366,8 +386,45 @@ export default function ComparisonPage({ onBack }) {
     return () => { alive = false; if (un) un() }
   }, [])
 
+  // Options come from the RESULT, not a fixed list, so a verdict or module that
+  // never occurs is not offered.
+  const filterOptions = useMemo(() => {
+    const rows = result?.detailRows || []
+    const events = new Set(), verdicts = new Set(), modules = new Set()
+    rows.forEach(r => {
+      if (r.model_event_code) events.add(r.model_event_code)
+      if (r.collector_event_code) events.add(r.collector_event_code)
+      if (r.verdict) verdicts.add(r.verdict)
+      if (r.event_module) modules.add(r.event_module)
+    })
+    return {
+      events: [...events].sort(),
+      verdicts: [...verdicts].sort(),
+      modules: MODULES_SPLIT.filter(m => modules.has(m)),
+    }
+  }, [result])
+
+  // All three filters AND together. The original index is carried along so the
+  // seek highlight still matches the right row after filtering.
+  const shownRows = useMemo(() => {
+    const rows = result?.detailRows || []
+    return rows
+      .map((row, i) => ({ row, i }))
+      .filter(({ row }) => {
+        if (fEvent && row.model_event_code !== fEvent &&
+            row.collector_event_code !== fEvent) return false
+        if (fVerdict && row.verdict !== fVerdict) return false
+        if (fModule && row.event_module !== fModule) return false
+        return true
+      })
+  }, [result, fEvent, fVerdict, fModule])
+
+  const anyShape = useMemo(
+    () => (result?.detailRows || []).some(r => r.model_shape), [result])
+
   async function handleRun() {
     setError(''); setResult(null); setWritten(false)
+    setFEvent(''); setFVerdict(''); setFModule('')
     if (!matchId.trim() || !half || !hrCode.trim()) {
       setError('Match ID, Half and Collector HR-Code are all required.'); return
     }
@@ -600,8 +657,13 @@ export default function ComparisonPage({ onBack }) {
           </div>
         )}
 
+        {/* 1500px, not 760. The detail table's fixed columns alone come to
+            682px, which left 23px per attribute column at the old width and
+            forced a horizontal scrollbar. At 1500 the two flexing columns get
+            roughly 400px each on a 1920 monitor, and the cap still collapses to
+            the viewport on a laptop. */}
         <div style={{ flex:1, overflowY:'auto', minHeight:0, padding:24,
-          maxWidth:760, margin:'0 auto', width:'100%' }} ref={resultsScrollRef}>
+          maxWidth:1500, margin:'0 auto', width:'100%' }} ref={resultsScrollRef}>
 
         {/* Input form */}
         <div className="card" style={{ padding:20, marginBottom:16 }}>
@@ -856,36 +918,92 @@ export default function ComparisonPage({ onBack }) {
               </div>
             )}
 
-            {/* Detail table */}
+            {/* ── Detail table ──────────────────────────────────────────────
+                Every row, no cap. The old 100-row limit meant a 1059-event
+                comparison could only be read in the sheet, which defeated the
+                seek buttons for 90% of the data.
+
+                Width is managed by giving every column a fixed narrow width
+                except the two attribute columns, which flex and fall back to a
+                tooltip — they are the only genuinely variable content. ───── */}
             <div className="card" style={{ padding:16, marginBottom:12 }}>
-              <div style={{ fontSize:13, fontWeight:700, marginBottom:12 }}>
-                Event Detail ({result.detailRows.length} rows)
+              <div style={{ display:'flex', alignItems:'center', gap:10,
+                flexWrap:'wrap', marginBottom:10 }}>
+                <div style={{ fontSize:13, fontWeight:700 }}>
+                  Event Detail ({shownRows.length === result.detailRows.length
+                    ? `${result.detailRows.length} rows`
+                    : `${shownRows.length} of ${result.detailRows.length} rows`})
+                </div>
+                <div style={{ flex:1 }}/>
+                <select value={fEvent} onChange={e => setFEvent(e.target.value)}
+                  style={selStyle} title="Matches either side's event code">
+                  <option value="">All events</option>
+                  {filterOptions.events.map(v => <option key={v} value={v}>{v}</option>)}
+                </select>
+                <select value={fVerdict} onChange={e => setFVerdict(e.target.value)}
+                  style={selStyle}>
+                  <option value="">All verdicts</option>
+                  {filterOptions.verdicts.map(v => <option key={v} value={v}>{v}</option>)}
+                </select>
+                <select value={fModule} onChange={e => setFModule(e.target.value)}
+                  style={selStyle}>
+                  <option value="">All modules</option>
+                  {filterOptions.modules.map(v => (
+                    <option key={v} value={v}>{MODULE_LABELS[v] || v}</option>
+                  ))}
+                </select>
+                {(fEvent || fVerdict || fModule) && (
+                  <button onClick={() => { setFEvent(''); setFVerdict(''); setFModule('') }}
+                    style={{ ...selStyle, cursor:'pointer', color:'var(--p2)' }}>Clear</button>
+                )}
               </div>
-              <div style={{ overflowX:'auto' }}>
-                <table style={{ width:'100%', borderCollapse:'collapse', fontSize:11 }}>
+
+              <div>
+                <table style={{ width:'100%', borderCollapse:'collapse', fontSize:10,
+                  tableLayout:'fixed' }}>
+                  <colgroup>
+                    <col style={{ width:26 }}/>{/* seek */}
+                    <col style={{ width:92 }}/>{/* verdict */}
+                    <col style={{ width:112 }}/>{/* model event */}
+                    <col/>{/* model attrs — flexes */}
+                    <col style={{ width:74 }}/>{/* model time */}
+                    <col style={{ width:112 }}/>{/* coll event */}
+                    <col/>{/* coll attrs — flexes */}
+                    <col style={{ width:74 }}/>{/* coll time */}
+                    <col style={{ width:34 }}/>{/* module */}
+                    <col style={{ width:44 }}/>{/* delta */}
+                    <col style={{ width:64 }}/>{/* team */}
+                    <col style={{ width:50 }}/>{/* shape */}
+                  </colgroup>
                   <thead>
                     <tr style={{ borderBottom:'1px solid var(--b-1)' }}>
-                      <th style={{ width:30 }}/>
-                      {['Verdict','Event','Model time','Collector time','Δms','Model team','Coll team','Shape'].map(h => (
-                        <th key={h} style={{ padding:'4px 8px', textAlign:'left',
-                          fontSize:9, fontWeight:700, color:'var(--t-3)', letterSpacing:0.5,
+                      <th/>
+                      {['Verdict','Model event','Model attrs','Model time',
+                        'Coll event','Coll attrs','Coll time','Mod','Δ','Team',
+                        ...(anyShape ? ['Shape'] : [''])].map((h, hi) => (
+                        <th key={hi} style={{ padding:'4px 6px', textAlign:'left',
+                          fontSize:8, fontWeight:700, color:'var(--t-3)', letterSpacing:0.4,
                           textTransform:'uppercase', whiteSpace:'nowrap' }}>{h}</th>
                       ))}
                     </tr>
                   </thead>
                   <tbody>
-                    {result.detailRows.slice(0,100).map((row, i) => (
+                    {shownRows.map(({ row, i }) => {
+                      const codeDiff = row.model_event_code && row.collector_event_code &&
+                        row.model_event_code !== row.collector_event_code
+                      const attrDiff = row.model_attrs !== row.collector_attrs &&
+                        !!(row.model_attrs || row.collector_attrs)
+                      const teamDiff = row.model_team && row.collector_team &&
+                        row.model_team !== row.collector_team
+                      const mod = row.event_module
+                      return (
                       <tr key={i} style={{
                         borderBottom:'1px solid rgba(255,255,255,0.04)',
                         background: seekRow === i ? 'rgba(232,89,12,0.13)' : 'transparent',
                         transition: 'background .25s',
                       }}>
-                        <td style={{ padding:'4px 4px 4px 8px' }}>
+                        <td style={{ padding:'3px 2px 3px 4px' }}>
                           {(() => {
-                            // extra_event has no model timestamp — the collector
-                            // tagged something the model does not have, so the
-                            // moment to inspect is theirs. Everything else is
-                            // anchored on the model, which is the reference.
                             const ms = row.verdict === 'extra_event'
                               ? row.collector_video_time_ms
                               : (row.model_video_time_ms || row.collector_video_time_ms)
@@ -898,8 +1016,6 @@ export default function ComparisonPage({ onBack }) {
                                   : !has ? 'No timestamp on this row'
                                   : `Seek to ${msToReadable(ms)}`}
                                 onClick={async e => {
-                                  // cross-window: the player is a separate
-                                  // React root, so this goes over Tauri events
                                   try {
                                     const { emit } = await import('@tauri-apps/api/event')
                                     const payload = { ms: Number(ms), label: row.event_code }
@@ -910,52 +1026,73 @@ export default function ComparisonPage({ onBack }) {
                                   } catch (err) {
                                     console.error('[COMPARE][seek] emit FAILED:', err)
                                   }
-                                  // bring the row into view and mark it, so the
-                                  // reviewer sees the verdict and the video
-                                  // moment together without hunting for either
                                   setSeekRow(i)
                                   setTimeout(() => setSeekRow(r => r === i ? -1 : r), 2200)
                                   e.currentTarget.closest('tr')?.scrollIntoView({
                                     block: 'center', behavior: 'smooth',
                                   })
                                 }}
-                                style={{ width:22, height:22, borderRadius:5, cursor: (ready && has) ? 'pointer' : 'default',
-                                  background: (ready && has) ? 'rgba(232,89,12,0.14)' : 'transparent',
+                                style={{ width:19, height:19, borderRadius:4,
+                                  cursor:(ready && has) ? 'pointer' : 'default',
+                                  background:(ready && has) ? 'rgba(232,89,12,0.14)' : 'transparent',
                                   border:`1px solid ${(ready && has) ? 'var(--p2)' : 'var(--b-1)'}`,
-                                  color: (ready && has) ? 'var(--p2)' : 'var(--b-2)',
-                                  fontSize:9, lineHeight:1, padding:0 }}>
-                                ▶
-                              </button>
+                                  color:(ready && has) ? 'var(--p2)' : 'var(--b-2)',
+                                  fontSize:8, lineHeight:1, padding:0 }}>▶</button>
                             )
                           })()}
                         </td>
-                        <td style={{ padding:'4px 8px' }}><VerdictBadge verdict={row.verdict}/></td>
-                        <td style={{ padding:'4px 8px', fontFamily:'JetBrains Mono,monospace',
-                          color:'var(--t-2)' }}>{row.event_code}</td>
-                        <td style={{ padding:'4px 8px', fontFamily:'JetBrains Mono,monospace',
-                          color:'var(--t-3)', fontSize:10 }}>{msToReadable(row.model_video_time_ms)}</td>
-                        <td style={{ padding:'4px 8px', fontFamily:'JetBrains Mono,monospace',
-                          color:'var(--t-3)', fontSize:10 }}>{msToReadable(row.collector_video_time_ms)}</td>
-                        <td style={{ padding:'4px 8px', fontFamily:'JetBrains Mono,monospace',
-                          color: parseInt(row.delta_ms)>1000?'#FF9500':'var(--t-3)',
-                          fontSize:10 }}>{row.delta_ms}</td>
-                        <td style={{ padding:'4px 8px', color:'var(--t-2)' }}>{row.model_team}</td>
-                        <td style={{ padding:'4px 8px',
-                          color: row.collector_team !== row.model_team && row.model_team
-                            ? '#FF453A' : 'var(--t-2)' }}>{row.collector_team}</td>
-                        <td style={{ padding:'4px 8px', fontFamily:'JetBrains Mono,monospace',
-                          color:'#BF5AF2', fontSize:10 }}>{row.model_shape}</td>
+                        <td style={cellStyle}><VerdictBadge verdict={row.verdict}/></td>
+                        <td style={{ ...cellStyle, color:'var(--t-2)' }}
+                          title={row.model_event_code || ''}>{row.model_event_code || '—'}</td>
+                        <td style={{ ...cellStyle, color:'var(--t-3)',
+                          fontFamily:'JetBrains Mono,monospace' }}
+                          title={row.model_attrs_full || ''}>{row.model_attrs || '—'}</td>
+                        <td style={{ ...cellStyle, color:'var(--t-3)',
+                          fontFamily:'JetBrains Mono,monospace' }}>
+                          {row.model_video_time_ms ? msToReadable(row.model_video_time_ms) : '—'}</td>
+                        <td style={{ ...cellStyle, fontWeight: codeDiff ? 700 : 400,
+                          color: codeDiff ? '#FF453A' : 'var(--t-2)' }}
+                          title={row.collector_event_code || ''}>
+                          {row.collector_event_code || '—'}</td>
+                        <td style={{ ...cellStyle, fontFamily:'JetBrains Mono,monospace',
+                          color: attrDiff ? '#FF9F0A' : 'var(--t-3)' }}
+                          title={row.collector_attrs_full || ''}>{row.collector_attrs || '—'}</td>
+                        <td style={{ ...cellStyle, color:'var(--t-3)',
+                          fontFamily:'JetBrains Mono,monospace' }}>
+                          {row.collector_video_time_ms ? msToReadable(row.collector_video_time_ms) : '—'}</td>
+                        <td style={cellStyle}>
+                          {mod && (
+                            <span title={MODULE_LABELS[mod] || mod}
+                              style={{ fontSize:8, fontWeight:800, padding:'1px 4px',
+                                borderRadius:3, color:MODULE_COLOR[mod] || 'var(--t-3)',
+                                background:(MODULE_COLOR[mod] || '#888') + '22' }}>
+                              {mod === 'PRESSURE' ? 'P' : mod}
+                            </span>
+                          )}
+                        </td>
+                        <td style={{ ...cellStyle, fontFamily:'JetBrains Mono,monospace',
+                          color: parseInt(row.delta_ms) > 1000 ? '#FF9500' : 'var(--t-3)' }}>
+                          {row.delta_ms === '' || row.delta_ms == null
+                            ? '—' : (Number(row.delta_ms) / 1000).toFixed(1) + 's'}</td>
+                        <td style={{ ...cellStyle, fontFamily:'JetBrains Mono,monospace',
+                          color: teamDiff ? '#BF5AF2' : 'var(--t-3)',
+                          fontWeight: teamDiff ? 700 : 400 }}
+                          title={`model ${row.model_team || '—'} / collector ${row.collector_team || '—'}`}>
+                          {(row.model_team ? row.model_team[0].toUpperCase() : '–')}
+                          /
+                          {(row.collector_team ? row.collector_team[0].toUpperCase() : '–')}</td>
+                        <td style={{ ...cellStyle, fontFamily:'JetBrains Mono,monospace',
+                          color:'#BF5AF2' }}>{row.model_shape || ''}</td>
                       </tr>
-                    ))}
+                    )})}
+                    {!shownRows.length && (
+                      <tr><td colSpan={12} style={{ padding:'18px 0', textAlign:'center',
+                        fontSize:11, color:'var(--t-3)' }}>
+                        No rows match those filters.
+                      </td></tr>
+                    )}
                   </tbody>
                 </table>
-                {result.detailRows.length > 100 && (
-                  <div style={{ textAlign:'center', fontSize:11, color:'var(--t-3)',
-                    padding:'8px 0' }}>
-                    Showing first 100 of {result.detailRows.length} rows.
-                    Write to Sheet to see all.
-                  </div>
-                )}
               </div>
             </div>
 
