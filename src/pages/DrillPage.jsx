@@ -11,11 +11,11 @@ import { useState, useEffect, useCallback } from 'react'
 import { useAuth } from '../hooks/useAuth.jsx'
 import { resolveDrillRole } from '../hooks/useAdmin.js'
 import { roleForEmail, personForEmail, loadCreators } from '../utils/drillPeople'
-import { readTab, readTabs, appendOrQueue, flushQueue, pendingWriteCount, syncHeaders } from '../utils/drillSheet'
+import { readTab, readTabs, appendOrQueue, flushQueue, pendingWriteCount, syncHeaders, replaceTabRows } from '../utils/drillSheet'
 import {
   TAB_QUIZZES, TAB_CLIPS, TAB_ANSWERS, TAB_SESSIONS, TAB_ANSWERS_GIVEN, TAB_TRAINEE_LOG,
   TAB_ASSIGNMENTS,
-  SESSIONS_COLUMNS, ANSWERS_GIVEN_COLUMNS, TRAINEE_LOG_COLUMNS,
+  SESSIONS_COLUMNS, ANSWERS_GIVEN_COLUMNS, TRAINEE_LOG_COLUMNS, QUIZZES_COLUMNS,
   QUIZ_STATUS, SESSION_STATUS,
 } from '../config/drillConfig'
 // FIELD's formatter, not a second one. Produces MM:SS.mmm (6941 -> 00:06.941).
@@ -32,6 +32,55 @@ import DrillReviewPage from './DrillReviewPage'
 import DrillDashboardPage from './DrillDashboardPage'
 import DrillTraineePage from './DrillTraineePage'
 import { quizIdsForTrainee } from '../utils/drillAssignments'
+
+/**
+ * DrillShell sits at MODULE scope deliberately.
+ *
+ * It used to be declared inside DrillPage, which gave it a new function
+ * identity on every render. React then treats it as a different component type
+ * and remounts its whole subtree — so any input inside it lost focus after a
+ * single keystroke, and the scroll position reset on every state change.
+ *
+ * Everything it previously closed over is now a prop.
+ */
+function DrillShell({ onBack, role, person, busyNav, onOpenTrainee, onNewQuiz, children }) {
+  return (
+    <div style={{ height:'100vh', display:'flex', flexDirection:'column',
+      background:'var(--bg)', color:'var(--t-1)', overflow:'hidden' }}>
+      <div style={{ flexShrink:0, height:48, background:'var(--bg-2)',
+        borderBottom:'1px solid var(--b-1)', display:'flex', alignItems:'center',
+        padding:'0 16px', gap:12 }}>
+        <button onClick={onBack} style={{ background:'none', border:'none',
+          color:'var(--t-3)', cursor:'pointer', fontSize:11, padding:'4px 8px' }}>← Back</button>
+        <div style={{ width:1, height:20, background:'var(--b-1)' }}/>
+        <div style={{ fontFamily:'JetBrains Mono,monospace', fontSize:9, fontWeight:800,
+          color:'var(--p2)', letterSpacing:1.5, background:'rgba(232,89,12,0.12)',
+          padding:'2px 8px', borderRadius:4 }}>DRILL</div>
+        {role && role !== 'none' && (
+          <span style={{ fontSize:10, color:'var(--t-3)' }}>
+            {role === 'creator' ? 'Trainer' : 'Trainee'}
+            {person?.hrCode ? ' · ' + person.hrCode : ''}
+          </span>
+        )}
+        <div style={{ flex:1 }}/>
+        <button style={{ padding:'6px 12px', fontSize:11, background:'transparent',
+          border:'1px solid var(--b-1)', borderRadius:6, color:'var(--t-3)', cursor:'pointer' }}
+          disabled={busyNav === 'trainee'}
+          onClick={onOpenTrainee}>
+          {busyNav === 'trainee' ? '…' : role === 'creator' ? 'Trainee data' : 'My progress'}
+        </button>
+        {role === 'creator' && <RetakeRequests trainerEmail={person?.email}/>}
+        {role === 'creator' && (
+          <button className="btn-orange" style={{ padding:'6px 14px', fontSize:12 }}
+            onClick={onNewQuiz}>+ New quiz</button>
+        )}
+      </div>
+      <div style={{ flex:1, overflowY:'auto', padding:24, maxWidth:880, margin:'0 auto', width:'100%' }}>
+        {children}
+      </div>
+    </div>
+  )
+}
 
 export default function DrillPage({ onBack }) {
   const { profile } = useAuth()
@@ -53,6 +102,7 @@ export default function DrillPage({ onBack }) {
   // is 55 columns and grows per clip per attempt.
   const [bundle,  setBundle]  = useState(null)
   const [busyNav, setBusyNav] = useState('')
+  const [publishing, setPublishing] = useState('')
   const [target,  setTarget]  = useState(null)   // { view, quiz?, hrCode? }
 
   // role: login identifies, the Supervisors tab authorises
@@ -134,6 +184,35 @@ export default function DrillPage({ onBack }) {
   }, [person?.hrCode, quizzes.length])
 
   /** Read everything the dashboards and review need, once. */
+  /**
+   * Publish a draft in place.
+   *
+   * The quiz, its clips and its answer key are already in the sheet — only the
+   * status cell differs — so this rewrites the quizzes tab with that one field
+   * changed rather than asking the trainer to rebuild everything. A quiz with
+   * nobody assigned is refused, because publishing it would make it visible to
+   * no one.
+   */
+  async function publishDraft(quiz) {
+    setError('')
+    const assigned = String(quiz.assigned_hr_codes || '').split('|').filter(Boolean)
+    if (!assigned.length) {
+      setError('Assign at least one collector before publishing — otherwise nobody can see it.')
+      return
+    }
+    setPublishing(quiz.quiz_id)
+    try {
+      const rows = await readTab(TAB_QUIZZES)
+      const next = rows.map(r => r.quiz_id === quiz.quiz_id
+        ? { ...r, status: QUIZ_STATUS.PUBLISHED, updated_at: new Date().toISOString() }
+        : r)
+      await replaceTabRows(TAB_QUIZZES, QUIZZES_COLUMNS, next)
+      await refresh()
+    } catch (e) {
+      setError('Could not publish: ' + (e.message || e))
+    } finally { setPublishing('') }
+  }
+
   async function openWithData(view, opts = {}) {
     setBusyNav(view); setError('')
     try {
@@ -305,48 +384,16 @@ export default function DrillPage({ onBack }) {
   )
 
   // ── list ──
-  const Shell = ({ children }) => (
-    <div style={{ height:'100vh', display:'flex', flexDirection:'column',
-      background:'var(--bg)', color:'var(--t-1)', overflow:'hidden' }}>
-      <div style={{ flexShrink:0, height:48, background:'var(--bg-2)',
-        borderBottom:'1px solid var(--b-1)', display:'flex', alignItems:'center',
-        padding:'0 16px', gap:12 }}>
-        <button onClick={onBack} style={{ background:'none', border:'none',
-          color:'var(--t-3)', cursor:'pointer', fontSize:11, padding:'4px 8px' }}>← Back</button>
-        <div style={{ width:1, height:20, background:'var(--b-1)' }}/>
-        <div style={{ fontFamily:'JetBrains Mono,monospace', fontSize:9, fontWeight:800,
-          color:'var(--p2)', letterSpacing:1.5, background:'rgba(232,89,12,0.12)',
-          padding:'2px 8px', borderRadius:4 }}>DRILL</div>
-        {role && role !== 'none' && (
-          <span style={{ fontSize:10, color:'var(--t-3)' }}>
-            {role === 'creator' ? 'Trainer' : 'Trainee'}
-            {person?.hrCode ? ' · ' + person.hrCode : ''}
-          </span>
-        )}
-        <div style={{ flex:1 }}/>
-        <button style={{ padding:'6px 12px', fontSize:11, background:'transparent',
-          border:'1px solid var(--b-1)', borderRadius:6, color:'var(--t-3)', cursor:'pointer' }}
-          disabled={busyNav === 'trainee'}
-          onClick={() => openWithData('trainee', { hrCode: person?.hrCode })}>
-          {busyNav === 'trainee' ? '…' : role === 'creator' ? 'Trainee data' : 'My progress'}
-        </button>
-        {role === 'creator' && <RetakeRequests trainerEmail={person?.email}/>}
-        {role === 'creator' && (
-          <button className="btn-orange" style={{ padding:'6px 14px', fontSize:12 }}
-            onClick={() => setView('build')}>+ New quiz</button>
-        )}
-      </div>
-      <div style={{ flex:1, overflowY:'auto', padding:24, maxWidth:880, margin:'0 auto', width:'100%' }}>
-        {children}
-      </div>
-    </div>
-  )
-
+  const shellProps = {
+    onBack, role, person, busyNav,
+    onOpenTrainee: () => openWithData('trainee', { hrCode: person?.hrCode }),
+    onNewQuiz: () => setView('build'),
+  }
   if (role === null || loading) return (
-    <Shell><div style={{ color:'var(--t-3)', fontSize:13 }}>Loading…</div></Shell>)
+    <DrillShell {...shellProps}><div style={{ color:'var(--t-3)', fontSize:13 }}>Loading…</div></DrillShell>)
 
   if (role === 'none') return (
-    <Shell>
+    <DrillShell {...shellProps}>
       <div className="card" style={{ padding:24 }}>
         <div style={{ fontSize:14, fontWeight:700, marginBottom:8 }}>No DRILL access</div>
         <div style={{ fontSize:12, color:'var(--t-3)', lineHeight:1.6 }}>
@@ -355,7 +402,7 @@ export default function DrillPage({ onBack }) {
           {error && <><br/><br/><span style={{ color:'#FF453A' }}>{error}</span></>}
         </div>
       </div>
-    </Shell>
+    </DrillShell>
   )
 
   const pendingReq = myReqs.find(r => r.status === 'pending')
@@ -363,7 +410,7 @@ export default function DrillPage({ onBack }) {
   const approved   = myReqs.find(r => r.status === 'approved')
 
   return (
-    <Shell>
+    <DrillShell {...shellProps}>
       {error && (
         <div style={{ background:'rgba(255,69,58,0.08)', border:'1px solid rgba(255,69,58,0.3)',
           borderRadius:8, padding:'10px 12px', fontSize:12, color:'#FF453A', marginBottom:14 }}>
@@ -443,6 +490,24 @@ export default function DrillPage({ onBack }) {
                     {busyNav === 'review' ? '…' : 'Review'}
                   </button>
                 )}
+                {/* A draft can be assigned and published. Dashboard is the only
+                    thing that genuinely needs a published quiz, because there
+                    are no attempts to report on until then. */}
+                {role === 'creator' && q.status !== QUIZ_STATUS.PUBLISHED && (
+                  <>
+                    <button style={{ padding:'7px 13px', fontSize:12, background:'transparent',
+                      border:'1px solid var(--b-1)', borderRadius:7, color:'var(--t-2)',
+                      cursor:'pointer' }}
+                      onClick={() => setAssignFor(q)}>
+                      Assign
+                    </button>
+                    <button className="btn-orange" style={{ padding:'7px 13px', fontSize:12 }}
+                      disabled={publishing === q.quiz_id}
+                      onClick={() => publishDraft(q)}>
+                      {publishing === q.quiz_id ? 'Publishing…' : 'Publish'}
+                    </button>
+                  </>
+                )}
                 {role === 'creator' && q.status === QUIZ_STATUS.PUBLISHED && (
                   <>
                     <button style={{ padding:'7px 13px', fontSize:12, background:'transparent',
@@ -479,7 +544,7 @@ export default function DrillPage({ onBack }) {
         <AssignPanel quiz={assignFor} assignedBy={person?.email}
           onClose={() => { setAssignFor(null); refresh() }}/>
       )}
-    </Shell>
+    </DrillShell>
   )
 }
 

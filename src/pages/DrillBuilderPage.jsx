@@ -55,6 +55,40 @@ function Stat({ n, label, color }) {
   )
 }
 
+/**
+ * Field, inputStyle and ghost live at MODULE scope deliberately.
+ *
+ * Field used to be declared inside DrillBuilderPage, which made every text
+ * input in the creation flow unusable: a function declared in a render body
+ * gets a NEW identity on each render, React therefore sees a different
+ * component type, and it unmounts the old subtree and mounts a fresh one. That
+ * destroys the DOM input and the focus with it — one keystroke, one remount,
+ * so only a single character could ever be typed.
+ *
+ * Declaring it here gives it one stable identity for the life of the module, so
+ * React reconciles the existing input instead of replacing it.
+ */
+function Field({ label, children }) {
+  return (
+    <div>
+      <div style={{ fontSize:10, fontWeight:700, color:'var(--t-3)', letterSpacing:0.8,
+        marginBottom:5, textTransform:'uppercase' }}>{label}</div>
+      {children}
+    </div>
+  )
+}
+
+const inputStyle = {
+  width:'100%', background:'var(--bg-3)', border:'1px solid var(--b-1)',
+  borderRadius:7, padding:'9px 12px', fontSize:13, color:'var(--t-1)',
+  outline:'none', boxSizing:'border-box',
+}
+
+const ghost = {
+  padding:'11px 0', fontSize:13, background:'transparent',
+  border:'1px solid var(--b-1)', borderRadius:8, color:'var(--t-3)', cursor:'pointer',
+}
+
 export default function DrillBuilderPage({ person, onBack, onSaved }) {
   const [step, setStep] = useState(1)
 
@@ -219,21 +253,6 @@ export default function DrillBuilderPage({ person, onBack, onSaved }) {
       setErr('Could not save: ' + (e.message || String(e)))
     } finally { setSaving(false) }
   }
-
-  const Field = ({ label, children }) => (
-    <div>
-      <div style={{ fontSize:10, fontWeight:700, color:'var(--t-3)', letterSpacing:0.8,
-        marginBottom:5, textTransform:'uppercase' }}>{label}</div>
-      {children}
-    </div>
-  )
-  const inputStyle = {
-    width:'100%', background:'var(--bg-3)', border:'1px solid var(--b-1)',
-    borderRadius:7, padding:'9px 12px', fontSize:13, color:'var(--t-1)',
-    outline:'none', boxSizing:'border-box',
-  }
-  const ghost = { padding:'11px 0', fontSize:13, background:'transparent',
-    border:'1px solid var(--b-1)', borderRadius:8, color:'var(--t-3)', cursor:'pointer' }
 
   const filteredTrainees = trainees.filter(t => {
     if (!search.trim()) return true
