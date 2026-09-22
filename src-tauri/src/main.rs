@@ -1447,7 +1447,31 @@ async fn cut_clips(
 
 // --- Google Sheets API via Service Account JWT --------------------------------
 const SA_CLIENT_EMAIL: &str = "mark-reporter@mark-app-498618.iam.gserviceaccount.com";
-const SA_PRIVATE_KEY: &str = "-----BEGIN PRIVATE KEY-----\nMIIEvAIBADANBgkqhkiG9w0BAQEFAASCBKYwggSiAgEAAoIBAQDppEco89tq/jUH\nn7Krqf15QeKUnw03Js9FwLaaocMAtpgtvG0cP3sBBFQkhEAsDLVh1m69jRAKZcN2\n1FOShXhhmlxggl4Z8fkJF+fUqQyPGTtCm9BeeKlDpfNBuWSznQl+gIIn4Gn0YInY\nI0LC0E2umQFNxf7kIhV1D14Ymwn3MmpdXMFjp0kg3odSmp4jwc9by+IVS8GjdctW\nVrOLkxM8wzKi0cMFYtBXJVIRdm6IIxJwyHPVPkyNyYBJARifdy63D71ubfnLCXvq\n5dhyr/ViX8vnzBFLkYDGHss9Uy4r3CymSnfwSSJng0wWtK8MIIQVJEcEpRaL2uk2\n49JhfZ4JAgMBAAECggEABRUOpYsnwMwj9/+8ZE63uwwYwz4Hd1A9ONRK6eeuunn+\nVZuwQumgQcLSmBMWuJk+gSY9NUXXgru5H1avNQl5YiQjB3K73HQemZj0cR7hQqPx\nnaQOibOLDl6SgUw+BB3cdOzo3Thc4v+OQrjs95hjjDKmAYdW9qbwJmJNxsVpQirY\nW3KrQtMDsrw6afuai8CWSlrA6ucKSf1t1XflG6565ZkjnP1NlueTJ1ojK5eeVac9\nnMrn0jLQ4/JCBSZBr7x3KAHLQX6e8929V08X3ObnT1HVyWfzfYQmMOgJA7P/TwG9\nahtRTCktZ4PynDBtVSVMs/3rLxw6qHCi8tZ0eNc5IQKBgQD10Q/ZAkH34jShCwcF\nbQ94Twrri7LcgYtInE5H5anikdT6hRgXXugHYn5S0T0Zsf0QK3l9Zee2bN6ugDjq\nZCqAr4aEqyK+VL+jSODgx9dHngRRSozrZKvr0av3FGkj0ZU1O3X6hwThyfN0RX+W\nO7yL/VFuQyTWpuwg/H7Ki513sQKBgQDzUhknBgwMnfTrnS+gq7f5Wg2boRWXRB2x\nADSzu+SgdFVFySFYpipxwUGjONbkZz88hac0IWC3bDUno1nBj0x1rXU2Mm2s5XTF\nwPaOOjg4SNQD05mz5Grk/aBKYe1nxq/xS1zVvIEhvR5yy9u9O3vOFHMdxH6ZptYj\n83Md1xj52QKBgFuXSSNfnvrg0yFKPZR8/W2jbfsz8zIMJryoWNabMUCVe9jYbJCQ\nsT3HKjBrfCut0RAMUtkxdjPXvuUgK5TSO6/1NtcJ+QkYBMuvZPL8Iy+xJgSwFW/D\n8/cLCdsnRMGu3ryV6jCtzFjg6ZBiMNbmbStv+L5v0DMWwRbNXeTUPpkRAoGAYDcX\noRnADAEuBzlJyxP8FMrqVJ8XBZC22PYG4QeseVJnIchNultCr2bHCL8CIqE9HTaQ\njomgUAem4Tyz0llS17m2fq7kNZkqWsRZ+pXFA2SxCa5TuhHZvyEXkDI3CXFEw3qU\nhCQdP/UjpCs+gg6Sf0QQ3TWFBkc1qFOtMqCKzMkCgYBmPGzmQ2xGEa/b4PnIrblR\nM2Y4e9zCEV6hc/37qy0LJIpe0iZTUPMd8pIyNtZXVWFDsJ/U3ai3zUKCYAJAGct8\nZHnLFBl8rjsWB7woJk6LdVeYItgU/jVAw54n5PwEaajFvZO15q1zsAOjhj/vmksi\nQIGusOLsrprvflY8YpinSQ==\n-----END PRIVATE KEY-----\n";
+/// The service-account private key.
+///
+/// SECURITY: this key used to be a `const` with the PEM written out in full,
+/// committed to the repository. It grants full `spreadsheets` and `drive` scope
+/// on the project, so anyone able to read the repo could read and write every
+/// sheet MARK uses. The four other credentials in this file already come from
+/// GitHub Actions secrets via `option_env!`; this one did not.
+///
+/// It now prefers MARK_SA_PRIVATE_KEY, injected at build time. The embedded
+/// copy remains ONLY as a fallback so builds keep working until the secret is
+/// configured and the key is rotated — it is not a fix on its own. Once the
+/// secret is in place and the old key revoked in Google Cloud, delete
+/// SA_PRIVATE_KEY_LEGACY and the fallback below.
+///
+/// Newlines: a GitHub secret holds the PEM with real line breaks, which survive
+/// as-is. The legacy literal uses escaped \n, hence no unescaping here.
+fn sa_private_key() -> String {
+    match option_env!("MARK_SA_PRIVATE_KEY") {
+        Some(k) if !k.trim().is_empty() => k.replace("\\n", "\n"),
+        _ => SA_PRIVATE_KEY_LEGACY.to_string(),
+    }
+}
+
+// DEPRECATED — exposed, pending rotation. See sa_private_key().
+const SA_PRIVATE_KEY_LEGACY: &str = "-----BEGIN PRIVATE KEY-----\nMIIEvAIBADANBgkqhkiG9w0BAQEFAASCBKYwggSiAgEAAoIBAQDppEco89tq/jUH\nn7Krqf15QeKUnw03Js9FwLaaocMAtpgtvG0cP3sBBFQkhEAsDLVh1m69jRAKZcN2\n1FOShXhhmlxggl4Z8fkJF+fUqQyPGTtCm9BeeKlDpfNBuWSznQl+gIIn4Gn0YInY\nI0LC0E2umQFNxf7kIhV1D14Ymwn3MmpdXMFjp0kg3odSmp4jwc9by+IVS8GjdctW\nVrOLkxM8wzKi0cMFYtBXJVIRdm6IIxJwyHPVPkyNyYBJARifdy63D71ubfnLCXvq\n5dhyr/ViX8vnzBFLkYDGHss9Uy4r3CymSnfwSSJng0wWtK8MIIQVJEcEpRaL2uk2\n49JhfZ4JAgMBAAECggEABRUOpYsnwMwj9/+8ZE63uwwYwz4Hd1A9ONRK6eeuunn+\nVZuwQumgQcLSmBMWuJk+gSY9NUXXgru5H1avNQl5YiQjB3K73HQemZj0cR7hQqPx\nnaQOibOLDl6SgUw+BB3cdOzo3Thc4v+OQrjs95hjjDKmAYdW9qbwJmJNxsVpQirY\nW3KrQtMDsrw6afuai8CWSlrA6ucKSf1t1XflG6565ZkjnP1NlueTJ1ojK5eeVac9\nnMrn0jLQ4/JCBSZBr7x3KAHLQX6e8929V08X3ObnT1HVyWfzfYQmMOgJA7P/TwG9\nahtRTCktZ4PynDBtVSVMs/3rLxw6qHCi8tZ0eNc5IQKBgQD10Q/ZAkH34jShCwcF\nbQ94Twrri7LcgYtInE5H5anikdT6hRgXXugHYn5S0T0Zsf0QK3l9Zee2bN6ugDjq\nZCqAr4aEqyK+VL+jSODgx9dHngRRSozrZKvr0av3FGkj0ZU1O3X6hwThyfN0RX+W\nO7yL/VFuQyTWpuwg/H7Ki513sQKBgQDzUhknBgwMnfTrnS+gq7f5Wg2boRWXRB2x\nADSzu+SgdFVFySFYpipxwUGjONbkZz88hac0IWC3bDUno1nBj0x1rXU2Mm2s5XTF\nwPaOOjg4SNQD05mz5Grk/aBKYe1nxq/xS1zVvIEhvR5yy9u9O3vOFHMdxH6ZptYj\n83Md1xj52QKBgFuXSSNfnvrg0yFKPZR8/W2jbfsz8zIMJryoWNabMUCVe9jYbJCQ\nsT3HKjBrfCut0RAMUtkxdjPXvuUgK5TSO6/1NtcJ+QkYBMuvZPL8Iy+xJgSwFW/D\n8/cLCdsnRMGu3ryV6jCtzFjg6ZBiMNbmbStv+L5v0DMWwRbNXeTUPpkRAoGAYDcX\noRnADAEuBzlJyxP8FMrqVJ8XBZC22PYG4QeseVJnIchNultCr2bHCL8CIqE9HTaQ\njomgUAem4Tyz0llS17m2fq7kNZkqWsRZ+pXFA2SxCa5TuhHZvyEXkDI3CXFEw3qU\nhCQdP/UjpCs+gg6Sf0QQ3TWFBkc1qFOtMqCKzMkCgYBmPGzmQ2xGEa/b4PnIrblR\nM2Y4e9zCEV6hc/37qy0LJIpe0iZTUPMd8pIyNtZXVWFDsJ/U3ai3zUKCYAJAGct8\nZHnLFBl8rjsWB7woJk6LdVeYItgU/jVAw54n5PwEaajFvZO15q1zsAOjhj/vmksi\nQIGusOLsrprvflY8YpinSQ==\n-----END PRIVATE KEY-----\n";
 
 #[derive(serde::Serialize, serde::Deserialize)]
 struct JwtClaims {
@@ -1490,7 +1514,8 @@ async fn get_google_access_token() -> Result<String, String> {
         iat: now,
     };
 
-    let key = EncodingKey::from_rsa_pem(SA_PRIVATE_KEY.as_bytes())
+    let pem = sa_private_key();
+    let key = EncodingKey::from_rsa_pem(pem.as_bytes())
         .map_err(|e| format!("Key error: {}", e))?;
 
     let jwt = encode(&Header::new(Algorithm::RS256), &claims, &key)

@@ -81,6 +81,9 @@ jobs:
           MARK_FIREBASE_CLIENT_SECRET: ${{ secrets.MARK_FIREBASE_CLIENT_SECRET }}
           MARK_GMAIL_SENDER_REFRESH: ${{ secrets.MARK_GMAIL_SENDER_REFRESH }}
           MARK_GMAIL_APP_PASSWORD: ${{ secrets.MARK_GMAIL_APP_PASSWORD }}
+          # Service-account key. Until this secret exists the build falls back
+          # to the embedded copy, so nothing breaks in the meantime.
+          MARK_SA_PRIVATE_KEY: ${{ secrets.MARK_SA_PRIVATE_KEY }}
           VITE_GH_SYNC_TOKEN: ${{ secrets.VITE_GH_SYNC_TOKEN }}
         with:
           tagName: v__VERSION__

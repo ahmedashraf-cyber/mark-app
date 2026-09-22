@@ -2,7 +2,12 @@
 // Shows a banner if update is available
 
 const REPO = 'ahmedashraf-cyber/mark-app'
-export const CURRENT_VERSION = '7.8.89' // matches package.json version
+export const CURRENT_VERSION = '7.9.8' // MUST match package.json
+
+// NOTE: this drifted to 7.8.89 while package.json reached 7.9.8, because the
+// version bump replaces the PREVIOUS number and this constant had fallen out of
+// step. Every user was compared against 7.8.89, so the update banner fired even
+// when they were already current. Keep it in the bump list.
 
 function semverGt(a, b) {
   // Returns true if a > b
