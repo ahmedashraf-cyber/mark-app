@@ -714,7 +714,23 @@ fn patch_one_shortcut(lnk_path: &std::path::Path) -> Result<bool, String> {
 // marker) does not match, so it gets stripped and replaced — that's what was
 // previously frozen by a fixed marker. Bump this whenever the embedded bridge
 // changes so existing installs re-embed the new version.
-const ASAR_MARKER: &str = "<!-- MARK_BRIDGE_INJECTED v7.8.89 -->";
+/// Marker written into Tag Once's app.html alongside the bridge script.
+///
+/// DERIVED FROM THE CRATE VERSION, never hardcoded. It used to be the literal
+/// string "<!-- MARK_BRIDGE_INJECTED v7.8.89 -->", which combined with the
+/// "already patched" early return below meant that once Tag Once had been
+/// patched at v7.8.89 it could NEVER be re-patched: every later Embed Bridge
+/// found the marker and returned without writing. Tag Once therefore kept
+/// running the v7.8.89 bridge script while MARK itself moved on many versions,
+/// and any data a newer bridge produced simply never arrived.
+///
+/// Because this is built from CARGO_PKG_VERSION, every release has a distinct
+/// marker and the comparison below becomes meaningful rather than always true.
+const ASAR_MARKER_PREFIX: &str = "<!-- MARK_BRIDGE_INJECTED v";
+
+fn asar_marker() -> String {
+    format!("{}{} -->", ASAR_MARKER_PREFIX, env!("CARGO_PKG_VERSION"))
+}
 
 #[command]
 fn patch_tag_once_asar() -> Result<String, String> {
@@ -798,8 +814,12 @@ fn patch_asar_impl(asar_path: &std::path::Path) -> Result<String, String> {
     let html_str = std::str::from_utf8(&data[html_start..html_end])
         .map_err(|e| format!("app.html not utf8: {e}"))?;
 
-    if html_str.contains(ASAR_MARKER) {
-        return Ok("already patched".to_string());
+    // Skip ONLY when this exact version is already injected. A marker from any
+    // other version falls through to the strip-and-reinject below, which is
+    // what makes an Embed Bridge after a MARK update actually do something.
+    let marker = asar_marker();
+    if html_str.contains(marker.as_str()) {
+        return Ok(format!("already patched with v{}", env!("CARGO_PKG_VERSION")));
     }
 
     // Strip any previous MARK bridge injection (v1 or older) before injecting v2.
@@ -815,7 +835,7 @@ fn patch_asar_impl(asar_path: &std::path::Path) -> Result<String, String> {
     // Build injection: marker + <script>...bridge code...</script> before </body>
     let injection = format!(
         "    {}\n    <script>\n{}\n    </script>\n  </body>",
-        ASAR_MARKER, BRIDGE_SCRIPT
+        marker, BRIDGE_SCRIPT
     );
     let new_html = html_str_clean.replace("</body>", &injection);
     if new_html == html_str_clean {

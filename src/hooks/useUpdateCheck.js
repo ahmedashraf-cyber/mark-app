@@ -2,7 +2,7 @@
 // Shows a banner if update is available
 
 const REPO = 'ahmedashraf-cyber/mark-app'
-export const CURRENT_VERSION = '7.9.10' // MUST match package.json
+export const CURRENT_VERSION = '7.9.11' // synced from package.json by scripts/sync-version.js
 
 // NOTE: this drifted to 7.8.89 while package.json reached 7.9.10, because the
 // version bump replaces the PREVIOUS number and this constant had fallen out of
