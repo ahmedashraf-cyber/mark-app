@@ -1,5 +1,5 @@
 (async function(){
-  const BRIDGE_VERSION = '7.9.11';
+  const BRIDGE_VERSION = '7.9.12';
   if(window.__MARK_BRIDGE_VERSION__ === BRIDGE_VERSION){console.log('[MARK] bridge already running (v' + BRIDGE_VERSION + ')');return;}
   if(window.__MARK_BRIDGE_STOP__) window.__MARK_BRIDGE_STOP__();
   window.__MARK_BRIDGE__ = true;
@@ -1918,6 +1918,11 @@
           reviewerIds,
           identities: identitiesArray(),
           lineupPlayers,
+          // Which bridge actually produced this result. Without it, a stale
+          // bridge is indistinguishable from a current one: it connects,
+          // answers, and returns correct scores while silently omitting
+          // anything added after its own version.
+          bridgeVersion: BRIDGE_VERSION,
           moduleScores,
           reviewGroupScores: newReviewGroupScores || reviewGroupScores,
           computedErrors,

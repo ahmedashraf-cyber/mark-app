@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { showToast } from '../utils/toast'
+import { CURRENT_VERSION } from '../hooks/useUpdateCheck'
 import { db } from '../firebase/config'
 import { collection, addDoc, serverTimestamp, getDocs, query, where, deleteDoc, doc, getDoc, setDoc } from 'firebase/firestore'
 import { useAuth } from '../hooks/useAuth.jsx'
@@ -18,24 +19,36 @@ const fmt = (s) => {
 }
 
 // ── Bridge status pill ─────────────────────────────────────────────────────────
-function BridgePill({ status }) {
+function BridgePill({ status, bridgeVersion }) {
   const connected = status === 'connected'
+  // A stale bridge was invisible: it connected, answered, and produced correct
+  // scores while silently lacking anything newer than its own version. Two
+  // frozen version strings kept Tag Once on v7.8.89 for many releases and
+  // nothing in the UI said so. Now it does.
+  const stale = connected && bridgeVersion && bridgeVersion !== CURRENT_VERSION
   return (
     <div style={{
       display: 'flex', alignItems: 'center', gap: 6,
       padding: '4px 10px', borderRadius: 20,
-      background: connected ? 'rgba(48,209,88,0.1)' : 'rgba(255,255,255,0.05)',
-      border: `1px solid ${connected ? 'rgba(48,209,88,0.3)' : 'rgba(255,255,255,0.1)'}`,
+      background: stale ? 'rgba(255,149,0,0.12)' : connected ? 'rgba(48,209,88,0.1)' : 'rgba(255,255,255,0.05)',
+      border: `1px solid ${stale ? 'rgba(255,149,0,0.45)' : connected ? 'rgba(48,209,88,0.3)' : 'rgba(255,255,255,0.1)'}`,
       transition: 'all .3s',
     }}>
       <div style={{
         width: 6, height: 6, borderRadius: '50%',
-        background: connected ? '#30D158' : 'var(--t-3)',
+        background: stale ? '#FF9500' : connected ? '#30D158' : 'var(--t-3)',
         boxShadow: connected ? '0 0 6px rgba(48,209,88,0.6)' : 'none',
         transition: 'all .3s',
       }}/>
-      <span style={{ fontSize: 11, fontWeight: 600, color: connected ? '#30D158' : 'var(--t-3)', fontFamily: 'DM Sans' }}>
-        {connected ? 'Bridge connected' : 'Bridge disconnected'}
+      <span style={{ fontSize: 11, fontWeight: 600,
+        color: stale ? '#FF9500' : connected ? '#30D158' : 'var(--t-3)', fontFamily: 'DM Sans' }}
+        title={stale
+          ? `The collection app is running bridge v${bridgeVersion} but MARK v${CURRENT_VERSION} `
+            + `expects v${CURRENT_VERSION}. Click Embed Bridge, then close and reopen the `
+            + `collection app. Until then, anything added since v${bridgeVersion} is missing.`
+          : connected ? `Bridge v${bridgeVersion || '?'}` : ''}>
+        {stale ? `Bridge v${bridgeVersion} — OUT OF DATE`
+          : connected ? 'Bridge connected' : 'Bridge disconnected'}
       </span>
     </div>
   )
@@ -2134,14 +2147,28 @@ export default function AuditPage({ session, onBack, onFullReport, initialResult
   async function handleInjectBridge() {
     try {
       const res = await invoke('patch_tag_once_asar')
-      if (typeof res === 'string' && res.toLowerCase().includes('already')) {
-        alert('Bridge is already embedded (current version). If the collection app is open, just reload it.')
+      console.log('[MARK] patch_tag_once_asar returned:', res)
+      const already = typeof res === 'string' && res.toLowerCase().includes('already')
+      // Show what the patcher ACTUALLY said, including the version. The generic
+      // message used to hide the difference between "already patched" from an
+      // old binary and "already patched with v7.9.11" from a current one, which
+      // made a stale bridge impossible to diagnose from the UI.
+      if (already) {
+        alert(`Bridge already embedded — ${res}\n\n`
+          + `MARK v${CURRENT_VERSION} expects bridge v${CURRENT_VERSION}.\n\n`
+          + `The file on disk is up to date, but a RUNNING collection app still `
+          + `has the old script in memory — Electron reads it once at startup. `
+          + `Close the collection app completely (check the tray and Task `
+          + `Manager), then reopen it.`)
       } else {
-        alert('Bridge embedded \u2713 \u2014 now reopen the collection app. From now on it loads automatically on every page, so sync stays connected across halves, matches and modes.')
+        alert(`Bridge embedded \u2713 — ${res}\n\n`
+          + `Now close the collection app completely and reopen it. From then on `
+          + `it loads automatically on every page, so sync stays connected across `
+          + `halves, matches and modes.`)
       }
     } catch(e) {
       console.warn('[MARK] embed:', e)
-      alert(String(e))
+      alert('Could not embed the bridge:\n\n' + String(e))
     }
   }
 
@@ -3071,7 +3098,7 @@ export default function AuditPage({ session, onBack, onFullReport, initialResult
         </div>
 
         {/* Bridge status */}
-        <BridgePill status={bridgeStatus}/>
+        <BridgePill status={bridgeStatus} bridgeVersion={results?.bridgeVersion}/>
 
         {/* Inject bridge */}
         <button className="btn-ghost" style={{ padding: '5px 14px', fontSize: 12, display: 'flex', alignItems: 'center', gap: 6 }}
