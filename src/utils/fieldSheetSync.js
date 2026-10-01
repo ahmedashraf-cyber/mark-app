@@ -188,7 +188,7 @@ export function buildEventRows(events) {
       pair_id:                 ev.pair_id       || '',
       pair_status:             ev.pair_status   || '',
       duration_ms:             durationMs,
-      possession_certain:      ev.possessionCertain === false ? '0' : ev.possessionCertain === true ? '1' : '',
+      possession_certain: '',  // possession removed; column kept for old rows
       miscommunication_team:   ev.miscommunicationTeam || '',
       ...attrCols,
       model_shape:             ev.model_shape || '',  // Pressure Code on model rows; empty on live FIELD rows

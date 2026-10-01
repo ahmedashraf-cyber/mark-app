@@ -119,9 +119,12 @@ function wouldOpenConflict(openStates, eventDef) {
 }
 
 // ─── Team prompt ──────────────────────────────────────────────────────────────
+// H and A as the primary keys; 1 and 2 still work for collectors used to them.
+// These letters collide with Hold Up Duel (H) and Tackle (A) in the idle step,
+// but the team prompt is a separate step so the two can never be live at once.
 const TEAM_OPTIONS = [
-  { code:'home', label:'Home', key:'1', color:'#0A84FF', bg:'rgba(10,132,255,0.15)' },
-  { code:'away', label:'Away', key:'2', color:'#E8590C', bg:'rgba(232,89,12,0.15)'  },
+  { code:'home', label:'Home', key:'H', color:'#0A84FF', bg:'rgba(10,132,255,0.15)' },
+  { code:'away', label:'Away', key:'A', color:'#E8590C', bg:'rgba(232,89,12,0.15)'  },
 ]
 
 export default function FieldPage({ session: initialSession, onDone, onBack }) {
@@ -164,6 +167,9 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
   // disagree. Every read inside the handler goes through possessionRef;
   // rendering still reads `possession` so the UI stays reactive.
   const possessionRef = useRef({ team: null, certain: false })
+  // What to do once the collector has chosen a side. A ref, not state, because
+  // chooseTeam reads it in the same tick the keypress sets the step.
+  const afterTeamRef = useRef(null)
   useEffect(() => { possessionRef.current = possession }, [possession])
 
   // ── Capture state machine ──────────────────────────────────────────────────
@@ -305,7 +311,11 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
     if (eventDef.forceClosesAll) {
       Object.keys(openStates).forEach(oid => {
         const pair = OPEN_STATE_PAIRS.find(p=>p.openId===oid)
-        if (pair) commitEvent(EVENT_BY_ID[pair.closeId],vt,null,[],null,null,openStates[oid]?.team,'inferred',true)
+        // Auto-generated close for an open state when the half ends. There is
+        // no collector interaction to prompt for, so it carries the team the
+        // OPEN event was given — which was itself entered manually — and is
+        // marked 'manual' because no inference took place.
+        if (pair) commitEvent(EVENT_BY_ID[pair.closeId],vt,null,[],null,null,openStates[oid]?.team,'manual',true)
       })
       setOpenStates({})
     }
@@ -325,63 +335,69 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
     setCollectedGroups([])
     setCurrentSelections([])
 
-    // Resolve team from possession (or keep null for explicit/n/a events)
-    const resolvedTeam = resolveTeam(eventDef.id, possessionRef.current)
-    const teamSrc = resolvedTeam !== null ? 'inferred' : null
-    setPendingTeam(resolvedTeam)
-    setPendingTeamSource(teamSrc)
+    // No team is resolved from anything. It is cleared and then asked for.
+    setPendingTeam(null)
+    setPendingTeamSource(null)
 
-    // Pass type inference
+    // ── EVERY event asks Home/Away FIRST ──────────────────────────────────
+    // Pass, Goal keeper and the variant events each used to jump straight to
+    // their own first step and so never saw a team prompt. They now set up
+    // whatever comes next, record it, and go to the team step; chooseTeam()
+    // resumes from there once a side is chosen.
+    //
+    // Pressure end previously inherited its team from the paired Pressure start
+    // and skipped the prompt entirely. It no longer does — pair_id still links
+    // them for the duration calculation, but team is entered per event.
+    //
+    // There is no branch left that saves an event without a chosen side.
+    let next = { step: 'group', chain: eventDef.groups || [] }
+
     if (eventDef.id === 'pass') {
+      // The pass TYPE is still inferred — that is unchanged and does not use
+      // team. Only the team prompt is inserted ahead of it.
       const { type, defaulted } = inferPassType(events, possessionRef.current)
       setPendingType(type)
       setPendingTypeSource(defaulted ? 'inferred_default' : 'inferred')
+      next = { step: 'type_confirm', chain: eventDef.groups || [] }
+    } else if (eventDef.id === 'goal_keeper' && eventDef.typeGroup) {
+      next = { step: 'group', chain: [eventDef.typeGroup] }
+    } else if (eventDef.variants) {
+      next = { step: 'group', chain: eventDef.variants.variants[0].groups }
+    }
+
+    setGroupChain(next.chain)
+    afterTeamRef.current = next
+    setCaptureStep('team')
+  }
+
+  /**
+   * The collector has chosen Home or Away.
+   *
+   * Team is now asked FIRST — immediately after the event key, before any
+   * attribute group — so this stores the side and then opens the group chain.
+   * It used to be the last step, after every group, which is why the order is
+   * inverted here rather than at the group stage.
+   *
+   * teamSource is always 'manual'. 'inferred' and 'inherited' are no longer
+   * produced anywhere.
+   */
+  function chooseTeam(side) {
+    setPendingTeam(side)
+    setPendingTeamSource('manual')
+    const next = afterTeamRef.current || { step: 'group', chain: groupChain }
+    afterTeamRef.current = null
+
+    if (next.step === 'type_confirm') {
       setCaptureStep('type_confirm')
       return
     }
-
-    // Goal keeper: show type group first
-    if (eventDef.id === 'goal_keeper' && eventDef.typeGroup) {
-      setGroupChain([eventDef.typeGroup])
+    if ((next.chain || []).length > 0) {
+      setGroupIndex(0)
+      setCurrentSelections([])
       setCaptureStep('group')
       return
     }
-
-    // Variant event with discriminator: show first group
-    if (eventDef.variants) {
-      const firstVariantGroups = eventDef.variants.variants[0].groups
-      setGroupChain(firstVariantGroups)
-      setCaptureStep('group')
-      return
-    }
-
-    // Close event with inherited team — skip team step
-    if (eventDef.closesEventId && eventDef.teamInherited && inheritedTeam) {
-      const chain = eventDef.groups || []
-      setGroupChain(chain)
-      if (chain.length > 0) {
-        setCaptureStep('group')
-      } else {
-        commitEvent(eventDef, vt, null, [], null, null, inheritedTeam, 'inherited')
-      }
-      return
-    }
-
-    // Normal event
-    const chain = eventDef.groups || []
-    setGroupChain(chain)
-    if (chain.length > 0) {
-      setCaptureStep('group')
-    } else if (needsExplicitTeam(eventDef.id)) {
-      // Keep team prompt for explicit events
-      setCaptureStep('team')
-    } else if (teamNotMeaningful(eventDef.id)) {
-      // No team — commit directly
-      commitEvent(eventDef, vt, null, [], null, null, null, null)
-    } else {
-      // Team inferred from possession — skip prompt, commit
-      commitEvent(eventDef, vt, null, [], null, null, resolvedTeam, teamSrc)
-    }
+    commitEvent(null, undefined, null, [], null, null, side, 'manual')
   }
 
   // ── Advance through group chain ────────────────────────────────────────────
@@ -391,8 +407,10 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
       setGroupIndex(nextIdx)
       setCurrentSelections([])
     } else {
-      // All groups done — go to team
-      setCaptureStep('team')
+      // All groups done. Team was chosen BEFORE the groups, so commit now
+      // rather than prompting at the end as this used to.
+      commitEvent(null, undefined, null, newGroups, null, null,
+        pendingTeam, 'manual')
     }
   }
 
@@ -405,12 +423,9 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
     function routeAfterGroups(chain) {
       if (chain.length > 0) {
         setCaptureStep('group')
-      } else if (needsExplicitTeam(pendingEvent?.id)) {
-        setCaptureStep('team')
-      } else if (teamNotMeaningful(pendingEvent?.id)) {
-        commitEvent(null, undefined, null, saved, null, null, null, null)
       } else {
-        commitEvent(null, undefined, null, saved, null, null, pendingTeam, pendingTeamSource)
+        // Team already chosen before the groups.
+        commitEvent(null, undefined, null, saved, null, null, pendingTeam, 'manual')
       }
     }
 
@@ -457,13 +472,11 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
         return
       }
       // chain exhausted — finish exactly as the normal path does
-      if (needsExplicitTeam(pendingEvent?.id)) {
-        setCaptureStep('team')
-      } else if (teamNotMeaningful(pendingEvent?.id)) {
-        commitEvent(null, undefined, null, acc, null, null, null, null)
-      } else {
-        commitEvent(null, undefined, null, acc, null, null, pendingTeam, pendingTeamSource)
-      }
+      // Team was chosen before the groups, so commit straight away.
+      // The explicit / not-meaningful / inferred branching that used to
+      // be here is gone — every event has a manually chosen team.
+      commitEvent(null, undefined, null, acc, null, null,
+        pendingTeam, 'manual')
     }
 
     // If this group is the discriminator for variants, resolve branch
@@ -511,13 +524,11 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
       setCurrentSelections([])
     } else {
       // All groups collected — route based on possession rule
-      if (needsExplicitTeam(pendingEvent?.id)) {
-        setCaptureStep('team')
-      } else if (teamNotMeaningful(pendingEvent?.id)) {
-        commitEvent(null, undefined, null, saved, null, null, null, null)
-      } else {
-        commitEvent(null, undefined, null, saved, null, null, pendingTeam, pendingTeamSource)
-      }
+      // Team was chosen before the groups, so commit straight away.
+      // The explicit / not-meaningful / inferred branching that used to
+      // be here is gone — every event has a manually chosen team.
+      commitEvent(null, undefined, null, saved, null, null,
+        pendingTeam, 'manual')
     }
   }
 
@@ -609,8 +620,8 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
 
     // For Half start: set possession from Team Side explicit prompt result
     if (realDef.id === 'half_start' && realTeam) {
-      possessionRef.current = { team: realTeam, certain: true }
-      setPossession({ team: realTeam, certain: true })
+      // possession tracking removed — nothing reads this any more
+      possessionRef.current = { team: null, certain: false }
     } else {
       // Inferred flips (successful tackle, interception won, and the rest) must
       // update the ref as well, not just state. Otherwise the very next event
@@ -720,7 +731,8 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
           setPendingTypeSource(pendingTypeSource==='inferred_default'?'inferred_default':'inferred')
           setGroupChain(chain); setGroupIndex(0); setCurrentSelections([])
           if (chain.length>0) setCaptureStep('group')
-          else setCaptureStep('team')
+          // team already chosen; nothing left to ask
+          else commitEvent(null,undefined,null,[],null,null,pendingTeam,'manual')
           return
         }
         // Number/letter override
@@ -731,7 +743,8 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
             || pendingEvent.variants.variants[0].groups
           setGroupChain(chain); setGroupIndex(0); setCurrentSelections([])
           if (chain.length>0) setCaptureStep('group')
-          else setCaptureStep('team')
+          // team already chosen; nothing left to ask
+          else commitEvent(null,undefined,null,[],null,null,pendingTeam,'manual')
         }
         return
       }
@@ -772,29 +785,21 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
       // ── Team step ────────────────────────────────────────────────────────
       if (captureStep==='team') {
         if (key==='Escape') { abandonCapture(); return }
-        if (key==='1') { commitEvent(null,undefined,null,null,null,null,'home','explicit'); return }
-        if (key==='2') { commitEvent(null,undefined,null,null,null,null,'away','explicit'); return }
-        if (key==='Enter') { commitEvent(null,undefined,null,null,null,null,null,null); return }
+        // H/A as specified; 1/2 kept as aliases for collectors used to them.
+        // No Enter-to-skip any more: team is REQUIRED on every event, so there
+        // is deliberately no path out of this step without choosing a side.
+        const side = (key==='h'||key==='H'||key==='1') ? 'home'
+                   : (key==='a'||key==='A'||key==='2') ? 'away' : null
+        if (!side) return
+        chooseTeam(side)
         return
       }
 
       // ── Idle — transport and event capture ───────────────────────────────
       if (!videoLoaded||showDoneModal) return
 
-      // Key 0 = manual possession flip
-      if (key==='0') {
-        e.preventDefault()
-        const before = possessionRef.current.team
-        const flipped = before === 'home' ? 'away' : before === 'away' ? 'home' : null
-        // write the ref immediately: an event tagged in the same tick must see
-        // the new team, not wait for the state round trip
-        possessionRef.current = { team: flipped, certain: true }
-        setPossession({ team: flipped, certain: true })
-        setFlashEvent(flipped === 'away' ? '← Possession: Away'
-          : flipped === 'home' ? '→ Possession: Home' : 'Possession unknown')
-        setTimeout(()=>setFlashEvent(null),1200)
-        return
-      }
+      // Key 0 is FREE. It was the manual possession flip, which no longer
+      // exists because nothing infers team any more. Unassigned on purpose.
 
       if (key==='ArrowUp')   { e.preventDefault(); togglePlay(); return }
       if (key==='ArrowRight'||key==='ArrowLeft') {
@@ -1198,7 +1203,7 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
                           setPendingType(opt); setPendingTypeSource('manual')
                           const chain=pendingEvent.variants.variants.find(v=>v.when.includes(opt.code))?.groups||pendingEvent.variants.variants[0].groups
                           setGroupChain(chain);setGroupIndex(0);setCurrentSelections([])
-                          if(chain.length>0)setCaptureStep('group');else setCaptureStep('team')
+                          if(chain.length>0)setCaptureStep('group');else commitEvent(null,undefined,null,[],null,null,pendingTeam,'manual')
                         }}
                         style={{display:'flex',alignItems:'center',gap:7,padding:'6px 10px',
                           background:active?'rgba(48,209,88,0.18)':'var(--bg-3)',
@@ -1222,7 +1227,7 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
                 <button onClick={()=>{
                   const chain=pendingEvent.variants.variants.find(v=>v.when.includes(pendingType?.code))?.groups||pendingEvent.variants.variants[0].groups
                   setGroupChain(chain);setGroupIndex(0);setCurrentSelections([])
-                  if(chain.length>0)setCaptureStep('group');else setCaptureStep('team')
+                  if(chain.length>0)setCaptureStep('group');else commitEvent(null,undefined,null,[],null,null,pendingTeam,'manual')
                 }} style={{marginTop:10,background:'rgba(48,209,88,0.15)',border:'1px solid rgba(48,209,88,0.3)',
                   borderRadius:7,padding:'7px 16px',color:'#30D158',cursor:'pointer',fontSize:12,fontWeight:600}}>
                   Enter — Confirm {pendingType?.label}
@@ -1272,12 +1277,15 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
             {captureStep==='team'&&(
               <>
                 <div style={{fontSize:9,fontWeight:800,color:'var(--t-3)',letterSpacing:1,marginBottom:8,textTransform:'uppercase'}}>
-                  Team — 1 Home · 2 Away · Enter skip
+                  Team — H Home · A Away · required
                 </div>
+                {/* No Skip. Team is required on every event, so there is no
+                    button that saves without a side. ESC still cancels the
+                    whole event, as it always did. */}
                 <div style={{display:'flex',gap:8}}>
-                  {[...TEAM_OPTIONS,{code:null,label:'Skip',key:'↩',color:'var(--t-3)',bg:'var(--bg-3)'}].map(t=>(
-                    <button key={t.code||'skip'}
-                      onClick={()=>commitEvent(null,undefined,null,null,null,null,t.code)}
+                  {TEAM_OPTIONS.map(t=>(
+                    <button key={t.code}
+                      onClick={()=>chooseTeam(t.code)}
                       style={{flex:1,padding:'10px 0',background:t.bg,border:`1px solid ${t.color}44`,
                         borderRadius:8,color:t.color,cursor:'pointer',fontWeight:700,fontSize:13,
                         display:'flex',alignItems:'center',justifyContent:'center',gap:8}}>

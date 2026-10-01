@@ -893,7 +893,10 @@ const INTENTIONAL_DUPLICATES = new Set(['G','S','K'])  // G=pressure toggle, S=s
   })
   // Confirm digit 0 is never a hotkey (reserved for possession flip in FieldPage)
   if (seen['0']) {
-    console.error(`[MARK fieldExtras] Key '0' (digit) is reserved for possession flip but is also bound to: ${seen['0'].join(', ')}`)
+    // '0' was reserved for the possession flip, which no longer exists. The key
+    // is now FREE and unassigned — this stays only to report a double binding
+    // if something claims it later.
+    console.warn(`[MARK fieldExtras] Key '0' is unassigned since possession was removed, but is bound to: ${seen['0'].join(', ')}`)
   }
 })();
 
@@ -1086,78 +1089,35 @@ export const POSSESSION_RULES = {
 // possessionState: { team: 'home'|'away'|null, certain: boolean }
 //
 // resolveTeam(eventId, possessionState) → team for this event ('home'|'away'|null)
-export function resolveTeam(eventId, possessionState) {
-  const rule = POSSESSION_RULES[eventId]
-  if (!rule || rule.performedBy === null) return null  // team not meaningful
-  if (rule.performedBy === 'explicit') return null     // will be prompted
-  if (!possessionState?.team) return null              // possession unknown
-  if (rule.performedBy === 'possessing')     return possessionState.team
-  if (rule.performedBy === 'non-possessing') return possessionState.team === 'home' ? 'away' : 'home'
+/**
+ * POSSESSION INFERENCE IS REMOVED. Always returns null.
+ *
+ * Returning null means "no team known — ask the collector", so every one of the
+ * 38 events now takes the same path that Pressure start and Card already took.
+ * Nothing infers a team from possession, from the offence/defence panel, or
+ * from a previous event, and nothing inherits one.
+ *
+ * The function is kept rather than deleted, and POSSESSION_RULES with it,
+ * because the rules table also carries each event's `flip` behaviour and
+ * `performedBy` is read for nothing else. Deleting the table would have meant
+ * editing every import for no behavioural gain. The inference is gone either
+ * way: this function cannot return a team.
+ *
+ * `possessionState` is accepted and ignored so the call site needs no change.
+ */
+export function resolveTeam(_eventId, _possessionState) {
   return null
 }
 
-// applyFlip(eventId, committedEvent, possessionState) → new possessionState
-// committedEvent: the event just saved (with groups, team, etc.)
-export function applyFlip(eventId, committedEvent, possessionState) {
-  const rule = POSSESSION_RULES[eventId]
-  if (!rule || !possessionState) return possessionState
-
-  if (rule.flip === 'resets') return { team: null, certain: false }
-  if (rule.flip === 'never')  return possessionState
-  if (rule.flip === 'deferred') return possessionState  // handled by pass type inference
-
-  if (rule.flip === 'always') {
-    const flipped = possessionState.team === 'home' ? 'away' : 'home'
-    return { team: flipped, certain: true }
-  }
-
-  if (rule.flip === 'uncertain') {
-    return { team: possessionState.team, certain: false }
-  }
-
-  if (rule.flip === 'on_outcome') {
-    // Find outcome code from committedEvent.groups
-    const outcomeGroup = committedEvent.groups?.find(g =>
-      g.groupId === 'outcome' || g.groupId === 'type'
-    )
-    const selectedCode = outcomeGroup?.selections?.[0]?.code
-
-    // GK special handling
-    if (rule.flipByGkType && eventId === 'goal_keeper') {
-      const typeGroup = committedEvent.groups?.find(g => g.groupId === 'type')
-      const gkType    = typeGroup?.selections?.[0]?.code
-      const gkFlip    = rule.flipByGkType?.[gkType] || 'uncertain'
-      if (gkFlip === 'never')    return possessionState
-      if (gkFlip === 'uncertain') return { team: possessionState.team, certain: false }
-      if (gkFlip === 'by_technique') {
-        const techGroup = committedEvent.groups?.find(g => g.groupId === 'technique')
-        const techCode  = techGroup?.selections?.[0]?.code
-        if (techCode === 'TECH_CLAIM') return possessionState
-        return { team: possessionState.team, certain: false }  // Clear or unknown
-      }
-    }
-
-    // Foul committed special handling
-    if (eventId === 'foul_committed') {
-      if (rule.flipUncertain?.includes(selectedCode))
-        return { team: possessionState.team, certain: false }
-      if (rule.flipExplicit?.includes(selectedCode))
-        return { team: possessionState.team, certain: false }  // Penalty: explicit prompt resolves this
-      if (rule.flipOutcomes?.includes(selectedCode)) {
-        const flipped = possessionState.team === 'home' ? 'away' : 'home'
-        return { team: flipped, certain: true }
-      }
-      return possessionState
-    }
-
-    // Standard on_outcome
-    if (rule.flipOutcomes?.includes(selectedCode)) {
-      const flipped = possessionState.team === 'home' ? 'away' : 'home'
-      return { team: flipped, certain: true }
-    }
-    return possessionState
-  }
-
+/**
+ * POSSESSION FLIPPING IS REMOVED. Returns the state untouched.
+ *
+ * There is no possession state to advance: a tackle won, an interception or a
+ * ball recovery no longer changes who is deemed to have the ball, because no
+ * event derives its team from that any more. Kept as a no-op so the single
+ * call site in FieldPage stays valid.
+ */
+export function applyFlip(_eventId, _committedEvent, possessionState) {
   return possessionState
 }
 
