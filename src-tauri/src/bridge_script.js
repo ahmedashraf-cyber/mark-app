@@ -1466,6 +1466,14 @@
               dtErrors[mod]   = {A:new Set(),B:new Set(),C:new Set(),D:new Set(),TO:new Set()};
             });
 
+            // Per-key audit trail for the module CSV download.
+            // Written INSIDE the existing bucketing loop and keyed the same way,
+            // so one row exists for exactly the keys that land in
+            // dtReviewed['base'][dt]. The card's REVIEWED number is that set's
+            // size, so the row count cannot drift from it. Nothing below reads
+            // this — it is a record of decisions already made, not a new one.
+            const dtRows = { A:[], B:[], C:[], D:[], TO:[] };
+
             // Bucket reviewed events
             viewedKeysNew.forEach(k => {
               const base    = baseRecByKeyShared[k]; if (!base) return;
@@ -1477,6 +1485,46 @@
               dtReviewed['base'][dt].add(k);
               ['players','location','extras','freeze-frame','goal-location','impact'].forEach(mod => {
                 if (refs.has(mod)) dtReviewed[mod][dt].add(k);
+              });
+
+              if (dtRows[dt]) {
+                const p = base.payload || {};
+                const teamRaw = p.team != null ? p.team
+                  : (p.fields && p.fields.team != null ? p.fields.team : '');
+                dtRows[dt].push({
+                  key: k,
+                  eventName: p.name || '',
+                  // the RAW name too, so a classification surprise is visible
+                  rawName: p.name || '',
+                  videoTimestamp: p.videoTimestamp != null ? p.videoTimestamp : '',
+                  videoTime: fmtTsE(p.videoTimestamp),
+                  team: Array.isArray(teamRaw) ? (teamRaw[0] || '') : String(teamRaw || ''),
+                  // what each side classified it as, and the merged result —
+                  // mergeClassDT favours TO, so a disagreement is worth seeing
+                  collectorClass: collCls,
+                  reviewerClass: revCls,
+                  classification: dt,
+                  reviewerRenamed: !!(revAmnd && revAmnd.payload && revAmnd.payload.name &&
+                    revAmnd.payload.name !== p.name),
+                  renamedTo: (revAmnd && revAmnd.payload && revAmnd.payload.name) || '',
+                  refinedModules: [...refs].join('|'),
+                });
+              }
+            });
+
+            // Stamp the error outcome onto those same rows, from the same sets
+            // the score uses. A key not in dtErrors is 'correct' by definition.
+            const errByKey = {};
+            [...errorsE, ...ffErrorsE].forEach(e => {
+              if (!errByKey[e.key]) errByKey[e.key] = [];
+              errByKey[e.key].push(e.errorType);
+            });
+            DT_TYPES.forEach(dt => {
+              (dtRows[dt] || []).forEach(r => {
+                const types = errByKey[r.key] || [];
+                r.errorType  = types.length ? types.join(' + ') : 'correct';
+                r.countedAsError = types.length > 0;
+                r.errorCount = types.length;
               });
             });
 
@@ -1550,6 +1598,8 @@
               standaloneAdded:  standaloneAddedE.length,
               recalculated:     true,
               defectTypeMethod: true,
+              // per-key rows behind each module's REVIEWED number
+              dtRows,
             };
             console.log('[MARK] defect_type scores computed. Overall:', overallScore, '% | Added events:', standaloneAddedE.length);
           } catch(rgRecalcErr) {

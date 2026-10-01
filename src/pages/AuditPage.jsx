@@ -594,6 +594,58 @@ function AuditDashboard({ results, score, abcScores, onFullReport, session, iden
   const getViewed      = k => rg ? (rg[k]?.viewed  ?? 0)   : 0
   const getErrors      = k => rg ? (rg[k]?.errors  ?? 0)   : 0
 
+  // ── Per-module CSV ────────────────────────────────────────────────────────
+  // Rows come from reviewGroupScores.dtRows, which the bridge writes inside the
+  // same loop that fills dtReviewed['base'][dt] — the set whose SIZE is the
+  // card's REVIEWED number. One row per key in that set, so the row count
+  // cannot disagree with the card. viewedKeysNew is a Set, so no key can appear
+  // twice and inflate the file.
+  //
+  // This reads what the scoring already decided. It computes no score and
+  // changes none.
+  const dtRowsFor = dt => (rg && rg.dtRows && rg.dtRows[dt]) || []
+
+  async function downloadModuleCsv(dt) {
+    const rows = dtRowsFor(dt)
+    if (!rows.length) return
+
+    const headers = [
+      'event_key', 'event_name', 'raw_name', 'video_time', 'video_timestamp_ms',
+      'team', 'error_type', 'counted_as_error', 'error_count',
+      'classification', 'collector_class', 'reviewer_class',
+      'reviewer_renamed', 'renamed_to', 'refined_modules',
+    ]
+    const cell = v => {
+      const str = v === null || v === undefined ? '' : String(v)
+      // a leading =, +, - or @ makes Excel treat the cell as a formula
+      const safe = /^[=+\-@]/.test(str) ? "'" + str : str
+      return /[",\n\r]/.test(safe) ? '"' + safe.replace(/"/g, '""') + '"' : safe
+    }
+    const body = rows
+      .slice()
+      .sort((a, b) => (Number(a.videoTimestamp) || 0) - (Number(b.videoTimestamp) || 0))
+      .map(r => [
+        r.key, r.eventName, r.rawName, r.videoTime, r.videoTimestamp,
+        r.team, r.errorType, r.countedAsError ? 'YES' : 'NO', r.errorCount ?? 0,
+        r.classification, r.collectorClass, r.reviewerClass,
+        r.reviewerRenamed ? 'YES' : 'NO', r.renamedTo, r.refinedModules,
+      ].map(cell).join(','))
+
+    const csv = '\ufeff' + [headers.join(','), ...body].join('\r\n')
+    const name = `audit_${results.session?.matchId || 'match'}_`
+      + `${formatHalf(results.session?.half) || 'half'}_module_${dt}_${rows.length}rows.csv`
+      .replace(/\s+/g, '')
+
+    try {
+      const { invoke } = await import('@tauri-apps/api/core')
+      const path = await invoke('save_text_file_dialog', { name, content: csv })
+      if (path) showToast(`Saved ${rows.length} rows to ${path}`)
+    } catch (e) {
+      showToast(`Download failed: ${e?.message || e}`, 'error')
+    }
+  }
+
+
   // TO Extras card
   const toEx = results.toExtrasScore ?? null  // { score, reviewed, errors } or null
 
@@ -768,13 +820,13 @@ function AuditDashboard({ results, score, abcScores, onFullReport, session, iden
         {[
           { label:'Overall',         sc:overallScore,   color:null,      err:overallErrors,   rev:overallViewed,    revLbl:'REVIEWED', isOverall:true },
           { label:'Half Quality',    sc:hqScore,        color:'#FF9F0A', err:hqErrors,        rev:hqDenom,          revLbl:'TOT EVTS', isOverall:true },
-          { label:'A — Review',      sc:getScore('A'),  color:'#0A84FF', err:getErrors('A'),  rev:getViewed('A'),   revLbl:'REVIEWED' },
-          { label:'B — Review',      sc:getScore('B'),  color:'#30D158', err:getErrors('B'),  rev:getViewed('B'),   revLbl:'REVIEWED' },
-          { label:'C — Review',      sc:getScore('C'),  color:'#FFD60A', err:getErrors('C'),  rev:getViewed('C'),   revLbl:'REVIEWED' },
-          { label:'D — Review',      sc:getScore('D'),  color:'#FF9F0A', err:getErrors('D'),  rev:getViewed('D'),   revLbl:'REVIEWED' },
-          { label:'TO — Review',     sc:getScore('TO'), color:'#BF5AF2', err:getErrors('TO'), rev:getViewed('TO'),  revLbl:'REVIEWED' },
+          { dt:'A', label:'A — Review',      sc:getScore('A'),  color:'#0A84FF', err:getErrors('A'),  rev:getViewed('A'),   revLbl:'REVIEWED' },
+          { dt:'B', label:'B — Review',      sc:getScore('B'),  color:'#30D158', err:getErrors('B'),  rev:getViewed('B'),   revLbl:'REVIEWED' },
+          { dt:'C', label:'C — Review',      sc:getScore('C'),  color:'#FFD60A', err:getErrors('C'),  rev:getViewed('C'),   revLbl:'REVIEWED' },
+          { dt:'D', label:'D — Review',      sc:getScore('D'),  color:'#FF9F0A', err:getErrors('D'),  rev:getViewed('D'),   revLbl:'REVIEWED' },
+          { dt:'TO', label:'TO — Review',     sc:getScore('TO'), color:'#BF5AF2', err:getErrors('TO'), rev:getViewed('TO'),  revLbl:'REVIEWED' },
           { label:'TO Extras',       sc:toEx?.score ?? null, color:'#BF5AF2', err:toEx?.errors ?? 0, rev:toEx?.reviewed ?? 0, revLbl:'TO EXT', isEmpty: toEx === null },
-        ].map(({ label, sc, color, err, rev, revLbl, isOverall, isEmpty }) => {
+        ].map(({ dt, label, sc, color, err, rev, revLbl, isOverall, isEmpty }) => {
           const col = isOverall && sc !== null ? scoreColor(sc) : (color ?? 'var(--t-3)')
           const circ = 2 * Math.PI * 26
           const offset = circ - ((sc ?? 0) / 100) * circ
@@ -788,6 +840,30 @@ function AuditDashboard({ results, score, abcScores, onFullReport, session, iden
               transition:'all .3s var(--ease-out-expo)',
             }}>
               {sc !== null && <div style={{ position:'absolute', top:0, left:'50%', transform:'translateX(-50%)', width:'50%', height:2, background:`linear-gradient(90deg,transparent,${col},transparent)` }}/>}
+              {/* Per-module download. Only on the defect-type cards, and only
+                  when the bridge supplied the per-key rows — the icon is hidden
+                  rather than producing an empty file. */}
+              {dt && dtRowsFor(dt).length > 0 && (
+                <button
+                  title={`Download the ${dtRowsFor(dt).length} events counted toward ${dt}`}
+                  onClick={() => downloadModuleCsv(dt)}
+                  style={{ position:'absolute', top:5, right:5, width:18, height:18,
+                    padding:0, display:'flex', alignItems:'center', justifyContent:'center',
+                    background:'transparent', border:'none', borderRadius:4,
+                    color:'var(--t-3)', cursor:'pointer', opacity:0.65 }}
+                  onMouseEnter={e => { e.currentTarget.style.opacity = '1'
+                    e.currentTarget.style.color = col }}
+                  onMouseLeave={e => { e.currentTarget.style.opacity = '0.65'
+                    e.currentTarget.style.color = 'var(--t-3)' }}>
+                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none"
+                    stroke="currentColor" strokeWidth="2.4" strokeLinecap="round"
+                    strokeLinejoin="round">
+                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                    <polyline points="7 10 12 15 17 10"/>
+                    <line x1="12" y1="15" x2="12" y2="3"/>
+                  </svg>
+                </button>
+              )}
               <span style={{ fontSize:9, fontWeight:800, color: isEmpty ? 'var(--t-3)' : col, letterSpacing:1.5, textTransform:'uppercase' }}>{label}</span>
               <div style={{ position:'relative', width:68, height:68 }}>
                 <svg width="68" height="68" viewBox="0 0 68 68">
