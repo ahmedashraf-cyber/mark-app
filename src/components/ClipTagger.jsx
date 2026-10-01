@@ -155,6 +155,35 @@ export default function ClipTagger({
   }
 
   // keyboard: event hotkeys, space to play/pause, arrows to step
+  // ── Full screen ───────────────────────────────────────────────────────────
+  // The WHOLE tagger goes full screen, not just the <video>. Fullscreening the
+  // video element alone would leave the instruction, transport and tag panel
+  // behind on the desktop, so the trainee could watch but not tag — useless
+  // during a quiz.
+  //
+  // No keyboard shortcut. Comparison's player uses F, but here every letter is
+  // potentially an event hotkey (F is Clearance), and stealing a tagging key
+  // mid-quiz would be worse than having no shortcut.
+  const rootRef = useRef(null)
+  const [isFs, setIsFs] = useState(false)
+
+  const toggleFullscreen = async () => {
+    const el = rootRef.current
+    if (!el) return
+    try {
+      if (document.fullscreenElement) await document.exitFullscreen()
+      else await el.requestFullscreen()
+    } catch (e) {
+      console.warn('[MARK ClipTagger] fullscreen refused:', e?.message || e)
+    }
+  }
+
+  useEffect(() => {
+    const onFs = () => setIsFs(!!document.fullscreenElement)
+    document.addEventListener('fullscreenchange', onFs)
+    return () => document.removeEventListener('fullscreenchange', onFs)
+  }, [])
+
   useEffect(() => {
     function onKey(e) {
       if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return
@@ -191,7 +220,9 @@ export default function ClipTagger({
   })
 
   return (
-    <div style={{ display:'flex', flexDirection:'column', gap:12 }}>
+    <div ref={rootRef} style={{ display:'flex', flexDirection:'column', gap:12,
+      ...(isFs ? { background:'var(--bg)', padding:16, height:'100vh',
+                   boxSizing:'border-box', overflowY:'auto' } : {}) }}>
 
       {/* instruction */}
       {instruction ? (
@@ -207,7 +238,17 @@ export default function ClipTagger({
         <video ref={videoRef} src={clipUrl} loop muted playsInline
           onTimeUpdate={onTimeUpdate} onLoadedMetadata={onLoaded}
           onClick={togglePlay}
-          style={{ width:'100%', display:'block', maxHeight:'42vh', cursor:'pointer' }}/>
+          style={{ width:'100%', display:'block',
+            // taller in full screen, but still leaving room for the tag panel
+            maxHeight: isFs ? '62vh' : '42vh', cursor:'pointer' }}/>
+        <button onClick={toggleFullscreen}
+          title={isFs ? 'Exit full screen (Esc)' : 'Full screen'}
+          style={{ position:'absolute', top:8, right:8,
+            padding:'5px 9px', fontSize:11, fontWeight:700,
+            background:'rgba(0,0,0,0.55)', border:'1px solid rgba(255,255,255,0.3)',
+            borderRadius:6, color:'#fff', cursor:'pointer', lineHeight:1 }}>
+          {isFs ? '⤡ Exit' : '⛶ Full screen'}
+        </button>
       </div>
 
       {/* transport */}
