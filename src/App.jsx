@@ -158,8 +158,10 @@ function BackgroundDecoration() {
 }
 
 function AppInner() {
-  const { user, loading, profile } = useAuth()
-  const isInternal = useInternalUser(profile)
+  const { user, loading, profile, role } = useAuth()
+  // The ROLE now decides access, not the email domain. Passing it switches
+  // useInternalUser off its transitional domain fallback.
+  const isInternal = useInternalUser(profile, role)
   const [session, setSession]         = useState(null)
   const [historySession, setHistorySession] = useState(null)
   const [showHistory, setShowHistory] = useState(false)

@@ -145,9 +145,9 @@ async function fetchMatchesFromSheet() {
 }
 
 export default function SessionSetupPage({ onSessionStart, lastResult, onShowHistory, onWatchSession }) {
-  const { profile, logout } = useAuth()
-  const isAdmin    = useAdmin(profile)
-  const isInternal = useInternalUser(profile)
+  const { profile, logout, role } = useAuth()
+  const isAdmin    = useAdmin(profile, role)
+  const isInternal = useInternalUser(profile, role)
 
   // Log access level once when profile resolves
   useEffect(() => {
