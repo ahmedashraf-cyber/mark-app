@@ -22,6 +22,12 @@
  * close it without touching any of the role logic below.
  */
 
+/**
+ * Kept for the transitional fallback below, and so existing imports resolve.
+ * It is NOT the access authority any more — the role is.
+ */
+export const INTERNAL_DOMAINS = ['hudl.com']
+
 // ── The seven roles, spelled exactly as stored in column C ──────────────────
 export const ROLE = {
   MANAGER:          'Batch Manager',
@@ -112,8 +118,29 @@ export function capabilities(role) {
 // domain. `role` is optional; without it they deny elevated access rather than
 // granting it on a domain match.
 
+/**
+ * CRITICAL — why these fall back to the domain check.
+ *
+ * All seven callers currently pass only `profile`; the role is not yet plumbed
+ * through from the sheet to every screen. With no role, capabilities() denies
+ * everything, which would have stripped Scout, Audit and Comparison from all
+ * 86 operators the moment this shipped.
+ *
+ * So: when a role IS supplied, the role decides. When it is NOT, behaviour is
+ * exactly as before. That makes this commit a no-op for existing users and lets
+ * each screen migrate to capabilities(role) one at a time, instead of the whole
+ * app changing access rules in a single step.
+ *
+ * Remove the fallback once every caller passes a role.
+ */
+function domainFallback(profile) {
+  const email = (profile?.email || '').toLowerCase()
+  return INTERNAL_DOMAINS.some(d => email.endsWith('@' + d))
+}
+
 /** @deprecated use capabilities(role) */
 export function useInternalUser(profile, role) {
+  if (role === undefined || role === null || role === '') return domainFallback(profile)
   return capabilities(role).scout
 }
 
@@ -122,6 +149,7 @@ export function useAdmin(profile, role) {
   // The hardcoded super admin stays as a bootstrap: without it, a mistake in
   // the sheet could leave nobody able to reach the admin page and repair it.
   if (profile?.email === 'ahmed.ashraf@hudl.com') return true
+  if (role === undefined || role === null || role === '') return false
   return capabilities(role).admin
 }
 
@@ -134,6 +162,8 @@ export function useAdmin(profile, role) {
  * the old two-role check excluded.
  */
 export function resolveDrillRole(profile, role) {
+  // DrillPage already passes the role from the sheet, so no fallback here —
+  // and an unknown role must mean no DRILL access, not a domain guess.
   const c = capabilities(role)
   if (c.drillCreate) return 'creator'
   if (c.drillTake)   return 'trainee'
@@ -147,5 +177,3 @@ export function canTakeDrill(profile, role) {
   return capabilities(role).drillTake
 }
 
-/** Kept so existing imports resolve; no longer used for access decisions. */
-export const INTERNAL_DOMAINS = ['hudl.com']
