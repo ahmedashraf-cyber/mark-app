@@ -1,6 +1,8 @@
 import { useState } from 'react'
 import { auth, signInWithEmailAndPassword } from '../firebase/config'
 
+import { canUseHrCodeLogin } from '../hooks/useAdmin.js'
+
 const TRAINERS_SHEET_ID  = '1bErhs3yQiJMl6PXRJFgH512wLgfm2dM6Cpj2owimLuw'
 const SHEETS_API_KEY     = 'AIzaSyDEO-0MZ4-LOdIJ7aIyscgmLWGN5h8MpNI'
 
@@ -13,9 +15,9 @@ async function lookupHrCode(hrCode) {
 
   const tabs = [
     // Trainers — try all name variants FIELD uses
-    { names: ['Trainers','trainers','Batch Trainers','batch trainers','TRAINERS','Trainer'], range: 'A2:F', emailCol: 4, passCol: 5 },
+    { names: ['Trainers','trainers','Batch Trainers','batch trainers','TRAINERS','Trainer'], range: 'A2:F', emailCol: 4, passCol: 5, roleCol: null, statusCol: null },
     // Supervisors — try all name variants
-    { names: ['Supervisors','supervisors','SUPERVISORS','Supervisor'], range: 'A2:E', emailCol: 3, passCol: 4 },
+    { names: ['Supervisors','supervisors','SUPERVISORS','Supervisor'], range: 'A2:F', emailCol: 3, passCol: 4, roleCol: 2, statusCol: 5 },
   ]
 
   for (const tabGroup of tabs) {
@@ -32,6 +34,13 @@ async function lookupHrCode(hrCode) {
           return {
             hrCode:   row[0],
             name:     row[1] || '',
+            // Role comes from a DIFFERENT column per tab, and the Trainers tab
+            // has none at all (its column C is not a role). Reading row[2]
+            // blindly would have rejected everyone in Trainers, so roleCol is
+            // declared per tab and null means "no role here".
+            role:     tabGroup.roleCol   != null ? (row[tabGroup.roleCol]   || '').trim() : null,
+            status:   tabGroup.statusCol != null ? (row[tabGroup.statusCol] || '').trim() : '',
+            hasRoleColumn: tabGroup.roleCol != null,
             email:    (row[tabGroup.emailCol] || '').replace(/\s+/g,'').trim().toLowerCase(),
             password: (row[tabGroup.passCol]  || '').trim(),
             tab:      tabName,
@@ -78,6 +87,29 @@ export default function LoginPage() {
     try {
       const user = await lookupHrCode(hrCode)
       if (!user)          throw new Error('HR Code not found — check the code and try again')
+
+      // ── HR-CODE LOGIN IS FOR COLLECTORS ONLY ────────────────────────────
+      // This check was missing entirely: lookupHrCode read columns A:E but
+      // never consulted column C, so every role could sign in by HR-code.
+      // resolveRole() in sheetRole.js had the rule but only the EMAIL path
+      // called it, so nothing enforced it here.
+      const allowed = user.hasRoleColumn && canUseHrCodeLogin(user.role)
+      console.log('[MARK login] HR-code', user.hrCode,
+        '| found in tab:', user.tab,
+        '| role column:', user.hasRoleColumn ? 'yes' : 'no (Trainers tab)',
+        '| role from sheet:', JSON.stringify(user.role),
+        '| status:', JSON.stringify(user.status),
+        '| decision:', allowed ? 'ACCEPT (collector)' : 'REJECT — not a collector role')
+      if (!allowed) {
+        throw new Error('Please sign in with your email and password.')
+      }
+
+      const statusLower = (user.status || '').toLowerCase()
+      if (['inactive','removed','disabled','no','false','0'].includes(statusLower)) {
+        console.log('[MARK login] REJECT — status is', user.status)
+        throw new Error('Your access has been removed. Contact your Batch Manager.')
+      }
+
       if (!user.email)    throw new Error('No email set for this HR Code — contact your admin')
       if (!user.password) throw new Error('No password set for this HR Code — contact your admin')
       await signInWithEmailAndPassword(auth, user.email, user.password)
