@@ -198,3 +198,52 @@ export const REQUEST_STATUS = {
 export function newId(prefix) {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
 }
+
+// ── Effective pass/fail ─────────────────────────────────────────────────────
+
+/**
+ * Did this attempt pass, as things stand now?
+ *
+ *   passed = stored_passed OR score >= current_pass_mark
+ *
+ * The OR is the whole point, and it is deliberately NOT a plain comparison
+ * against the current mark:
+ *
+ *   · LOWERING the mark must GRANT access. A trainee who scored 70 when the
+ *     mark was 80 had passed:0 written at the time. Drop the mark to 70 and
+ *     they should gain review immediately, without re-running anything.
+ *
+ *   · RAISING the mark must NOT take access away. Comparing only against the
+ *     current mark would retroactively fail everyone who passed under a lower
+ *     one — which is what pass_mark_at_attempt was added to prevent.
+ *
+ * So access only ever moves one way: a pass, once earned, stays earned, and a
+ * near miss can become a pass if the bar comes down. Both halves were asked
+ * for; only the OR delivers both.
+ *
+ * The stored `passed` field is never rewritten. It remains the historical
+ * record of what happened at attempt time, which is what pass_mark_at_attempt
+ * documents alongside it.
+ */
+export function effectivePassed(session, currentPassMark) {
+  if (!session) return false
+
+  // Earned at the time — never revoked.
+  if (String(session.passed) === '1' || session.passed === true) return true
+
+  const score = Number(session.score_percent)
+  const mark  = Number(currentPassMark)
+  // No current mark, or an unscored attempt: fall back to the stored flag
+  // rather than guessing. A missing mark must not turn every attempt into a
+  // pass by comparing against 0.
+  if (!Number.isFinite(score) || !Number.isFinite(mark) || currentPassMark === '' ||
+      currentPassMark == null) return false
+
+  return score >= mark
+}
+
+/** True when this attempt passes only because the mark was lowered. */
+export function passedOnLoweredMark(session, currentPassMark) {
+  const storedPass = String(session?.passed) === '1' || session?.passed === true
+  return !storedPass && effectivePassed(session, currentPassMark)
+}

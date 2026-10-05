@@ -13,6 +13,7 @@
  * having learnt anything, and the pass mark would gate nothing.
  */
 import { useState } from 'react'
+import { effectivePassed } from '../config/drillConfig'
 import { clipUrl as driveClipUrl } from '../utils/drillDrive'
 import { EVENT_BY_ID } from '../utils/fieldExtras'
 import { fmtTime } from '../components/ClipTagger'
@@ -44,7 +45,16 @@ export default function DrillResultsPage({ result, quiz, clipRows, onDone, onReq
   const [openClip, setOpenClip] = useState(null)
   const [clipSrc,  setClipSrc]  = useState('')
 
-  const { scorePercent, passed, counts, totalEvents, rows, timeTakenMs } = result
+  const { scorePercent, passed: passedAtAttempt, counts, totalEvents, rows, timeTakenMs } = result
+
+  // Same rule as the quiz list: the CURRENT pass mark can grant a pass that was
+  // not earned at attempt time, and a pass earned at attempt time is never
+  // revoked. Without this, lowering the mark would unlock Review on the quiz
+  // list while this screen still said "the answers stay hidden until you pass".
+  const passed = effectivePassed(
+    { passed: passedAtAttempt ? '1' : '0', score_percent: scorePercent },
+    quiz?.pass_mark_percent)
+  const passedByLoweredMark = !passedAtAttempt && passed
   const clipByIndex = Object.fromEntries(clipRows.map(c => [Number(c.clip_index), c]))
 
   const byClip = {}
@@ -95,7 +105,7 @@ export default function DrillResultsPage({ result, quiz, clipRows, onDone, onReq
             <span style={{ fontSize:22, color:'var(--t-3)' }}>%</span>
           </div>
           <div style={{ fontSize:15, fontWeight:700, color:scoreColor, marginTop:10 }}>
-            {passed ? 'Passed' : 'Not passed'}
+            {passed ? (passedByLoweredMark ? 'Passed (mark lowered)' : 'Passed') : 'Not passed'}
           </div>
           <div style={{ fontSize:11, color:'var(--t-3)', marginTop:8, lineHeight:1.6 }}>
             pass mark {quiz?.pass_mark_percent}% · {totalEvents} events scored

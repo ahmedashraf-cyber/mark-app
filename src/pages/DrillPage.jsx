@@ -16,7 +16,7 @@ import {
   TAB_QUIZZES, TAB_CLIPS, TAB_ANSWERS, TAB_SESSIONS, TAB_ANSWERS_GIVEN, TAB_TRAINEE_LOG,
   TAB_ASSIGNMENTS,
   SESSIONS_COLUMNS, ANSWERS_GIVEN_COLUMNS, TRAINEE_LOG_COLUMNS, QUIZZES_COLUMNS,
-  QUIZ_STATUS, SESSION_STATUS,
+  QUIZ_STATUS, SESSION_STATUS, effectivePassed,
 } from '../config/drillConfig'
 // FIELD's formatter, not a second one. Produces MM:SS.mmm (6941 -> 00:06.941).
 import { msToReadable } from '../utils/fieldSheetSync'
@@ -456,7 +456,14 @@ export default function DrillPage({ onBack }) {
               String(s.is_test_run) !== '1')
             const best = mine.reduce((b, s) =>
               Math.max(b, Number(s.score_percent || 0)), 0)
-            const hasPassed = mine.some(s => String(s.passed) === '1')
+            // Compared against the quiz's CURRENT pass mark, not only the flag
+            // stored at attempt time — so lowering the mark grants review
+            // immediately. effectivePassed keeps a stored pass regardless, so
+            // raising the mark never revokes access.
+            const hasPassed = mine.some(s => effectivePassed(s, q.pass_mark_percent))
+            // true when access came from the mark being lowered, so the UI can
+            // say so rather than implying they passed on the day
+            const passedByLoweredMark = !mine.some(s => String(s.passed) === '1') && hasPassed
             return (
               <div key={q.quiz_id} className="card" style={{ padding:16,
                 display:'flex', alignItems:'center', gap:14 }}>
