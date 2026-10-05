@@ -138,6 +138,16 @@ export const SESSIONS_COLUMNS = [
   'total_events', 'correct_count', 'missed_count', 'not_needed_count',
   'wrong_event_count', 'wrong_team_count', 'wrong_timestamp_count',
   'wrong_extra_count', 'total_time_taken_ms', 'total_time_taken_readable', 'is_test_run', 'status',
+  // APPENDED. The pass mark IN FORCE when this attempt was taken.
+  //
+  // Pass/fail was derived from the quiz's current pass_mark_percent, so a Batch
+  // Manager raising the mark from 60 to 80 would silently re-evaluate every
+  // historical result and retroactively fail people who had passed. Stamped on
+  // the attempt, an earlier pass stays a pass.
+  //
+  // Blank on rows written before this column existed — read those as "unknown",
+  // never as 0, or every old attempt would look like a pass.
+  'pass_mark_at_attempt',
 ]
 
 export const ANSWERS_GIVEN_COLUMNS = [

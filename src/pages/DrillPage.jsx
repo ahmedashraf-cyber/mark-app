@@ -284,6 +284,9 @@ export default function DrillPage({ onBack }) {
       started_at: new Date(finished.started_at).toISOString(),
       finished_at: new Date(finished.finished_at || Date.now()).toISOString(),
       score_percent: scored.scorePercent, passed: scored.passed ? 1 : 0,
+      // Record the mark this attempt was judged against, so a later change to
+      // the quiz cannot re-evaluate it.
+      pass_mark_at_attempt: String(quiz?.pass_mark_percent ?? ''),
       total_events: scored.totalEvents,
       correct_count: scored.counts.correct || 0,
       missed_count: scored.counts.missed || 0,

@@ -4,6 +4,7 @@ import { collection, query, where, getDocs, doc, setDoc, getDoc, deleteDoc, serv
 import { useAuth } from '../hooks/useAuth.jsx'
 import { useAdmin, useInternalUser } from '../hooks/useAdmin.js'
 import { importRosterCsv } from '../data/roster.js'
+import AdminPage from './AdminPage.jsx'
 import { CURRENT_VERSION } from '../hooks/useUpdateCheck'
 import { HALVES, formatHalf } from '../utils/half.js'
 
@@ -157,6 +158,7 @@ export default function SessionSetupPage({ onSessionStart, lastResult, onShowHis
   }, [profile?.email])
   const rosterFileRef = useRef(null)
   const [rosterImporting, setRosterImporting] = useState(false)
+  const [showAdmin, setShowAdmin] = useState(false)
 
   async function handleRosterImport(file) {
     if (!file) return
@@ -396,6 +398,13 @@ export default function SessionSetupPage({ onSessionStart, lastResult, onShowHis
   // Reset completedSession when selection changes
   // (handled inline via setCompletedSession(null) on selection change)
 
+  // The admin page takes over the screen. Rendered before the setup UI so it
+  // owns the viewport rather than appearing inside it.
+  if (showAdmin) return (
+    <AdminPage role={role} changedBy={profile?.email || 'unknown'}
+      onBack={() => setShowAdmin(false)}/>
+  )
+
   return (
     <div style={{height:'100vh',display:'flex',flexDirection:'column',background:'var(--bg)',overflow:'hidden'}}>
       {/* ── Topbar ── */}
@@ -435,13 +444,25 @@ export default function SessionSetupPage({ onSessionStart, lastResult, onShowHis
             <>
               <input ref={rosterFileRef} type="file" accept=".csv,text/csv" style={{display:'none'}}
                 onChange={e => { handleRosterImport(e.target.files?.[0]); e.target.value = '' }} />
-              <button className="btn-ghost" title="Seed the roster from users_finalized.csv (legacy_id, hr_code, full_name, email, job)"
+              <button className="btn-ghost" title="Seed the roster from users_finalized.csv (legacy_id, hr_code, full_name, email, job). This fills the Firestore 'roster' collection, which translates Tag Once's numeric author ids into real people for Audit and Scout. Unrelated to the Supervisor access roles."
                 style={{padding:'5px 14px',fontSize:11,display:'flex',alignItems:'center',gap:5}}
                 disabled={rosterImporting} onClick={() => rosterFileRef.current?.click()}>
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
                   <path d="M12 3v13M6 11l6 6 6-6"/><path d="M4 20h16"/>
                 </svg>
                 {rosterImporting ? 'Importing…' : 'Import roster'}
+              </button>
+              {/* Admin page. isAdmin now resolves from the Supervisor role, so
+                  this is Batch Manager only. AdminPage checks again itself —
+                  hiding a button is not access control. */}
+              <button className="btn-ghost" title="Manage user roles and quiz settings"
+                style={{padding:'5px 14px',fontSize:11,display:'flex',alignItems:'center',gap:5,
+                  borderColor:'var(--p2)',color:'var(--p2)'}}
+                onClick={() => setShowAdmin(true)}>
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                  <circle cx="12" cy="8" r="3.2"/><path d="M5 20c0-3.6 3.1-5.5 7-5.5s7 1.9 7 5.5"/>
+                </svg>
+                Admin
               </button>
             </>
           )}
