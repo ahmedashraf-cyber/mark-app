@@ -616,7 +616,15 @@ function AuditDashboard({ results, score, abcScores, onFullReport, session, iden
   //
   // This reads what the scoring already decided. It computes no score and
   // changes none.
-  const dtRowsFor = dt => (rg && rg.dtRows && rg.dtRows[dt]) || []
+  const DT_MODULES = ['A','B','C','D','TO']
+  const dtRowsFor = dt => {
+    const all = (rg && rg.dtRows) || {}
+    // Overall exports every module's rows. PRESSURE is a filtered copy of C's,
+    // so it is deliberately EXCLUDED here — including it would duplicate those
+    // events in the Overall file.
+    if (dt === 'ALL') return DT_MODULES.flatMap(m => all[m] || [])
+    return all[dt] || []
+  }
 
   async function downloadModuleCsv(dt) {
     const rows = dtRowsFor(dt)
@@ -661,6 +669,9 @@ function AuditDashboard({ results, score, abcScores, onFullReport, session, iden
 
   // TO Extras card
   const toEx = results.toExtrasScore ?? null  // { score, reviewed, errors } or null
+  // Pressure view. Comes from the bridge, derived from C's own rows, so a
+  // bridge too old to send it shows the card empty rather than wrong.
+  const pressure = rg?.pressureScore ?? results.pressureScore ?? null
 
   // Module scores from bridge defect_type engine
   const moduleScoresDT     = rg?.moduleScoresDT    || null
@@ -673,9 +684,8 @@ function AuditDashboard({ results, score, abcScores, onFullReport, session, iden
   const uniqueEdited   = computeErrorKeys(results.baseEvents, results.amendments, results.reviewerIds).size
   const overallErrors  = rg ? (rg.overall?.errors ?? uniqueEdited) : uniqueEdited
   const hq             = results.halfQualityScores
-  const hqScore        = hq?.combined?.score      ?? null
-  const hqDenom        = hq?.combined?.denominator ?? 0
-  const hqErrors       = hq?.combined?.errors      ?? 0
+  // hqScore / hqDenom / hqErrors removed with the Half Quality card. `hq`
+  // stays — the per-collector scores below still read it.
 
   // ── Collectors ────────────────────────────────────────────────────────────
   const collectorIds   = results.collectorIds || (results.collectorId != null ? [results.collectorId] : [])
@@ -831,15 +841,25 @@ function AuditDashboard({ results, score, abcScores, onFullReport, session, iden
       <div style={{ display:'grid', gridTemplateColumns:'repeat(8,1fr)', gap:8 }}>
 
         {[
-          { label:'Overall',         sc:overallScore,   color:null,      err:overallErrors,   rev:overallViewed,    revLbl:'REVIEWED', isOverall:true },
-          { label:'Half Quality',    sc:hqScore,        color:'#FF9F0A', err:hqErrors,        rev:hqDenom,          revLbl:'TOT EVTS', isOverall:true },
+          // Half Quality removed — Overall plus the module cards cover it. `hq`
+          // itself is still used further down for the per-collector scores, so
+          // only the card and its three derived values are gone.
+          //
+          // `dt` on EVERY card now, so all of them get the download icon.
+          // 'ALL' exports every row across the modules.
+          { dt:'ALL', label:'Overall',  sc:overallScore,   color:null,      err:overallErrors,   rev:overallViewed,    revLbl:'REVIEWED', isOverall:true },
           { dt:'A', label:'A — Review',      sc:getScore('A'),  color:'#0A84FF', err:getErrors('A'),  rev:getViewed('A'),   revLbl:'REVIEWED' },
           { dt:'B', label:'B — Review',      sc:getScore('B'),  color:'#30D158', err:getErrors('B'),  rev:getViewed('B'),   revLbl:'REVIEWED' },
           { dt:'C', label:'C — Review',      sc:getScore('C'),  color:'#FFD60A', err:getErrors('C'),  rev:getViewed('C'),   revLbl:'REVIEWED' },
           { dt:'D', label:'D — Review',      sc:getScore('D'),  color:'#FF9F0A', err:getErrors('D'),  rev:getViewed('D'),   revLbl:'REVIEWED' },
           { dt:'TO', label:'TO — Review',     sc:getScore('TO'), color:'#BF5AF2', err:getErrors('TO'), rev:getViewed('TO'),  revLbl:'REVIEWED' },
-          { label:'TO Extras',       sc:toEx?.score ?? null, color:'#BF5AF2', err:toEx?.errors ?? 0, rev:toEx?.reviewed ?? 0, revLbl:'TO EXT', isEmpty: toEx === null },
-        ].map(({ dt, label, sc, color, err, rev, revLbl, isOverall, isEmpty }) => {
+          // Pressure: an OVERLAPPING view of C, not a split. Its events remain
+          // in C and still count there, so these numbers are a subset of C's.
+          { dt:'PRESSURE', label:'Pressure — Review', sc:pressure?.score ?? null, color:'#E8590C',
+            err:pressure?.errors ?? 0, rev:pressure?.reviewed ?? 0, revLbl:'REVIEWED',
+            isEmpty: pressure === null, note:'Also counted in C' },
+          { dt:'TOEXTRAS', label:'TO Extras',       sc:toEx?.score ?? null, color:'#BF5AF2', err:toEx?.errors ?? 0, rev:toEx?.reviewed ?? 0, revLbl:'TO EXT', isEmpty: toEx === null },
+        ].map(({ dt, label, sc, color, err, rev, revLbl, isOverall, isEmpty, note }) => {
           const col = isOverall && sc !== null ? scoreColor(sc) : (color ?? 'var(--t-3)')
           const circ = 2 * Math.PI * 26
           const offset = circ - ((sc ?? 0) / 100) * circ
@@ -878,6 +898,13 @@ function AuditDashboard({ results, score, abcScores, onFullReport, session, iden
                 </button>
               )}
               <span style={{ fontSize:9, fontWeight:800, color: isEmpty ? 'var(--t-3)' : col, letterSpacing:1.5, textTransform:'uppercase' }}>{label}</span>
+              {/* makes the overlap explicit, so these numbers are not mistaken
+                  for a module carved out of C */}
+              {note && (
+                <span style={{ position:'absolute', bottom:4, left:0, right:0,
+                  textAlign:'center', fontSize:7, color:'var(--t-3)',
+                  fontStyle:'italic', letterSpacing:0.2 }}>{note}</span>
+              )}
               <div style={{ position:'relative', width:68, height:68 }}>
                 <svg width="68" height="68" viewBox="0 0 68 68">
                   <circle cx="34" cy="34" r="26" fill="none" stroke="var(--b-2)" strokeWidth="6"/>

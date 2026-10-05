@@ -1,5 +1,5 @@
 (async function(){
-  const BRIDGE_VERSION = '7.9.18';
+  const BRIDGE_VERSION = '7.9.19';
   if(window.__MARK_BRIDGE_VERSION__ === BRIDGE_VERSION){console.log('[MARK] bridge already running (v' + BRIDGE_VERSION + ')');return;}
   if(window.__MARK_BRIDGE_STOP__) window.__MARK_BRIDGE_STOP__();
   window.__MARK_BRIDGE__ = true;
@@ -1512,6 +1512,16 @@
               }
             });
 
+            // ── PRESSURE: an overlapping VIEW of C, not a new module ──────────
+            // pressure-start and pressure-end stay in DT_C_EVENTS and keep
+            // counting toward C exactly as before. This derives a filtered copy
+            // of C's rows so pressure can be seen in isolation, which means its
+            // numbers are deliberately a SUBSET of C's rather than carved out
+            // of them. Built after C is tallied, so C cannot be affected.
+            const DT_PRESSURE_EVENTS = new Set(['pressure-start','pressure-end']);
+            dtRows.PRESSURE = (dtRows.C || []).filter(r =>
+              DT_PRESSURE_EVENTS.has(r.eventName));
+
             // Stamp the error outcome onto those same rows, from the same sets
             // the score uses. A key not in dtErrors is 'correct' by definition.
             const errByKey = {};
@@ -1519,7 +1529,10 @@
               if (!errByKey[e.key]) errByKey[e.key] = [];
               errByKey[e.key].push(e.errorType);
             });
-            DT_TYPES.forEach(dt => {
+            // PRESSURE included: its rows are copies of C's row objects, so
+            // they would be stamped anyway, but listing it explicitly keeps the
+            // intent clear if the filter ever produces fresh objects.
+            ;[...DT_TYPES, 'PRESSURE'].forEach(dt => {
               (dtRows[dt] || []).forEach(r => {
                 const types = errByKey[r.key] || [];
                 r.errorType  = types.length ? types.join(' + ') : 'correct';
@@ -1600,6 +1613,19 @@
               defectTypeMethod: true,
               // per-key rows behind each module's REVIEWED number
               dtRows,
+              // Score for the PRESSURE view. Derived from its own rows rather
+              // than from dtReviewed, because pressure is not a module there —
+              // it lives inside C. reviewed is the row count, so the card and
+              // its CSV cannot disagree.
+              pressureScore: (() => {
+                const rows = dtRows.PRESSURE || [];
+                const reviewed = rows.length;
+                const errors = rows.reduce((n, r) => n + (r.countedAsError ? 1 : 0), 0);
+                return reviewed > 0
+                  ? { score: Math.max(0, Math.round(((reviewed - errors) / reviewed) * 100)),
+                      reviewed, errors }
+                  : null;
+              })(),
             };
             console.log('[MARK] defect_type scores computed. Overall:', overallScore, '% | Added events:', standaloneAddedE.length);
           } catch(rgRecalcErr) {
