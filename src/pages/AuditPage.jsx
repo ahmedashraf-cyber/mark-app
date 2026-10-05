@@ -684,8 +684,18 @@ function AuditDashboard({ results, score, abcScores, onFullReport, session, iden
   const uniqueEdited   = computeErrorKeys(results.baseEvents, results.amendments, results.reviewerIds).size
   const overallErrors  = rg ? (rg.overall?.errors ?? uniqueEdited) : uniqueEdited
   const hq             = results.halfQualityScores
-  // hqScore / hqDenom / hqErrors removed with the Half Quality card. `hq`
-  // stays — the per-collector scores below still read it.
+  // These stay computed even though the Half Quality CARD is gone.
+  //
+  // v7.9.19 deleted them along with the card and crashed the app on load:
+  // hqDenom also feeds the "HALF TOTAL" stat further down (line ~1213), a
+  // different panel I had not checked. I verified `hq` had a second consumer
+  // and then failed to do the same for the three values derived from it.
+  //
+  // Computing and not rendering costs nothing and cannot break anything that
+  // reads them. Only the card itself was asked to go.
+  const hqScore        = hq?.combined?.score      ?? null
+  const hqDenom        = hq?.combined?.denominator ?? 0
+  const hqErrors       = hq?.combined?.errors      ?? 0
 
   // ── Collectors ────────────────────────────────────────────────────────────
   const collectorIds   = results.collectorIds || (results.collectorId != null ? [results.collectorId] : [])
