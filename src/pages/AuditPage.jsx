@@ -630,7 +630,15 @@ function AuditDashboard({ results, score, abcScores, onFullReport, session, iden
     const rows = dtRowsFor(dt)
     if (!rows.length) return
 
-    const headers = [
+    // TO EXTRAS rows carry a different shape: which extras were expected,
+    // which were tagged, and which were missing or surplus. Using the module
+    // header for them would produce a file of empty columns.
+    const isToExtras = dt === 'TOEXTRAS'
+    const headers = isToExtras ? [
+      'event_key', 'event_name', 'video_time', 'video_timestamp_ms', 'team',
+      'expected_extras', 'tagged_extras', 'missing_extras', 'not_needed_extras',
+      'error_type', 'error_count', 'counted_as_error',
+    ] : [
       'event_key', 'event_name', 'raw_name', 'video_time', 'video_timestamp_ms',
       'team', 'error_type', 'counted_as_error', 'error_count',
       'classification', 'collector_class', 'reviewer_class',
@@ -645,12 +653,16 @@ function AuditDashboard({ results, score, abcScores, onFullReport, session, iden
     const body = rows
       .slice()
       .sort((a, b) => (Number(a.videoTimestamp) || 0) - (Number(b.videoTimestamp) || 0))
-      .map(r => [
+      .map(r => (isToExtras ? [
+        r.key, r.eventName, r.videoTime, r.videoTimestamp, r.team,
+        r.expectedExtras, r.taggedExtras, r.missingExtras, r.notNeededExtras,
+        r.errorType, r.errorCount ?? 0, r.countedAsError ? 'YES' : 'NO',
+      ] : [
         r.key, r.eventName, r.rawName, r.videoTime, r.videoTimestamp,
         r.team, r.errorType, r.countedAsError ? 'YES' : 'NO', r.errorCount ?? 0,
         r.classification, r.collectorClass, r.reviewerClass,
         r.reviewerRenamed ? 'YES' : 'NO', r.renamedTo, r.refinedModules,
-      ].map(cell).join(','))
+      ]).map(cell).join(','))
 
     const csv = '\ufeff' + [headers.join(','), ...body].join('\r\n')
     const name = `audit_${results.session?.matchId || 'match'}_`
@@ -668,7 +680,12 @@ function AuditDashboard({ results, score, abcScores, onFullReport, session, iden
 
 
   // TO Extras card
-  const toEx = results.toExtrasScore ?? null  // { score, reviewed, errors } or null
+  // Prefer the bridge's own TO EXTRAS score. The old AuditPage-side
+  // calcToExtrasScore restricted itself to TO events and matched extras by
+  // VALUE; the bridge version scores the eight FIELD NAMES on any event, which
+  // is what was asked for. The fallback keeps the card populated if the bridge
+  // in Tag Once predates this.
+  const toEx = rg?.toExtrasScoreDT ?? results.toExtrasScoreDT ?? results.toExtrasScore ?? null
   // Pressure view. Comes from the bridge, derived from C's own rows, so a
   // bridge too old to send it shows the card empty rather than wrong.
   const pressure = rg?.pressureScore ?? results.pressureScore ?? null

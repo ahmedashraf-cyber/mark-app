@@ -1,5 +1,5 @@
 (async function(){
-  const BRIDGE_VERSION = '7.9.20';
+  const BRIDGE_VERSION = '7.9.21';
   if(window.__MARK_BRIDGE_VERSION__ === BRIDGE_VERSION){console.log('[MARK] bridge already running (v' + BRIDGE_VERSION + ')');return;}
   if(window.__MARK_BRIDGE_STOP__) window.__MARK_BRIDGE_STOP__();
   window.__MARK_BRIDGE__ = true;
@@ -1522,6 +1522,95 @@
             dtRows.PRESSURE = (dtRows.C || []).filter(r =>
               DT_PRESSURE_EVENTS.has(r.eventName));
 
+            // ── TO EXTRAS ────────────────────────────────────────────────────
+            // Scores the eight turnover-related extras wherever they occur. The
+            // event's module is irrelevant: a pass can carry `launch`, a tackle
+            // `step-in`, a duel `sliding`.
+            //
+            // These are FIELD NAMES — keys of payload.fields — not values. The
+            // previous scorer on this card did two things differently: it
+            // restricted itself to TO events, and it compared against values.
+            //
+            // MODEL vs COLLECTOR, in Audit terms: the collector's base event is
+            // what was tagged, and a reviewer's 'extras' amendment is the
+            // correction. No amendment means the collector was right, so the
+            // model set equals the collector's — NOT an empty set, which would
+            // have reported every correct event as "not needed".
+            //
+            // Each extra is judged on its own, so one event can produce several
+            // errors. The denominator counts EVENTS the model expects extras
+            // on, not the number of extras, exactly as specified.
+            const DT_EXTRA_TO_KEYS = new Set([
+              'launch','step-in','right-take-on','left-take-on',
+              'sliding','right','left','none',
+            ]);
+            const toExtraKeysOf = payload => {
+              const f = (payload && payload.fields) || {};
+              return new Set(Object.keys(f).filter(k =>
+                DT_EXTRA_TO_KEYS.has(String(k).trim()) &&
+                String(f[k] ?? '').trim() !== ''));
+            };
+
+            const toExtrasRows = [];
+            let toExtrasDenom = 0, toExtrasErrors = 0;
+
+            viewedKeysNew.forEach(k => {
+              const base = baseRecByKeyShared[k];
+              if (!base) return;
+
+              const collectorSet = toExtraKeysOf(base.payload);
+              const revExtras = revAmendMapE[k] && revAmendMapE[k]['extras'];
+              // no correction => the collector's set IS the model's
+              const modelSet = revExtras ? toExtraKeysOf(revExtras.payload) : collectorSet;
+
+              const missing   = [...modelSet].filter(x => !collectorSet.has(x));
+              const notNeeded = [...collectorSet].filter(x => !modelSet.has(x));
+              const errs = missing.length + notNeeded.length;
+
+              // Two rules pull apart here, so both are honoured literally.
+              //
+              // The DENOMINATOR is events the MODEL expects extras on — so an
+              // event the model wants nothing on does not enter it.
+              //
+              // But a "not needed" is still an ERROR: the collector tagged one
+              // of the eight where the model has none. Returning early when the
+              // model set was empty made those errors VANISH — the collector
+              // over-tagged and the card showed 100%.
+              //
+              // So the error is counted and the denominator is not. That can
+              // push errors past the denominator, which is what the floor at 0
+              // is for. If you would rather such events also entered the
+              // denominator, that is a one-line change — but silently losing
+              // the error is not an option.
+              if (modelSet.size > 0) toExtrasDenom++;
+              toExtrasErrors += errs;
+              if (modelSet.size === 0 && errs === 0) return;   // nothing to report
+
+              const p = base.payload || {};
+              const teamRaw = p.team != null ? p.team
+                : (p.fields && p.fields.team != null ? p.fields.team : '');
+              toExtrasRows.push({
+                key: k,
+                eventName: p.name || '',
+                rawName: p.name || '',
+                videoTimestamp: p.videoTimestamp != null ? p.videoTimestamp : '',
+                videoTime: fmtTsE(p.videoTimestamp),
+                team: Array.isArray(teamRaw) ? (teamRaw[0] || '') : String(teamRaw || ''),
+                classification: 'TOEXTRAS',
+                expectedExtras: [...modelSet].join('|'),
+                taggedExtras:   [...collectorSet].join('|'),
+                missingExtras:  missing.join('|'),
+                notNeededExtras: notNeeded.join('|'),
+                errorCount: errs,
+                countedAsError: errs > 0,
+                errorType: errs === 0 ? 'correct'
+                  : [missing.length ? 'missing:' + missing.join('+') : '',
+                     notNeeded.length ? 'not_needed:' + notNeeded.join('+') : '']
+                     .filter(Boolean).join(' + '),
+              });
+            });
+            dtRows.TOEXTRAS = toExtrasRows;
+
             // Stamp the error outcome onto those same rows, from the same sets
             // the score uses. A key not in dtErrors is 'correct' by definition.
             const errByKey = {};
@@ -1532,6 +1621,9 @@
             // PRESSURE included: its rows are copies of C's row objects, so
             // they would be stamped anyway, but listing it explicitly keeps the
             // intent clear if the filter ever produces fresh objects.
+            // TOEXTRAS is deliberately absent: its rows already carry their own
+            // errorType and errorCount from the comparison above, and the
+            // generic stamp would overwrite them with the base-event verdict.
             ;[...DT_TYPES, 'PRESSURE'].forEach(dt => {
               (dtRows[dt] || []).forEach(r => {
                 const types = errByKey[r.key] || [];
@@ -1617,6 +1709,13 @@
               // than from dtReviewed, because pressure is not a module there —
               // it lives inside C. reviewed is the row count, so the card and
               // its CSV cannot disagree.
+              // TO EXTRAS. Denominator is model-expecting EVENTS; errors are
+              // per-extra, so errors can exceed the denominator — hence the
+              // floor at 0, same as every other card.
+              toExtrasScoreDT: toExtrasDenom > 0
+                ? { score: Math.max(0, Math.round(((toExtrasDenom - toExtrasErrors) / toExtrasDenom) * 100)),
+                    reviewed: toExtrasDenom, errors: toExtrasErrors }
+                : null,
               pressureScore: (() => {
                 const rows = dtRows.PRESSURE || [];
                 const reviewed = rows.length;
