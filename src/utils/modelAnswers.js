@@ -20,8 +20,10 @@
 import { invoke } from '@tauri-apps/api/core'
 import {
   FIELD_SHEET_ID, SESSION_COLUMNS, EVENT_COLUMNS,
-  FIELD_TAB_SESSIONS, FIELD_TAB_EVENTS,
+  FIELD_TAB_SESSIONS, FIELD_TAB_EVENTS, EVENT_BY_CODE,
 } from '../config/fieldConfig'
+import { msToReadable } from './fieldSheetSync'
+import { OPEN_STATE_PAIRS } from './fieldExtras'
 
 const BASE = 'https://sheets.googleapis.com/v4/spreadsheets'
 export const CHANGES_TAB = 'model_changes'
@@ -85,6 +87,81 @@ export async function loadModelEvents(sessionId) {
   return items
     .filter(e => e.session_id === sessionId)
     .sort((a, b) => (Number(a.video_time_ms) || 0) - (Number(b.video_time_ms) || 0))
+}
+
+/**
+ * Recompute every column that is DERIVED from another, for the whole list.
+ *
+ * Writing event_code without its event_id and event_label, or video_time_ms
+ * without video_time_readable, leaves the row internally inconsistent — a
+ * reader taking the label would describe the old event type. So derivation is
+ * done here, over the whole list, rather than in the form: three of these
+ * depend on OTHER events, which a single row cannot see.
+ *
+ * Derived from event_code:
+ *   event_id      numericId from EVENT_REGISTRY
+ *   event_label   label from the same entry
+ *
+ * Derived from video_time_ms:
+ *   video_time_readable      msToReadable, the same function FIELD uses
+ *   time_from_half_start_ms  needs the half_start event — cross-row
+ *   duration_ms              needs the paired open event — cross-row
+ *
+ * Fixed for this editor:
+ *   team_source   always 'manual'; the Batch Manager chooses the team by hand
+ *
+ * Deliberately NOT touched: inferred_type and type_source, which record what
+ * FIELD inferred at collection time. Recomputing them here would invent an
+ * inference that never happened.
+ */
+export function deriveEventFields(events) {
+  // half_start anchors time_from_half_start_ms for every other event
+  const halfStart = events.find(e => e.event_code === 'half_start')
+  const halfStartMs = halfStart ? (Number(halfStart.video_time_ms) || 0) : null
+
+  // open events by pair_id, so a close event can measure its duration
+  const openByPair = {}
+  const closeIds = new Set(OPEN_STATE_PAIRS.map(p => p.closeId))
+  events.forEach(e => {
+    if (e.pair_id && !closeIds.has(e.event_code)) {
+      const t = Number(e.video_time_ms)
+      if (Number.isFinite(t)) openByPair[e.pair_id] = t
+    }
+  })
+
+  return events.map((e, i) => {
+    const reg = EVENT_BY_CODE[e.event_code] || {}
+    const videoMs = Number(e.video_time_ms) || 0
+    const out = { ...e }
+
+    out.event_seq            = String(i + 1)
+    out.event_id             = String(reg.numericId ?? '')
+    out.event_label          = reg.label ?? ''
+    out.video_time_readable  = msToReadable(videoMs)
+    // The Batch Manager picked the team by hand, so it is always manual.
+    out.team_source          = 'manual'
+
+    // half_start is its own zero; anything before it has no meaningful offset
+    if (e.event_code === 'half_start') {
+      out.time_from_half_start_ms = '0'
+    } else if (halfStartMs !== null) {
+      const d = videoMs - halfStartMs
+      out.time_from_half_start_ms = d >= 0 ? String(d) : ''
+    } else {
+      out.time_from_half_start_ms = ''
+    }
+
+    // duration_ms belongs to the CLOSE event and is measured from its open
+    // partner, so moving either timestamp changes it
+    if (e.pair_id && closeIds.has(e.event_code) && openByPair[e.pair_id] != null) {
+      const d = videoMs - openByPair[e.pair_id]
+      out.duration_ms = d >= 0 ? String(d) : ''
+    } else if (closeIds.has(e.event_code)) {
+      out.duration_ms = ''
+    }
+
+    return out
+  })
 }
 
 // ── saving ──────────────────────────────────────────────────────────────────
@@ -181,12 +258,11 @@ export async function saveModelAnswer({ model, events, changes, changedBy, onPro
   await deleteEventRows(model.sessionId)
 
   say(`Writing ${events.length} events…`)
-  if (events.length) {
-    const rows = events.map((e, i) => EVENT_COLUMNS.map(c => {
-      // event_seq is re-numbered on save so it always matches list order
-      if (c === 'event_seq') return String(i + 1)
-      return norm(e[c])
-    }))
+  // Derive here, at the single point of write, so no path can persist a row
+  // whose label or readable time disagrees with its code or timestamp.
+  const derived = deriveEventFields(events)
+  if (derived.length) {
+    const rows = derived.map(e => EVENT_COLUMNS.map(c => norm(e[c])))
     // chunked: one request with a few thousand rows is refused
     const CHUNK = 500
     for (let i = 0; i < rows.length; i += CHUNK) {
