@@ -442,3 +442,65 @@ code, .mono { font-family: 'JetBrains Mono', monospace; }
 @keyframes spin {
   to { transform: rotate(360deg); }
 }
+
+/* ── Global button states ──────────────────────────────────────────────────
+   There are ~224 buttons in MARK and only ~74 use .btn-orange or .btn-ghost.
+   No rule existed for a bare <button>, so the other ~150 had NO hover effect
+   at all — which is the whole of the "I hover and nothing happens" problem.
+
+   This also DIAGNOSES the "I click and nothing happens" reports. With a hover
+   state on every button, the two failures become distinguishable: if a button
+   highlights but does not act, the handler is at fault; if it does not
+   highlight, something is covering it. Without this you cannot tell which.
+
+   Deliberately low-specificity so any inline style or .btn-* class still wins
+   on colour; only the interaction states are added. */
+
+button {
+  cursor: pointer;
+  transition: background-color 0.15s ease, border-color 0.15s ease,
+              transform 0.15s ease, opacity 0.15s ease, filter 0.15s ease;
+}
+
+/* Lighten whatever the button already is, rather than imposing a colour —
+   brightness works on transparent, dark and orange backgrounds alike. */
+button:not(:disabled):hover {
+  filter: brightness(1.35);
+}
+
+/* Pressed: a slight shrink confirms the click landed even when the action
+   itself takes a moment. */
+button:not(:disabled):active {
+  transform: scale(0.97);
+  filter: brightness(0.9);
+  transition-duration: 0.08s;
+}
+
+button:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+/* Keyboard focus must stay visible — brightness alone is not an indicator for
+   anyone navigating by Tab. */
+button:focus-visible {
+  outline: 2px solid var(--p2);
+  outline-offset: 2px;
+}
+
+/* Clickable things that are not <button> elements: mode cards, table rows,
+   dropdown triggers. Opted in with cursor:pointer, which they already set. */
+[style*="cursor:pointer"]:not(button):not(:disabled):hover,
+[style*="cursor: pointer"]:not(button):not(:disabled):hover {
+  filter: brightness(1.18);
+  transition: filter 0.15s ease;
+}
+
+/* select is a dropdown trigger and gets the same treatment. */
+select {
+  cursor: pointer;
+  transition: border-color 0.15s ease, filter 0.15s ease;
+}
+select:not(:disabled):hover {
+  filter: brightness(1.25);
+}

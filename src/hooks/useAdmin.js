@@ -37,6 +37,8 @@ export const ROLE = {
   QUALITY_TL:       'Offline Quality Team Leader',
   COLLECTOR:        'Offline Data Collector',
   COLLECTOR_PART:   'Offline Data Collector (Part)',
+  // Same access as Offline Quality Reviewer: every mode, no admin page.
+  TRAINING_SUPPORTER: 'Training Supporter',
 }
 
 export const ALL_ROLES = Object.values(ROLE)
@@ -44,6 +46,7 @@ export const ALL_ROLES = Object.values(ROLE)
 /** Full operational access, but no admin page. */
 const FULL_OPS = [
   ROLE.SUPERVISOR, ROLE.COORDINATOR, ROLE.QUALITY_REVIEWER, ROLE.QUALITY_TL,
+  ROLE.TRAINING_SUPPORTER,
 ]
 
 /** The only two roles permitted to sign in with an HR-code. */

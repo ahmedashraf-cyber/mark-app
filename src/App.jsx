@@ -57,12 +57,17 @@ function PageTransition({ id, children }) {
 function BackgroundDecoration() {
   return (
     <div style={{
+      // zIndex 0, NOT 9999.
+      //
+      // This decoration covered the whole viewport at the highest z-index in
+      // the app. pointerEvents:'none' does let clicks through, so it was not
+      // swallowing them — but sitting on top of everything made it the first
+      // thing DevTools reports under the cursor, which is exactly what makes a
+      // "dead button" impossible to diagnose. Behind the content is where a
+      // background belongs.
       position: 'fixed', inset: 0, pointerEvents: 'none',
-      zIndex: 9999, overflow: 'hidden',
-      transition: 'transform 0.8s ease',
+      zIndex: 0, overflow: 'hidden',
     }}
-      onMouseEnter={e => e.currentTarget.style.transform = 'scale(1.03)'}
-      onMouseLeave={e => e.currentTarget.style.transform = 'scale(1)'}
     >
       <svg width="100%" height="100%" viewBox="0 0 1440 900" preserveAspectRatio="xMidYMid slice"
         xmlns="http://www.w3.org/2000/svg" style={{ position: 'absolute', inset: 0 }}>
@@ -158,7 +163,7 @@ function BackgroundDecoration() {
 }
 
 function AppInner() {
-  const { user, loading, profile, role } = useAuth()
+  const { user, loading, profile, role, roleInfo, logout } = useAuth()
   // The ROLE now decides access, not the email domain. Passing it switches
   // useInternalUser off its transitional domain fallback.
   const isInternal = useInternalUser(profile, role)
@@ -211,6 +216,40 @@ function AppInner() {
   if (!user) return (
     <PageTransition id="login">
       <LoginPage/>
+    </PageTransition>
+  )
+
+  // ── ACCESS REFUSAL ────────────────────────────────────────────────────────
+  // resolveRole already detected a deactivated or unregistered user and
+  // returned role: null with a reason — but nothing ACTED on it. The role was
+  // only fed into useInternalUser, so an inactive person signed in and merely
+  // saw fewer modes. This is the gate, placed after sign-in because Firebase
+  // Auth succeeding says nothing about whether the roster still permits them.
+  //
+  // Both login paths arrive here: email login resolves through useAuth, and
+  // HR-code login also ends up here once Firebase has signed them in.
+  // The bootstrap super admin is never denied. Without this exception, one bad
+  // edit to the roster could lock out the only person able to repair it —
+  // useAdmin keeps the same escape hatch for the admin page itself.
+  const bootstrapAdmin = (user?.email || '').toLowerCase() === 'ahmed.ashraf@hudl.com'
+  if (roleInfo && !roleInfo.role && !bootstrapAdmin) return (
+    <PageTransition id="denied">
+      <div style={{ height:'100vh', display:'flex', alignItems:'center',
+        justifyContent:'center', background:'var(--bg)', padding:24 }}>
+        <div className="card" style={{ padding:32, maxWidth:460, textAlign:'center' }}>
+          <div style={{ fontSize:15, fontWeight:700, color:'#FF453A', marginBottom:10 }}>
+            Access denied
+          </div>
+          <div style={{ fontSize:13, color:'var(--t-2)', lineHeight:1.6 }}>
+            {roleInfo.reason || 'Your account is not permitted to use MARK.'}
+          </div>
+          <div style={{ fontSize:11, color:'var(--t-3)', marginTop:14 }}>
+            {user?.email || ''}
+          </div>
+          <button className="btn-ghost" style={{ marginTop:18, padding:'8px 20px', fontSize:12 }}
+            onClick={logout}>Sign out</button>
+        </div>
+      </div>
     </PageTransition>
   )
 
