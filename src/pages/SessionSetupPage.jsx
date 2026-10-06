@@ -147,9 +147,12 @@ async function fetchMatchesFromSheet() {
 }
 
 export default function SessionSetupPage({ onSessionStart, lastResult, onShowHistory, onWatchSession }) {
-  const { profile, logout, role } = useAuth()
-  const isAdmin    = useAdmin(profile, role)
-  const isInternal = useInternalUser(profile, role)
+  const { profile, logout, role, caps } = useAuth()
+  // caps.admin carries the overrides AND the Batch-Manager lock. The bootstrap
+  // email check stays so a bad roster edit cannot remove the last way in.
+  const isAdmin    = caps.admin || useAdmin(profile, role)
+  // caps already has the Role Access Manager's overrides applied.
+  const isInternal = caps.scout
 
   // Log access level once when profile resolves
   useEffect(() => {

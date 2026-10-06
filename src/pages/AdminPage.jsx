@@ -17,7 +17,12 @@ import { ALL_ROLES, capabilities } from '../hooks/useAdmin'
 import {
   loadUsers, setUserRole, setUserStatus, addUser,
   loadQuizzes, setQuizSetting,
+  loadRoleAccess, saveRoleAccess, PERMISSIONS,
+  loadConfig, setConfigValue,
 } from '../utils/adminSheet'
+import { sendPasswordResetEmail } from 'firebase/auth'
+import { auth } from '../firebase/config'
+import { CURRENT_VERSION } from '../hooks/useUpdateCheck'
 import { showToast } from '../utils/toast'
 
 const INACTIVE = ['inactive', 'removed', 'disabled', 'no', 'false', '0']
@@ -53,9 +58,10 @@ export default function AdminPage({ role, changedBy, onBack }) {
 
   return (
     <Shell onBack={onBack} tab={tab} setTab={setTab}>
-      {tab === 'users'
-        ? <UsersSection changedBy={changedBy}/>
-        : <QuizzesSection changedBy={changedBy} canEdit={caps.editQuizSettings}/>}
+      {tab === 'users'   ? <UsersSection changedBy={changedBy}/>
+       : tab === 'access' ? <AccessSection changedBy={changedBy}/>
+       : tab === 'app'    ? <AppSection changedBy={changedBy}/>
+       : <QuizzesSection changedBy={changedBy} canEdit={caps.editQuizSettings}/>}
     </Shell>
   )
 }
@@ -101,6 +107,29 @@ function UsersSection({ changedBy }) {
       await refresh()
     } catch (e) {
       showToast(e?.message || String(e), 'error')
+    } finally { setBusy('') }
+  }
+
+  /**
+   * Send a reset email. A client CANNOT set another user's password: Firebase's
+   * updatePassword only works on the signed-in user, and changing someone
+   * else's needs the Admin SDK, which must run server-side — shipping that
+   * credential in the app would let anyone take over any account.
+   *
+   * So the user sets their own password from the emailed link. Note this does
+   * NOT update column E of the roster, so HR-code login for that person would
+   * still use the old stored password — which is why only email-login roles
+   * should be reset this way.
+   */
+  async function resetPassword(u) {
+    if (!u.email) return
+    if (!window.confirm(`Send a password reset email to ${u.email}?`)) return
+    setBusy(u.code)
+    try {
+      await sendPasswordResetEmail(auth, u.email)
+      showToast(`Reset email sent to ${u.email}`)
+    } catch (e) {
+      showToast(`Could not send the reset: ${e?.message || e}`, 'error')
     } finally { setBusy('') }
   }
 
@@ -205,6 +234,14 @@ function UsersSection({ changedBy }) {
                           {busy === u.code ? 'Saving…' : 'Save role'}
                         </button>
                       )}
+                      <button style={{ ...btn, padding:'3px 9px', fontSize:10, marginRight:6 }}
+                        disabled={busy === u.code || !u.email}
+                        title={u.email
+                          ? `Send a password reset email to ${u.email}`
+                          : 'No email on record — cannot send a reset'}
+                        onClick={() => resetPassword(u)}>
+                        Reset password
+                      </button>
                       <button style={{ ...btn, padding:'3px 9px', fontSize:10 }}
                         disabled={busy === u.code}
                         onClick={() => toggleStatus(u)}>
@@ -400,6 +437,191 @@ function QuizzesSection({ changedBy, canEdit }) {
   )
 }
 
+// ── Role Access Manager ─────────────────────────────────────────────────────
+
+function AccessSection({ changedBy }) {
+  const [matrix, setMatrix] = useState(null)
+  const [saved,  setSaved]  = useState(null)   // what is on the sheet
+  const [busy,   setBusy]   = useState(false)
+  const [err,    setErr]    = useState('')
+
+  useEffect(() => {
+    (async () => {
+      setErr('')
+      try {
+        const stored = await loadRoleAccess()
+        // Pre-fill from the DEFAULTS, then layer anything already saved. So a
+        // sheet with no role_access tab shows exactly today's behaviour rather
+        // than an empty grid, and the manager edits from a correct baseline.
+        const seed = {}
+        ALL_ROLES.forEach(r => {
+          const base = capabilities(r)
+          seed[r] = {}
+          PERMISSIONS.forEach(p => {
+            seed[r][p.key] = stored[r] && p.key in stored[r]
+              ? stored[r][p.key] : !!base[p.key]
+          })
+        })
+        setMatrix(seed)
+        setSaved(JSON.stringify(seed))
+      } catch (e) { setErr(e?.message || String(e)) }
+    })()
+  }, [])
+
+  const dirty = matrix && JSON.stringify(matrix) !== saved
+
+  async function save() {
+    setBusy(true)
+    try {
+      await saveRoleAccess(matrix, changedBy)
+      setSaved(JSON.stringify(matrix))
+      showToast('Role access saved — applies at each user\u2019s next sign-in')
+    } catch (e) { showToast(e?.message || String(e), 'error') }
+    finally { setBusy(false) }
+  }
+
+  if (err) return <div className="card" style={{ padding:14, fontSize:11, color:'#FF453A' }}>{err}</div>
+  if (!matrix) return <div className="card" style={{ padding:14, fontSize:12, color:'var(--t-3)' }}>Loading…</div>
+
+  return (
+    <>
+      <div className="card" style={{ padding:14, marginBottom:12, display:'flex',
+        alignItems:'center', gap:10, flexWrap:'wrap' }}>
+        <div style={{ fontSize:13, fontWeight:700, flex:1 }}>Role Access Manager</div>
+        <button className="btn-orange" style={{ padding:'6px 14px', fontSize:11,
+          opacity: dirty && !busy ? 1 : 0.45 }}
+          disabled={!dirty || busy} onClick={save}>
+          {busy ? 'Saving…' : 'Save access'}
+        </button>
+      </div>
+      <div className="card" style={{ padding:'9px 14px', marginBottom:12, fontSize:10,
+        color:'var(--t-3)', lineHeight:1.6 }}>
+        Changes apply at each user&rsquo;s next sign-in — the role is read once at
+        login, not on every screen. A blank cell on the sheet keeps that
+        permission&rsquo;s default rather than denying it.
+        <br/>
+        <b style={{ color:'#FF9500' }}>Admin page access for Batch Manager is always on
+        and cannot be removed</b> — unchecking it would remove the only route back
+        into this screen.
+      </div>
+
+      <div className="card" style={{ padding:14, overflowX:'auto' }}>
+        <table style={{ borderCollapse:'collapse', fontSize:10 }}>
+          <thead><tr>
+            <th style={{ ...th, position:'sticky', left:0, background:'var(--bg-2)' }}>Role</th>
+            {PERMISSIONS.map(p => (
+              <th key={p.key} style={{ ...th, textAlign:'center', padding:'7px 6px',
+                writingMode:'vertical-rl', transform:'rotate(180deg)', height:104 }}>
+                {p.label}
+              </th>
+            ))}
+          </tr></thead>
+          <tbody>
+            {ALL_ROLES.map(r => (
+              <tr key={r}>
+                <td style={{ ...td, whiteSpace:'nowrap', position:'sticky', left:0,
+                  background:'var(--bg-2)', fontWeight:600 }}>{r}</td>
+                {PERMISSIONS.map(p => {
+                  const locked = p.key === 'admin' && r === 'Batch Manager'
+                  return (
+                    <td key={p.key} style={{ ...td, textAlign:'center' }}>
+                      <input type="checkbox" checked={!!matrix[r][p.key]}
+                        disabled={locked}
+                        title={locked ? 'Locked on to prevent a lockout' : ''}
+                        onChange={e => setMatrix(m => ({ ...m,
+                          [r]: { ...m[r], [p.key]: e.target.checked } }))}
+                        style={{ accentColor:'var(--p2)', cursor: locked ? 'default' : 'pointer',
+                          opacity: locked ? 0.5 : 1 }}/>
+                    </td>
+                  )
+                })}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </>
+  )
+}
+
+// ── App settings: minimum version ───────────────────────────────────────────
+
+function AppSection({ changedBy }) {
+  const [min, setMin]   = useState('')
+  const [orig, setOrig] = useState('')
+  const [busy, setBusy] = useState(false)
+
+  useEffect(() => {
+    (async () => {
+      const cfg = await loadConfig()
+      setMin(cfg.minimum_version || '')
+      setOrig(cfg.minimum_version || '')
+    })()
+  }, [])
+
+  const shaped = /^\d+\.\d+(\.\d+)?$/.test(min.trim())
+  // Blocking people out is the one setting with no way back from inside the
+  // app, so refuse a minimum ABOVE this build rather than let a typo lock
+  // everyone, including the manager typing it, out at once.
+  const tooHigh = shaped && cmp(min.trim(), CURRENT_VERSION) > 0
+  const dirty = min.trim() !== orig
+
+  async function save() {
+    setBusy(true)
+    try {
+      await setConfigValue('minimum_version', min.trim(), changedBy)
+      setOrig(min.trim())
+      showToast(`Minimum version set to ${min.trim()}`)
+    } catch (e) { showToast(e?.message || String(e), 'error') }
+    finally { setBusy(false) }
+  }
+
+  return (
+    <div className="card" style={{ padding:16, maxWidth:560 }}>
+      <div style={{ fontSize:13, fontWeight:700, marginBottom:4 }}>Minimum app version</div>
+      <div style={{ fontSize:10, color:'var(--t-3)', marginBottom:14, lineHeight:1.6 }}>
+        Anyone on a version below this is blocked at sign-in and told to update.
+        It takes effect the next time they open MARK. Leave it empty to block
+        nobody.
+      </div>
+      <div style={{ display:'flex', gap:8, alignItems:'center' }}>
+        <input value={min} onChange={e => setMin(e.target.value)}
+          placeholder="e.g. 7.9.20" style={{ ...inputStyle, width:140 }}/>
+        <button className="btn-orange" style={{ padding:'6px 14px', fontSize:11,
+          opacity: dirty && (shaped || !min.trim()) && !tooHigh && !busy ? 1 : 0.45 }}
+          disabled={!dirty || busy || (!!min.trim() && !shaped) || tooHigh}
+          onClick={save}>{busy ? 'Saving…' : 'Save'}</button>
+        <span style={{ fontSize:10, color:'var(--t-3)',
+          fontFamily:'JetBrains Mono,monospace' }}>
+          this build: v{CURRENT_VERSION}
+        </span>
+      </div>
+      {!!min.trim() && !shaped && (
+        <div style={{ fontSize:10, color:'#FF453A', marginTop:8 }}>
+          Use the form 7.9.20 — digits and dots only.
+        </div>
+      )}
+      {tooHigh && (
+        <div style={{ fontSize:10, color:'#FF453A', marginTop:8, lineHeight:1.5 }}>
+          {min.trim()} is newer than this build (v{CURRENT_VERSION}). Saving it would
+          block everyone, including you, with no way back in from the app. Set a
+          version that has actually been released.
+        </div>
+      )}
+    </div>
+  )
+}
+
+/** numeric version compare: -1, 0, 1 */
+function cmp(a, b) {
+  const pa = String(a).split('.').map(Number), pb = String(b).split('.').map(Number)
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const x = pa[i] || 0, y = pb[i] || 0
+    if (x !== y) return x < y ? -1 : 1
+  }
+  return 0
+}
+
 // ── shell ───────────────────────────────────────────────────────────────────
 
 function Shell({ onBack, tab, setTab, children }) {
@@ -416,12 +638,13 @@ function Shell({ onBack, tab, setTab, children }) {
           color:'var(--p2)', letterSpacing:1.5, background:'rgba(232,89,12,0.12)',
           padding:'2px 8px', borderRadius:4 }}>ADMIN</div>
         <div style={{ flex:1 }}/>
-        {setTab && ['users','quizzes'].map(t => (
+        {setTab && ['users','access','quizzes','app'].map(t => (
           <button key={t} onClick={() => setTab(t)}
             style={{ ...btn, background: tab === t ? 'rgba(232,89,12,0.14)' : 'transparent',
               borderColor: tab === t ? 'var(--p2)' : 'var(--b-1)',
               color: tab === t ? 'var(--p2)' : 'var(--t-3)' }}>
-            {t === 'users' ? 'Users' : 'Quiz settings'}
+            {t === 'users' ? 'Users' : t === 'access' ? 'Role access'
+              : t === 'quizzes' ? 'Quiz settings' : 'App'}
           </button>
         ))}
       </div>

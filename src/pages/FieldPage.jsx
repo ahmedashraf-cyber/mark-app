@@ -109,11 +109,12 @@ const TEAM_OPTIONS = [
 ]
 
 export default function FieldPage({ session: initialSession, onDone, onBack }) {
-  const { profile, role } = useAuth()
+  const { profile, role, caps } = useAuth()
   // Gates the model-answer checkbox. Operators only: a model answer becomes the
   // reference every collector is scored against, so a collector must not be
   // able to record one. Previously any @hudl.com address could.
-  const isInternal = useInternalUser(profile, role)
+  // caps already has the Role Access Manager's overrides applied.
+  const isInternal = caps.scout
   const videoRef      = useRef(null)
   const isDraggingRef = useRef(false)
   const collStartRef  = useRef(null)  // wall-clock of first event this sitting

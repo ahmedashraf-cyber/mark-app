@@ -972,7 +972,7 @@ export default function SessionHistoryPage({ onBack, initialSession }) {
   const [sessions,      setSessions]      = useState([])
   const [allSessions,   setAllSessions]   = useState([])
   const [loading,       setLoading]       = useState(true)
-  const isAdmin = useAdmin(profile, useAuth()?.role)
+  const isAdmin = useAuth()?.caps?.admin || useAdmin(profile, useAuth()?.role)
   const [adminMode,     setAdminMode]     = useState(isAdmin)  // admin sees all sessions by default
   const [activeSession, setActiveSession] = useState(null)
   const [activeTags,    setActiveTags]    = useState([])

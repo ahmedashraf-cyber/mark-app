@@ -164,10 +164,11 @@ function BackgroundDecoration() {
 }
 
 function AppInner() {
-  const { user, loading, profile, role, roleInfo, logout } = useAuth()
+  const { user, loading, profile, role, roleInfo, caps, logout } = useAuth()
   // The ROLE now decides access, not the email domain. Passing it switches
   // useInternalUser off its transitional domain fallback.
-  const isInternal = useInternalUser(profile, role)
+  // caps already has the Role Access Manager's overrides applied.
+  const isInternal = caps.scout
   const [session, setSession]         = useState(null)
   const [historySession, setHistorySession] = useState(null)
   const [showHistory, setShowHistory] = useState(false)

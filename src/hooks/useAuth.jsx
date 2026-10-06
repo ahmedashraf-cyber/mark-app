@@ -2,6 +2,7 @@ import { useState, useEffect, createContext, useContext } from 'react'
 import { auth, onAuthStateChanged, signOut, db } from '../firebase/config'
 import { doc, getDoc } from 'firebase/firestore'
 import { resolveRole } from '../utils/sheetRole'
+import { capabilities } from './useAdmin'
 
 const AuthContext = createContext(null)
 
@@ -57,6 +58,11 @@ export function AuthProvider({ children }) {
       // the resolved role, and the full result for diagnostics
       role: sheetRole?.role || null,
       roleInfo: sheetRole,
+      // The capability set, computed ONCE here with the Role Access Manager's
+      // overrides applied. Screens read this rather than re-deriving from the
+      // role string — the overrides were being fetched and then dropped,
+      // because the useInternalUser shim never received them.
+      caps: capabilities(sheetRole?.role, sheetRole?.accessOverrides),
       setSheetRole,
     }}>
       {children}

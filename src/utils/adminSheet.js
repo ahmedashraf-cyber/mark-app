@@ -268,3 +268,118 @@ export async function setQuizSetting({ quiz, field, value, changedBy }) {
   }
   return oldValue
 }
+
+// ── Role Access Manager ─────────────────────────────────────────────────────
+
+export const ACCESS_TAB = 'role_access'
+
+/**
+ * The permission columns, in display order. The key is what capabilities()
+ * returns; the label is what the matrix shows.
+ *
+ * `admin` is included so a Batch Manager can grant it to another role — but
+ * capabilities() force-enables it for Batch Manager regardless, so the matrix
+ * cannot be used to lock everyone out of the matrix itself.
+ */
+export const PERMISSIONS = [
+  { key:'scout',            label:'Scout' },
+  { key:'audit',            label:'Audit' },
+  { key:'tag',              label:'Tag' },
+  { key:'tagEditor',        label:'Tag Editor' },
+  { key:'drillCreate',      label:'Drill — Trainer' },
+  { key:'drillTake',        label:'Drill — Trainee' },
+  { key:'comparison',       label:'Comparison' },
+  { key:'modelAnswer',      label:'Model answer box' },
+  { key:'quizManage',       label:'Quiz create/edit' },
+  { key:'quizAssign',       label:'Quiz assign' },
+  { key:'drillDashboards',  label:'Dashboards' },
+  { key:'admin',            label:'Admin page' },
+  { key:'hrCodeLogin',      label:'HR-code login' },
+]
+
+export const ACCESS_HEADER = ['role', ...PERMISSIONS.map(p => p.key)]
+
+/** The saved matrix, or {} when the tab does not exist yet. */
+export async function loadRoleAccess() {
+  try {
+    const rows = await readRange(PEOPLE_SHEET_ID, `${ACCESS_TAB}!A1:Z40`)
+    if (rows.length < 2) return {}
+    const header = rows[0].map(norm)
+    const out = {}
+    rows.slice(1).forEach(r => {
+      const role = norm(r[0]); if (!role) return
+      const perms = {}
+      header.forEach((h, i) => {
+        if (i === 0 || !h) return
+        const v = norm(r[i])
+        if (v !== '') perms[h] = (v === '1' || v.toLowerCase() === 'true')
+      })
+      out[role] = perms
+    })
+    return out
+  } catch { return {} }
+}
+
+/**
+ * Replace the whole matrix.
+ *
+ * Written as one block rather than cell by cell: the matrix is small, and a
+ * partial write would leave some roles on the new rules and some on the old,
+ * which is worse than failing outright.
+ */
+export async function saveRoleAccess(matrix, changedBy) {
+  await ensureTab(PEOPLE_SHEET_ID, ACCESS_TAB, ACCESS_HEADER)
+  const roles = Object.keys(matrix)
+  const rows = roles.map(r =>
+    [r, ...PERMISSIONS.map(p => matrix[r]?.[p.key] ? '1' : '0')])
+  // header plus every role, in one PUT
+  await writeRange(PEOPLE_SHEET_ID, `${ACCESS_TAB}!A1`, [ACCESS_HEADER, ...rows])
+  try {
+    await ensureTab(PEOPLE_SHEET_ID, LOG_TAB, LOG_HEADER)
+    await appendRows(PEOPLE_SHEET_ID, LOG_TAB, [[
+      new Date().toISOString(), norm(changedBy), '', '',
+      'role_access', '', `${roles.length} roles updated`,
+    ]])
+  } catch (e) { console.error('[MARK admin] access saved but not logged:', e) }
+}
+
+// ── config: minimum version ─────────────────────────────────────────────────
+
+export const CONFIG_TAB = 'config'
+const CONFIG_HEADER = ['key', 'value']
+
+export async function loadConfig() {
+  try {
+    const rows = await readRange(PEOPLE_SHEET_ID, `${CONFIG_TAB}!A1:B100`)
+    const out = {}
+    rows.slice(1).forEach(r => { const k = norm(r[0]); if (k) out[k] = norm(r[1]) })
+    return out
+  } catch { return {} }
+}
+
+/**
+ * Set one config key.
+ *
+ * The minimum version locks people OUT, so a typo here is costly: the app's
+ * gate fails open on an unparseable value, but a valid-looking version far in
+ * the future would block everyone. The UI validates the shape before calling
+ * this; this function records the old value so the log shows what it was.
+ */
+export async function setConfigValue(key, value, changedBy) {
+  await ensureTab(PEOPLE_SHEET_ID, CONFIG_TAB, CONFIG_HEADER)
+  const rows = await readRange(PEOPLE_SHEET_ID, `${CONFIG_TAB}!A1:B100`)
+  let rowNum = null, oldValue = ''
+  rows.forEach((r, i) => {
+    if (i > 0 && norm(r[0]) === key) { rowNum = i + 1; oldValue = norm(r[1]) }
+  })
+  if (rowNum) await writeRange(PEOPLE_SHEET_ID, `${CONFIG_TAB}!B${rowNum}`, [[String(value)]])
+  else await appendRows(PEOPLE_SHEET_ID, CONFIG_TAB, [[key, String(value)]])
+
+  try {
+    await ensureTab(PEOPLE_SHEET_ID, LOG_TAB, LOG_HEADER)
+    await appendRows(PEOPLE_SHEET_ID, LOG_TAB, [[
+      new Date().toISOString(), norm(changedBy), '', '', key, oldValue, String(value),
+    ]])
+  } catch (e) { console.error('[MARK admin] config saved but not logged:', e) }
+  return oldValue
+}

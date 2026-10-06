@@ -112,6 +112,14 @@ export function capabilities(role, overrides) {
     editQuizSettings: manager,
     // the other operator roles can SEE quiz settings but not change them
     viewQuizSettings: operator,
+
+    // Named separately so the Role Access Manager can tune them. An override
+    // only applies to a key that already exists here, so a matrix column with
+    // no matching capability would be silently ignored.
+    tagEditor:   manager,            // the Tag Editor replaces Tag for managers
+    quizManage:  operator,           // create, edit, publish
+    quizAssign:  operator,
+    hrCodeLogin: collector,          // collectors only, by default
   }
 
   // ── Role Access Manager overrides ───────────────────────────────────────
