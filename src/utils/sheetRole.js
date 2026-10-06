@@ -47,6 +47,81 @@ export function cachedRole(key) {
   return hit || null
 }
 
+// ── config and role_access ──────────────────────────────────────────────────
+// Both ride along with the role lookup, which already runs once at login and
+// already has an offline fallback. A separate check could fail on its own and
+// lock everyone out — which for a minimum-version gate would be unrecoverable.
+
+const CONFIG_TAB = 'config'
+const ACCESS_TAB = 'role_access'
+
+/** key/value pairs from the config tab. {} when absent or unreadable. */
+export async function fetchConfig() {
+  try {
+    const url = `https://sheets.googleapis.com/v4/spreadsheets/${PEOPLE_SHEET_ID}`
+      + `/values/${encodeURIComponent(CONFIG_TAB + '!A1:B100')}?key=${SHEETS_API_KEY}`
+    const res = await fetch(url)
+    if (!res.ok) return {}
+    const rows = (await res.json()).values || []
+    const out = {}
+    rows.slice(1).forEach(r => {
+      const k = norm(r[0]); if (k) out[k] = norm(r[1])
+    })
+    return out
+  } catch { return {} }
+}
+
+/**
+ * Per-role permission overrides. Row 1 is the header: first column 'role',
+ * then one column per permission. Cell '1' grants, '0' denies.
+ *
+ * Returns { role: { permission: bool } }, or {} when the tab is absent — in
+ * which case capabilities() keeps its hardcoded defaults.
+ */
+export async function fetchRoleAccess() {
+  try {
+    const url = `https://sheets.googleapis.com/v4/spreadsheets/${PEOPLE_SHEET_ID}`
+      + `/values/${encodeURIComponent(ACCESS_TAB + '!A1:Z40')}?key=${SHEETS_API_KEY}`
+    const res = await fetch(url)
+    if (!res.ok) return {}
+    const rows = (await res.json()).values || []
+    if (rows.length < 2) return {}
+    const header = rows[0].map(norm)
+    const out = {}
+    rows.slice(1).forEach(r => {
+      const roleName = norm(r[0]); if (!roleName) return
+      const perms = {}
+      header.forEach((h, i) => {
+        if (i === 0 || !h) return
+        const v = norm(r[i])
+        // A BLANK cell is left undefined, not false, so a half-filled row
+        // falls back per-permission instead of denying everything.
+        if (v !== '') perms[h] = (v === '1' || v.toLowerCase() === 'true')
+      })
+      out[roleName] = perms
+    })
+    return out
+  } catch { return {} }
+}
+
+/**
+ * Compare two dotted versions. Returns true when `version` is BELOW `minimum`.
+ *
+ * Fails OPEN on anything unparseable: a malformed minimum must never lock the
+ * whole organisation out of the app, and there would be no way back in.
+ */
+export function isBelowMinimum(version, minimum) {
+  if (!minimum || !version) return false
+  const parse = v => String(v).trim().replace(/^v/i, '').split('.').map(n => parseInt(n, 10))
+  const a = parse(version), b = parse(minimum)
+  if (a.some(isNaN) || b.some(isNaN) || !a.length || !b.length) return false
+  for (let i = 0; i < Math.max(a.length, b.length); i++) {
+    const x = a[i] || 0, y = b[i] || 0
+    if (x !== y) return x < y
+  }
+  return false
+}
+
 /** Every row of the Supervisor tab. Throws if the sheet cannot be read. */
 export async function fetchPeople() {
   let lastErr = null
@@ -133,9 +208,14 @@ export async function resolveRole({ email, hrCode }) {
       reason: 'Please sign in with your email and password.' }
   }
 
+  // Fetched alongside the role, in the same login round trip.
+  const [config, accessMatrix] = await Promise.all([fetchConfig(), fetchRoleAccess()])
+
   const entry = {
     role: found.role, name: found.name, code: found.code,
     email: found.email, active: true,
+    minimumVersion: config.minimum_version || '',
+    accessOverrides: accessMatrix[found.role] || null,
   }
   writeCache(key, entry)
   // cache under both identifiers, so an email login still warms the HR-code

@@ -81,13 +81,13 @@ export const canUseHrCodeLogin = role => isCollector(role)
  * An unknown or empty role grants NOTHING. That is deliberate: a typo in the
  * sheet must fail closed rather than fall through to some default.
  */
-export function capabilities(role) {
+export function capabilities(role, overrides) {
   const manager   = isManager(role)
   const fullOps   = isFullOps(role)
   const collector = isCollector(role)
   const operator  = manager || fullOps
 
-  return {
+  const base = {
     role: isKnownRole(role) ? String(role).trim() : null,
     known: isKnownRole(role),
 
@@ -113,6 +113,26 @@ export function capabilities(role) {
     // the other operator roles can SEE quiz settings but not change them
     viewQuizSettings: operator,
   }
+
+  // ── Role Access Manager overrides ───────────────────────────────────────
+  // A Batch Manager can retune any permission from the admin page; those
+  // choices live in the role_access tab and arrive here as `overrides`.
+  //
+  // Only keys PRESENT in overrides are applied, so a half-filled row or a new
+  // permission the sheet has never heard of keeps its default rather than
+  // silently becoming false.
+  if (!overrides) return base
+  const out = { ...base }
+  Object.entries(overrides).forEach(([k, v]) => {
+    if (k in base && typeof v === 'boolean') out[k] = v
+  })
+
+  // A Batch Manager's admin access is NOT editable. Unchecking it would remove
+  // the only route back into the matrix and lock the organisation out of its
+  // own access control, with no way to repair it from inside the app.
+  if (manager) out.admin = true
+
+  return out
 }
 
 // ── Backward-compatible shims ───────────────────────────────────────────────

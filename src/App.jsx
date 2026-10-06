@@ -2,7 +2,8 @@ import { useState, useEffect, useRef } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { AuthProvider, useAuth } from './hooks/useAuth.jsx'
 import { useInternalUser } from './hooks/useAdmin.js'
-import { checkForUpdate } from './hooks/useUpdateCheck.js'
+import { isBelowMinimum } from './utils/sheetRole.js'
+import { checkForUpdate, CURRENT_VERSION } from './hooks/useUpdateCheck.js'
 import LoginPage from './pages/LoginPage'
 import SessionSetupPage from './pages/SessionSetupPage'
 import ReviewPage from './pages/ReviewPage'
@@ -216,6 +217,44 @@ function AppInner() {
   if (!user) return (
     <PageTransition id="login">
       <LoginPage/>
+    </PageTransition>
+  )
+
+  // ── MINIMUM VERSION ──────────────────────────────────────────────────────
+  // Read alongside the role, so it cannot fail independently. Placed AFTER the
+  // login gate on purpose: the minimum comes from the roster sheet, which is
+  // only read once someone has signed in. Blocking before login would need a
+  // second, unauthenticated read that could fail on its own — and a bad value
+  // there would be unrecoverable.
+  //
+  // isBelowMinimum fails OPEN on anything unparseable, for the same reason.
+  if (roleInfo?.minimumVersion && isBelowMinimum(CURRENT_VERSION, roleInfo.minimumVersion)) return (
+    <PageTransition id="outdated">
+      <div style={{ height:'100vh', display:'flex', alignItems:'center',
+        justifyContent:'center', background:'var(--bg)', padding:24 }}>
+        <div className="card" style={{ padding:32, maxWidth:480, textAlign:'center' }}>
+          <div style={{ fontSize:15, fontWeight:700, color:'#FF9500', marginBottom:10 }}>
+            This version of MARK is outdated
+          </div>
+          <div style={{ fontSize:13, color:'var(--t-2)', lineHeight:1.6 }}>
+            Please update to version {roleInfo.minimumVersion} or later.
+          </div>
+          <div style={{ fontSize:11, color:'var(--t-3)', marginTop:12,
+            fontFamily:'JetBrains Mono,monospace' }}>
+            you have v{CURRENT_VERSION} · minimum v{roleInfo.minimumVersion}
+          </div>
+          {update?.url && (
+            <a href={update.url} target="_blank" rel="noreferrer"
+              className="btn-orange" style={{ display:'inline-block', marginTop:18,
+                padding:'9px 22px', fontSize:12, textDecoration:'none' }}>
+              Download v{update.version}
+            </a>
+          )}
+          <button className="btn-ghost" style={{ marginTop:12, padding:'8px 20px',
+            fontSize:12, display:'block', margin:'12px auto 0' }}
+            onClick={logout}>Sign out</button>
+        </div>
+      </div>
     </PageTransition>
   )
 
