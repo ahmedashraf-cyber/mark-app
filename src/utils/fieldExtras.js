@@ -1138,3 +1138,50 @@ export function teamNotMeaningful(eventId) {
 export function getMiscommunicationTeam(eventId) {
   return POSSESSION_RULES[eventId]?.miscommunicationTeam || null
 }
+
+/**
+ * Options for a group, after conditional filtering.
+ *
+ * Moved here from FieldPage so the Tag Editor uses the SAME definition rather
+ * than a second copy that could drift. It is pure — group, already-collected
+ * groups, and the live selections in the current group — and encodes the
+ * variant branching: an option carrying `visibleWhen` appears only when the
+ * named groups already hold one of the listed codes. That is what makes
+ * Shot + Head offer Normal / Diving header / Lob instead of the foot options.
+ */
+export function getGroupOptions(group, collected, live) {
+  const opts = group?.options || []
+  if (!opts.some(o => o.visibleWhen)) return opts   // fast path, nothing to filter
+
+  const codesFor = groupId => {
+    if (group?.id === groupId) return (live || []).map(x => x.code)
+    const g = (collected || []).find(x => x.groupId === groupId)
+    return (g?.selections || []).map(x => x.code)
+  }
+
+  return opts.filter(o => {
+    if (!o.visibleWhen) return true
+    return o.visibleWhen.every(cond => {
+      const chosen = codesFor(cond.groupId)
+      return (cond.anyOf || []).some(c => chosen.includes(c))
+    })
+  })
+}
+
+/**
+ * The group chain for an event, resolving a variant when a discriminator value
+ * is already chosen. Mirrors FieldPage's applyVariantChain so the editor offers
+ * exactly the groups FIELD would.
+ */
+export function groupsForEvent(eventId, chosenCodes = []) {
+  const def = EVENT_BY_ID[eventId]
+  if (!def) return []
+  if (!def.variants) return def.groups || []
+
+  const disc = def.variants.discriminator
+  const match = def.variants.variants.find(v =>
+    (v.when || []).some(c => chosenCodes.includes(c)))
+  // before the discriminator is answered, offer the first variant's chain —
+  // which begins with the discriminator group itself
+  return (match || def.variants.variants[0]).groups || []
+}

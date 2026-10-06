@@ -5,6 +5,7 @@ import { useAuth } from '../hooks/useAuth.jsx'
 import { useAdmin, useInternalUser } from '../hooks/useAdmin.js'
 import { importRosterCsv } from '../data/roster.js'
 import AdminPage from './AdminPage.jsx'
+import TagEditorPage from './TagEditorPage.jsx'
 import { CURRENT_VERSION } from '../hooks/useUpdateCheck'
 import { HALVES, formatHalf } from '../utils/half.js'
 
@@ -159,6 +160,7 @@ export default function SessionSetupPage({ onSessionStart, lastResult, onShowHis
   const rosterFileRef = useRef(null)
   const [rosterImporting, setRosterImporting] = useState(false)
   const [showAdmin, setShowAdmin] = useState(false)
+  const [showTagEditor, setShowTagEditor] = useState(false)
 
   async function handleRosterImport(file) {
     if (!file) return
@@ -400,6 +402,11 @@ export default function SessionSetupPage({ onSessionStart, lastResult, onShowHis
 
   // The admin page takes over the screen. Rendered before the setup UI so it
   // owns the viewport rather than appearing inside it.
+  if (showTagEditor) return (
+    <TagEditorPage role={role} changedBy={profile?.email || 'unknown'}
+      onBack={() => setShowTagEditor(false)}/>
+  )
+
   if (showAdmin) return (
     <AdminPage role={role} changedBy={profile?.email || 'unknown'}
       onBack={() => setShowAdmin(false)}/>
@@ -565,10 +572,22 @@ export default function SessionSetupPage({ onSessionStart, lastResult, onShowHis
                       <circle cx="16" cy="16" r="6.5" stroke="#30D158" strokeWidth="1.5" opacity="0.4"/>
                     </svg>
                   ),
-                  title:'Tag',
-                  sub:'Collect events as primary data',
-                  desc:'Open any video and tag events directly — no match ID needed, no error types. Pure data collection.',
-                  steps:['Open any local video file','Tag events with keyboard shortcuts','Export collected data'],
+                  // Batch Manager gets the Tag EDITOR in this slot instead of
+                  // collection. Only the manager's view changes: isAdmin is
+                  // false for every other role, so their Tag tile and mode are
+                  // exactly as before.
+                  ...(isAdmin ? {
+                    mode:'tageditor',
+                    title:'Tag Editor',
+                    sub:'Edit an existing model answer',
+                    desc:'Open an approved model answer and correct its events — change an event type, fix a timestamp or team, adjust attributes, add or remove events. Saving increments the model version.',
+                    steps:['Search for a model answer','Edit, add or delete events','Save as a new version'],
+                  } : {
+                    title:'Tag',
+                    sub:'Collect events as primary data',
+                    desc:'Open any video and tag events directly — no match ID needed, no error types. Pure data collection.',
+                    steps:['Open any local video file','Tag events with keyboard shortcuts','Export collected data'],
+                  }),
                 },
                 {
                   mode:'drill',
@@ -602,7 +621,7 @@ export default function SessionSetupPage({ onSessionStart, lastResult, onShowHis
                   desc:'Enter a match ID and collector HR-code to score their session against the approved model answer.',
                   steps:['Enter match ID and half','Select collector HR-code','View score and detail'],
                 },
-              ].filter(m => isInternal || m.mode === 'field' || m.mode === 'drill').map(m => (
+              ].filter(m => isInternal || m.mode === 'field' || m.mode === 'tageditor' || m.mode === 'drill').map(m => (
                 <div key={m.mode}
                   onClick={() => {
                     // Field mode: start immediately — no match/half needed
@@ -613,6 +632,10 @@ export default function SessionSetupPage({ onSessionStart, lastResult, onShowHis
                     // Comparison mode: start immediately
                     if (m.mode === 'comparison') {
                       onSessionStart({ mode: 'comparison', sessionId: null })
+                      return
+                    }
+                    if (m.mode === 'tageditor') {
+                      setShowTagEditor(true)
                       return
                     }
                     if (m.mode === 'drill') {

@@ -32,7 +32,7 @@ import {
   FIELD_EVENTS, EVENT_BY_ID, EVENT_BY_KEY,
   OPEN_STATE_PAIRS, TRANSPARENT_EVENT_IDS,
   OPTIONS, PASS_TYPE_OPTIONS, inferPassType,
-  POSSESSION_RULES, resolveTeam, applyFlip,
+  POSSESSION_RULES, resolveTeam, applyFlip, getGroupOptions,
   needsExplicitTeam, teamNotMeaningful, getMiscommunicationTeam,
 } from '../utils/fieldExtras'
 
@@ -84,25 +84,6 @@ function basename(p) { return p ? (p.split(/[\\/]/).pop()||p) : 'Untitled' }
  * selection for the current group, needed when the condition refers to the
  * group being edited right now.
  */
-function getGroupOptions(group, collected, live) {
-  const opts = group?.options || []
-  if (!opts.some(o => o.visibleWhen)) return opts   // fast path, nothing to filter
-
-  const codesFor = groupId => {
-    if (group?.id === groupId) return (live || []).map(x => x.code)
-    const g = (collected || []).find(x => x.groupId === groupId)
-    return (g?.selections || []).map(x => x.code)
-  }
-
-  return opts.filter(o => {
-    if (!o.visibleWhen) return true
-    return o.visibleWhen.every(cond => {
-      const chosen = codesFor(cond.groupId)
-      return (cond.anyOf || []).some(c => chosen.includes(c))
-    })
-  })
-}
-
 // ─── Open-state helpers ───────────────────────────────────────────────────────
 function getCloseAction(openStates, key) {
   // Returns the close pair if this key would close an open state
