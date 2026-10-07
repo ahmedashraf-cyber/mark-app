@@ -458,21 +458,27 @@ code, .mono { font-family: 'JetBrains Mono', monospace; }
 
 button {
   cursor: pointer;
-  transition: background-color 0.15s ease, border-color 0.15s ease,
-              transform 0.15s ease, opacity 0.15s ease, filter 0.15s ease;
+  transition: box-shadow 0.15s ease, border-color 0.15s ease,
+              transform 0.15s ease, opacity 0.15s ease;
 }
 
-/* Lighten whatever the button already is, rather than imposing a colour —
-   brightness works on transparent, dark and orange backgrounds alike. */
+/* An INSET box-shadow, not filter: brightness().
+   brightness() was the first attempt and it did nothing visible: most buttons
+   in MARK have background:'transparent' set inline, and brightening a
+   transparent background brightens nothing — only the thin border and the text
+   shifted, which is invisible at a glance.
+   An inset shadow spanning the whole button LAYERS a translucent white over
+   whatever background is there, transparent included, and inline styles cannot
+   override it because they never set box-shadow. */
 button:not(:disabled):hover {
-  filter: brightness(1.35);
+  box-shadow: inset 0 0 0 999px rgba(255, 255, 255, 0.09);
 }
 
-/* Pressed: a slight shrink confirms the click landed even when the action
-   itself takes a moment. */
+/* Pressed: darken the same way, plus a slight shrink so the click is
+   confirmed even when the action itself takes a moment. */
 button:not(:disabled):active {
+  box-shadow: inset 0 0 0 999px rgba(0, 0, 0, 0.18);
   transform: scale(0.97);
-  filter: brightness(0.9);
   transition-duration: 0.08s;
 }
 
@@ -492,8 +498,8 @@ button:focus-visible {
    dropdown triggers. Opted in with cursor:pointer, which they already set. */
 [style*="cursor:pointer"]:not(button):not(:disabled):hover,
 [style*="cursor: pointer"]:not(button):not(:disabled):hover {
-  filter: brightness(1.18);
-  transition: filter 0.15s ease;
+  box-shadow: inset 0 0 0 999px rgba(255, 255, 255, 0.055);
+  transition: box-shadow 0.15s ease;
 }
 
 /* select is a dropdown trigger and gets the same treatment. */
@@ -502,5 +508,5 @@ select {
   transition: border-color 0.15s ease, filter 0.15s ease;
 }
 select:not(:disabled):hover {
-  filter: brightness(1.25);
+  box-shadow: inset 0 0 0 999px rgba(255, 255, 255, 0.07);
 }

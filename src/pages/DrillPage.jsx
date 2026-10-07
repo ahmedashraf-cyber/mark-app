@@ -83,7 +83,7 @@ function DrillShell({ onBack, role, person, busyNav, onOpenTrainee, onNewQuiz, c
 }
 
 export default function DrillPage({ onBack }) {
-  const { profile } = useAuth()
+  const { profile, caps } = useAuth()
   const [role,    setRole]    = useState(null)
   const [person,  setPerson]  = useState(null)
   const [quizzes, setQuizzes] = useState([])
@@ -103,6 +103,7 @@ export default function DrillPage({ onBack }) {
   const [bundle,  setBundle]  = useState(null)
   const [busyNav, setBusyNav] = useState('')
   const [publishing, setPublishing] = useState('')
+  const [sheetCaps, setSheetCaps] = useState(null)
   const [target,  setTarget]  = useState(null)   // { view, quiz?, hrCode? }
 
   // role: login identifies, the Supervisors tab authorises
@@ -114,7 +115,14 @@ export default function DrillPage({ onBack }) {
           roleForEmail(profile?.email), personForEmail(profile?.email),
         ])
         if (!alive) return
+        // resolveDrillRole reads the raw role string and knows nothing about
+        // the Role Access Manager, which is why unchecking drillDashboards had
+        // no effect here: every gate below is `role === 'creator'`.
         setRole(resolveDrillRole(profile, r)); setPerson(p)
+        setSheetCaps(caps || null)
+        console.log('[MARK drill] role from sheet:', JSON.stringify(r),
+          '| drill role:', resolveDrillRole(profile, r),
+          '| dashboards allowed:', caps ? caps.drillDashboards : '(no caps — default)')
       } catch (e) { if (alive) { setError(e.message); setRole('none') } }
     })()
     return () => { alive = false }
@@ -387,9 +395,18 @@ export default function DrillPage({ onBack }) {
   )
 
   // ── list ──
+  // One place for the dashboard decision: the override when the matrix supplies
+  // one, otherwise the creator role as before.
+  const canDashboards = sheetCaps
+    ? !!sheetCaps.drillDashboards
+    : role === 'creator'
+
   const shellProps = {
     onBack, role, person, busyNav,
     onOpenTrainee: () => openWithData('trainee', { hrCode: person?.hrCode }),
+    // a trainee viewing their OWN progress is not a dashboard; a creator
+    // viewing everyone's is, so only the latter is gated
+    canDashboards,
     onNewQuiz: () => setView('build'),
   }
   if (role === null || loading) return (
@@ -522,7 +539,9 @@ export default function DrillPage({ onBack }) {
                   <>
                     <button style={{ padding:'7px 13px', fontSize:12, background:'transparent',
                       border:'1px solid var(--b-1)', borderRadius:7, color:'var(--t-2)',
-                      cursor:'pointer' }}
+                      cursor:'pointer',
+                      // hidden when the Role Access Manager withholds dashboards
+                      display: canDashboards ? undefined : 'none' }}
                       disabled={busyNav === 'dashboard'}
                       onClick={() => openWithData('dashboard', { quiz: q })}>
                       {busyNav === 'dashboard' ? '…' : 'Dashboard'}

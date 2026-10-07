@@ -211,11 +211,30 @@ export async function resolveRole({ email, hrCode }) {
   // Fetched alongside the role, in the same login round trip.
   const [config, accessMatrix] = await Promise.all([fetchConfig(), fetchRoleAccess()])
 
+  const overrides = accessMatrix[found.role] || null
+
+  // Diagnostics. A permission column whose name does not EXACTLY match the key
+  // the code checks falls back to the default silently, so print both sides.
+  console.log('[MARK role] resolved:', JSON.stringify(found.role),
+    '| source: sheet',
+    '| role_access tab:', Object.keys(accessMatrix).length
+      ? `found, ${Object.keys(accessMatrix).length} role rows`
+      : 'MISSING or empty — using hardcoded defaults')
+  if (overrides) {
+    console.log('[MARK role] overrides for this role:', overrides)
+  } else if (Object.keys(accessMatrix).length) {
+    console.warn('[MARK role] the role_access tab exists but has NO row matching',
+      JSON.stringify(found.role), '— check the spelling in column A. Rows present:',
+      Object.keys(accessMatrix))
+  }
+  console.log('[MARK version] current=' + (config.minimum_version
+    ? `? minimum=${config.minimum_version}` : 'no minimum_version set in the config tab'))
+
   const entry = {
     role: found.role, name: found.name, code: found.code,
     email: found.email, active: true,
     minimumVersion: config.minimum_version || '',
-    accessOverrides: accessMatrix[found.role] || null,
+    accessOverrides: overrides,
   }
   writeCache(key, entry)
   // cache under both identifiers, so an email login still warms the HR-code
