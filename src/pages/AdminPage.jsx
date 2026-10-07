@@ -237,7 +237,9 @@ function UsersSection({ changedBy }) {
                       <button style={{ ...btn, padding:'3px 9px', fontSize:10, marginRight:6 }}
                         disabled={busy === u.code || !u.email}
                         title={u.email
-                          ? `Send a password reset email to ${u.email}`
+                          ? `Send a reset link to ${u.email}. MARK cannot set another `
+                            + `user's password directly — that needs Firebase Admin SDK, `
+                            + `which must run server-side.`
                           : 'No email on record — cannot send a reset'}
                         onClick={() => resetPassword(u)}>
                         Reset password

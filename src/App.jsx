@@ -229,6 +229,13 @@ function AppInner() {
   // there would be unrecoverable.
   //
   // isBelowMinimum fails OPEN on anything unparseable, for the same reason.
+  if (roleInfo) {
+    const min = roleInfo.minimumVersion || ''
+    const blocked = !!min && isBelowMinimum(CURRENT_VERSION, min)
+    console.log(`[MARK] version check: current=${CURRENT_VERSION}, `
+      + `minimum=${min || '(none set)'}, result=${blocked ? 'BLOCK' : 'PASS'}`)
+  }
+
   if (roleInfo?.minimumVersion && isBelowMinimum(CURRENT_VERSION, roleInfo.minimumVersion)) return (
     <PageTransition id="outdated">
       <div style={{ height:'100vh', display:'flex', alignItems:'center',
