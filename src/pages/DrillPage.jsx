@@ -103,7 +103,6 @@ export default function DrillPage({ onBack }) {
   const [bundle,  setBundle]  = useState(null)
   const [busyNav, setBusyNav] = useState('')
   const [publishing, setPublishing] = useState('')
-  const [sheetCaps, setSheetCaps] = useState(null)
   const [target,  setTarget]  = useState(null)   // { view, quiz?, hrCode? }
 
   // role: login identifies, the Supervisors tab authorises
@@ -119,7 +118,6 @@ export default function DrillPage({ onBack }) {
         // the Role Access Manager, which is why unchecking drillDashboards had
         // no effect here: every gate below is `role === 'creator'`.
         setRole(resolveDrillRole(profile, r)); setPerson(p)
-        setSheetCaps(caps || null)
         console.log('[MARK drill] role from sheet:', JSON.stringify(r),
           '| drill role:', resolveDrillRole(profile, r),
           '| dashboards allowed:', caps ? caps.drillDashboards : '(no caps — default)')
@@ -397,8 +395,13 @@ export default function DrillPage({ onBack }) {
   // ── list ──
   // One place for the dashboard decision: the override when the matrix supplies
   // one, otherwise the creator role as before.
-  const canDashboards = sheetCaps
-    ? !!sheetCaps.drillDashboards
+  // Read caps DIRECTLY, every render. v7.10.1 copied it into sheetCaps inside
+  // an effect keyed only on profile.email — which can fire before useAuth has
+  // finished resolving the role and its overrides, so the copy held a stale or
+  // empty caps and never refreshed. caps is already memo-free and current; a
+  // snapshot added nothing but a race.
+  const canDashboards = caps && caps.known
+    ? !!caps.drillDashboards
     : role === 'creator'
 
   const shellProps = {

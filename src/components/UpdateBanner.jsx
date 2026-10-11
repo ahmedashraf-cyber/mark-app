@@ -1,3 +1,14 @@
+async function openExternal(url) {
+  if (!url) return
+  try {
+    const { invoke } = await import('@tauri-apps/api/core')
+    await invoke('open_file', { path: url })
+  } catch (e) {
+    console.error('[MARK] could not open', url, e)
+    alert('Could not open the download. Copy this link into your browser:\n\n' + url)
+  }
+}
+
 export default function UpdateBanner({ update, onDismiss }) {
   if (!update) return null
 
@@ -26,10 +37,13 @@ export default function UpdateBanner({ update, onDismiss }) {
             A new version of MARK is ready to install.
           </div>
           <div style={{display:'flex',gap:8}}>
-            <a
-              href={update.downloadUrl}
-              target="_blank"
-              rel="noreferrer"
+            <button
+              // An <a target="_blank"> does NOTHING inside a Tauri webview —
+              // there is no browser tab to open. open_file detects an https URL
+              // and hands it to the OS via rundll32's FileProtocolHandler, the
+              // single-argument form that does not truncate at the & in
+              // GitHub's signed asset URLs.
+              onClick={() => openExternal(update.downloadUrl || update.url)}
               style={{
                 flex:2,
                 background:'#30D158',
@@ -40,13 +54,12 @@ export default function UpdateBanner({ update, onDismiss }) {
                 fontSize:12,
                 fontWeight:700,
                 cursor:'pointer',
-                textDecoration:'none',
                 textAlign:'center',
                 display:'block',
               }}
             >
               Download Update
-            </a>
+            </button>
             <button
               onClick={onDismiss}
               className="btn-ghost"

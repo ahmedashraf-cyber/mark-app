@@ -12,7 +12,7 @@
  * constantly for a change that happens a few times a month.
  */
 import { PEOPLE_SHEET_ID, PEOPLE_TAB_NAMES } from '../config/drillConfig'
-import { COLLECTOR_ROLES, isCollector } from '../hooks/useAdmin'
+import { COLLECTOR_ROLES, isCollector, capabilities } from '../hooks/useAdmin'
 
 const SHEETS_API_KEY = 'AIzaSyDEO-0MZ4-LOdIJ7aIyscgmLWGN5h8MpNI'
 const CACHE_KEY = 'mark_role_cache_v1'
@@ -53,7 +53,7 @@ export function cachedRole(key) {
 // lock everyone out — which for a minimum-version gate would be unrecoverable.
 
 const CONFIG_TAB = 'config'
-const ACCESS_TAB = 'role_access'
+export const ACCESS_TAB = 'role_access'
 
 /** key/value pairs from the config tab. {} when absent or unreadable. */
 export async function fetchConfig() {
@@ -79,29 +79,51 @@ export async function fetchConfig() {
  * which case capabilities() keeps its hardcoded defaults.
  */
 export async function fetchRoleAccess() {
+  // This used to return {} on EVERY failure — a 403, a network error, an empty
+  // tab, a parse error — and {} is indistinguishable from "no tab exists". So a
+  // broken read silently fell back to the hardcoded defaults and left no trace.
+  // Every outcome is now logged, and the result says which one happened.
+  console.log('[MARK access] Reading role_access from sheet...')
+  let res
   try {
     const url = `https://sheets.googleapis.com/v4/spreadsheets/${PEOPLE_SHEET_ID}`
       + `/values/${encodeURIComponent(ACCESS_TAB + '!A1:Z40')}?key=${SHEETS_API_KEY}`
-    const res = await fetch(url)
-    if (!res.ok) return {}
-    const rows = (await res.json()).values || []
-    if (rows.length < 2) return {}
-    const header = rows[0].map(norm)
-    const out = {}
-    rows.slice(1).forEach(r => {
-      const roleName = norm(r[0]); if (!roleName) return
-      const perms = {}
-      header.forEach((h, i) => {
-        if (i === 0 || !h) return
-        const v = norm(r[i])
-        // A BLANK cell is left undefined, not false, so a half-filled row
-        // falls back per-permission instead of denying everything.
-        if (v !== '') perms[h] = (v === '1' || v.toLowerCase() === 'true')
-      })
-      out[roleName] = perms
+    res = await fetch(url)
+  } catch (e) {
+    console.error('[MARK access] FAILED — network error:', e?.message || e)
+    console.warn('[MARK access] Falling back to hardcoded defaults')
+    return { __status: 'network_error', __error: String(e?.message || e) }
+  }
+  if (!res.ok) {
+    const body = await res.text().catch(() => '')
+    console.error(`[MARK access] FAILED — HTTP ${res.status}.`,
+      res.status === 400 ? 'Usually means the role_access TAB does not exist (exact name, case-sensitive).'
+      : res.status === 403 ? 'The API key cannot read this sheet.' : '', body.slice(0, 200))
+    console.warn('[MARK access] Falling back to hardcoded defaults')
+    return { __status: 'http_' + res.status }
+  }
+  const rows = ((await res.json()).values) || []
+  if (rows.length < 2) {
+    console.warn('[MARK access] role_access tab is EMPTY (' + rows.length + ' rows).',
+      'Falling back to hardcoded defaults')
+    return { __status: 'empty' }
+  }
+  const header = rows[0].map(norm)
+  console.log('[MARK access] SUCCESS —', rows.length - 1, 'role rows. Header:', header)
+  const out = { __status: 'ok', __header: header }
+  rows.slice(1).forEach(r => {
+    const roleName = norm(r[0]); if (!roleName) return
+    const perms = {}
+    header.forEach((h, i) => {
+      if (i === 0 || !h) return
+      const v = norm(r[i])
+      // A BLANK cell is left undefined, not false, so a half-filled row falls
+      // back per-permission instead of denying everything.
+      if (v !== '') perms[h] = (v === '1' || v.toLowerCase() === 'true')
     })
-    return out
-  } catch { return {} }
+    out[roleName] = perms
+  })
+  return out
 }
 
 /**
@@ -211,24 +233,46 @@ export async function resolveRole({ email, hrCode }) {
   // Fetched alongside the role, in the same login round trip.
   const [config, accessMatrix] = await Promise.all([fetchConfig(), fetchRoleAccess()])
 
-  const overrides = accessMatrix[found.role] || null
+  // Strip the metadata keys so a role literally named "__status" cannot collide.
+  const { __status, __header, __error, ...roleRows } = accessMatrix
+  // Match the role name forgivingly — case and spacing drift in column A would
+  // otherwise silently miss the row and fall back to defaults.
+  const want = String(found.role).replace(/\s+/g, ' ').trim().toLowerCase()
+  const matchedKey = Object.keys(roleRows).find(k =>
+    k.replace(/\s+/g, ' ').trim().toLowerCase() === want)
+  const overrides = matchedKey ? roleRows[matchedKey] : null
 
-  // Diagnostics. A permission column whose name does not EXACTLY match the key
-  // the code checks falls back to the default silently, so print both sides.
-  console.log('[MARK role] resolved:', JSON.stringify(found.role),
-    '| source: sheet',
-    '| role_access tab:', Object.keys(accessMatrix).length
-      ? `found, ${Object.keys(accessMatrix).length} role rows`
-      : 'MISSING or empty — using hardcoded defaults')
-  if (overrides) {
-    console.log('[MARK role] overrides for this role:', overrides)
-  } else if (Object.keys(accessMatrix).length) {
-    console.warn('[MARK role] the role_access tab exists but has NO row matching',
-      JSON.stringify(found.role), '— check the spelling in column A. Rows present:',
-      Object.keys(accessMatrix))
+  console.log('[MARK access] user role:', JSON.stringify(found.role),
+    '| role_access read:', __status || 'ok')
+  if (__status && __status !== 'ok') {
+    console.warn('[MARK access] Falling back to hardcoded defaults (' + __status + ')')
+  } else if (!overrides) {
+    console.warn('[MARK access] NO ROW for', JSON.stringify(found.role),
+      'in role_access — Falling back to hardcoded defaults. Rows present:',
+      Object.keys(roleRows))
+  } else {
+    console.log('[MARK access] raw row for', JSON.stringify(matchedKey), ':', overrides)
+    // Every permission the code knows, versus what the sheet header supplies.
+    // A one-character difference (plural, camelCase) silently keeps the
+    // default, so print both sides of each one.
+    const codeKeys = Object.keys(capabilities(found.role))
+      .filter(k => !['role','known'].includes(k))
+    const sheetKeys = (__header || []).slice(1).filter(Boolean)
+    console.log('[MARK access] KEY CHECK — code key  vs  sheet header')
+    codeKeys.forEach(k => {
+      const inSheet = sheetKeys.includes(k)
+      const near = !inSheet && sheetKeys.find(h => h.toLowerCase() === k.toLowerCase()
+        || h.toLowerCase().replace(/s$/, '') === k.toLowerCase().replace(/s$/, ''))
+      console.log('   ' + k.padEnd(18) + (inSheet
+        ? 'MATCH       value=' + (k in overrides ? overrides[k] : '(blank → default)')
+        : near ? 'MISMATCH — sheet has "' + near + '"'
+        : 'not in sheet → default'))
+    })
+    const orphans = sheetKeys.filter(h => !codeKeys.includes(h))
+    if (orphans.length) {
+      console.warn('[MARK access] sheet columns the code does NOT recognise (ignored):', orphans)
+    }
   }
-  console.log('[MARK version] current=' + (config.minimum_version
-    ? `? minimum=${config.minimum_version}` : 'no minimum_version set in the config tab'))
 
   const entry = {
     role: found.role, name: found.name, code: found.code,

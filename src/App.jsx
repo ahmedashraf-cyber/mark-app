@@ -251,12 +251,24 @@ function AppInner() {
             fontFamily:'JetBrains Mono,monospace' }}>
             you have v{CURRENT_VERSION} · minimum v{roleInfo.minimumVersion}
           </div>
-          {update?.url && (
-            <a href={update.url} target="_blank" rel="noreferrer"
-              className="btn-orange" style={{ display:'inline-block', marginTop:18,
-                padding:'9px 22px', fontSize:12, textDecoration:'none' }}>
+          {(update?.downloadUrl || update?.url) && (
+            // A <button> calling open_file, not an <a target="_blank">, which
+            // is inert in a Tauri webview. downloadUrl is the .msi asset; the
+            // old link used html_url, the release PAGE, inconsistent with the
+            // banner which already targeted the asset.
+            <button className="btn-orange" style={{ display:'inline-block', marginTop:18,
+                padding:'9px 22px', fontSize:12 }}
+              onClick={async () => {
+                const url = update.downloadUrl || update.url
+                try {
+                  const { invoke } = await import('@tauri-apps/api/core')
+                  await invoke('open_file', { path: url })
+                } catch (e) {
+                  alert('Could not open the download. Copy this link into your browser:\n\n' + url)
+                }
+              }}>
               Download v{update.version}
-            </a>
+            </button>
           )}
           <button className="btn-ghost" style={{ marginTop:12, padding:'8px 20px',
             fontSize:12, display:'block', margin:'12px auto 0' }}
