@@ -2,7 +2,8 @@
  * ComparisonPage.jsx — run comparisons between Field sessions
  * ============================================================================
  * Separate mode — collector never sees model answer before submitting.
- * Reads from Firestore (mark_collected_events + mark_field_sessions).
+ * Reads from the Google Sheet only (field_sessions + field_events), via
+ * utils/comparisonSource.js. Firestore is not consulted for comparisons.
  * Falls back to Sheet for the 6 legacy model imports (no Firestore record).
  *
  * Flow:
@@ -14,15 +15,14 @@
  * FIELD only. Scout and Audit untouched.
  */
 import { useState, useEffect, useRef, useMemo } from 'react'
-import { db } from '../firebase/config'
-import { collection, query, where, getDocs } from 'firebase/firestore'
+import { createSource } from '../utils/comparisonSource'
 import { invoke } from '@tauri-apps/api/core'
 import { useAuth } from '../hooks/useAuth.jsx'
 import { compare } from '../utils/compareEngine'
 import { MODULES_SPLIT, MODULE_LABELS } from '../utils/defectTypes'
 import MultiFilter from '../components/MultiFilter'
 import { writeComparisonResults, findExistingRun } from '../utils/comparisonSheet'
-import { FIELD_SHEET_ID, EVENT_COLUMNS, GROUP_TO_ATTR_COL } from '../config/fieldConfig'
+import { FIELD_SHEET_ID } from '../config/fieldConfig'
 import { CURRENT_VERSION } from '../hooks/useUpdateCheck'
 import { msToReadable } from '../utils/fieldSheetSync'
 
@@ -34,158 +34,13 @@ async function getToken() {
   return token
 }
 
-/**
- * Flatten a Firestore event's nested `groups` into attr_* columns.
- *
- * Mirrors fieldSheetSync.buildEventRows exactly — same GROUP_TO_ATTR_COL
- * mapping, same pipe-joining, same legacy `extras` fallback — so an event
- * compared here and the same event written to the sheet produce identical
- * attribute values.
- */
-function groupsToAttrCols(ev) {
-  const out = Object.fromEntries(
-    EVENT_COLUMNS.filter(c => c.startsWith('attr_')).map(c => [c, '']))
+// ── Data source ─────────────────────────────────────────────────────────────
+// Every Firestore reader that used to live here is gone: loadFirestoreEvents,
+// loadSheetEvents, resolveModelSession, loadSessionEvents, and groupsToAttrCols,
+// the flattener that turned Firestore's nested groups into attr_* columns.
+// Comparisons now read the Sheet only, through utils/comparisonSource.js, so
+// there is no second format to translate from.
 
-  if (ev.groups && ev.groups.length > 0) {
-    ev.groups.forEach(g => {
-      const col = GROUP_TO_ATTR_COL[g.groupId]
-      if (!col) return
-      const codes = (g.selections || []).map(sel => sel.code || sel.label || '').filter(Boolean)
-      if (codes.length > 0) out[col] = codes.join('|')
-    })
-  } else if (ev.extras && ev.extras.length > 0) {
-    // legacy v1/v2 events kept a flat extras array
-    out['attr_extras'] = ev.extras.map(x => String(x)).join('|')
-  }
-
-  // an already-flat event (re-read from the sheet) keeps its own values
-  Object.keys(out).forEach(c => { if (ev[c]) out[c] = ev[c] })
-  return out
-}
-
-// Read events from Firestore by session_id
-async function loadFirestoreEvents(sessionId) {
-  const snap = await getDocs(query(
-    collection(db, 'mark_collected_events'),
-    where('sessionId', '==', sessionId)
-  ))
-  return snap.docs.map(d => d.data())
-}
-
-// Read events from Sheet for legacy model sessions
-async function loadSheetEvents(sessionId) {
-  const token = await getToken()
-  const range = encodeURIComponent('field_events!A:AK')
-  const res = await fetch(`${SHEETS_BASE}/values/${range}`,
-    { headers: { Authorization: `Bearer ${token}` } })
-  if (!res.ok) throw new Error(`Sheet read failed for field_events: ${res.status}`)
-  const data = await res.json()
-  const rows  = data.values || []
-  if (!rows.length) return []
-  const headers = rows[0]
-  // col A (index 0) = session_id per EVENT_COLUMNS definition
-  const sidIdx = headers.indexOf('session_id')
-  if (sidIdx === -1) throw new Error('field_events sheet missing session_id column — check header row')
-  const events = rows.slice(1)
-    .filter(r => (r[sidIdx] || '') === sessionId)
-    .map(r => Object.fromEntries(headers.map((h, i) => [h, r[i] || ''])))
-  if (events.length === 0)
-    throw new Error(`No events found in field_events sheet for session_id "${sessionId}". Check the tab has data and headers match.`)
-  return events
-}
-
-// Load a session from Sheet
-async function loadSheetSession(sessionId) {
-  const token = await getToken()
-  const range = encodeURIComponent('field_sessions!A:V')
-  const res = await fetch(`${SHEETS_BASE}/values/${range}`,
-    { headers: { Authorization: `Bearer ${token}` } })
-  if (!res.ok) throw new Error(`Sheet read failed: ${res.status}`)
-  const data = await res.json()
-  const rows  = data.values || []
-  if (!rows.length) return null
-  const headers = rows[0]
-  const row = rows.slice(1).find(r => r[1] === sessionId)  // col B = session_id
-  if (!row) return null
-  return Object.fromEntries(headers.map((h, i) => [h, row[i] || '']))
-}
-
-// Resolve model session for match_id + half
-async function resolveModelSession(matchId, half) {
-  // Normalise to string — Sheet cells are always strings; Firestore may have been
-  // written as number by older code. String comparison is the standard here.
-  const mid = String(matchId).trim()
-
-  // Try Firestore first
-  const snap = await getDocs(query(
-    collection(db, 'mark_field_sessions'),
-    where('matchId', '==', mid),
-    where('half',    '==', half),
-    where('is_model','==', '1'),
-  ))
-  const approved = snap.docs
-    .map(d => d.data())
-    .filter(s => s.model_status === 'approved')
-    .sort((a, b) => parseInt(b.model_version || 0) - parseInt(a.model_version || 0))
-  if (approved.length > 0) return { session: { ...approved[0], session_id: approved[0].sessionId || approved[0].session_id }, source: 'firestore' }
-
-  // Fall back to Sheet (legacy imports)
-  const token = await getToken()
-  const range = encodeURIComponent('field_sessions!A:V')
-  const res = await fetch(`${SHEETS_BASE}/values/${range}`,
-    { headers: { Authorization: `Bearer ${token}` } })
-  if (!res.ok) throw new Error(`Sheet read failed: ${res.status}`)
-  const data = await res.json()
-  const rows  = data.values || []
-  if (!rows.length) return null
-  const headers = rows[0]
-  const candidates = rows.slice(1)
-    .map(r => Object.fromEntries(headers.map((h, i) => [h, r[i] || ''])))
-    .filter(s =>
-      String(s.match_id).trim() === mid &&   // normalise both sides to string
-      s.half === half &&
-      s.is_model === '1' &&
-      s.model_status === 'approved'
-    )
-    .sort((a, b) => parseInt(b.model_version || 0) - parseInt(a.model_version || 0))
-
-  if (!candidates.length) return null
-  return { session: candidates[0], source: 'sheet' }
-}
-
-// Load events for a session (Firestore or Sheet)
-async function loadSessionEvents(sessionId, source) {
-  if (source === 'firestore') {
-    const evs = await loadFirestoreEvents(sessionId)
-    // Normalise field names to match EVENT_COLUMNS schema
-    return evs.map(ev => ({
-      ...ev,
-      session_id:     ev.sessionId || ev.session_id || '',
-      event_seq:      String(ev.event_seq || ''),
-      event_id:       String(ev.event_id  || ''),
-      event_code:     ev.eventId    || ev.event_code    || '',
-      event_label:    ev.eventLabel || ev.event_label   || '',
-      video_time_ms:  String(ev.video_time_ms || Math.round((ev.videoTimeSec||0)*1000)),
-      time_from_half_start_ms: String(ev.time_from_half_start_ms || ''),
-      team:           ev.team || '',
-      team_source:    ev.teamSource || ev.team_source || '',
-      model_shape:    ev.model_shape || '',
-      // ── Attributes ──────────────────────────────────────────────────────
-      // Firestore stores them as a nested `groups` array; the sheet stores flat
-      // attr_* columns. This normaliser mapped the field NAMES but never the
-      // attributes, so every collector event reached the engine with
-      // attr_direction and friends undefined.
-      //
-      // The engine then read the collector value as empty and returned
-      // missing_extra for every attribute the model had populated — even when
-      // the two were identical, and even when they genuinely differed (which
-      // should have been wrong_extra). Same mapping as fieldSheetSync uses when
-      // writing these events to the sheet, so both paths agree.
-      ...groupsToAttrCols(ev),
-    }))
-  }
-  return loadSheetEvents(sessionId)
-}
 
 function VerdictBadge({ verdict }) {
   const colors = {
@@ -240,6 +95,10 @@ export default function ComparisonPage({ onBack }) {
   // Local review video. Cleared at the start of every run so a new picker
   // opens and the previous file is unloaded — the next comparison may be a
   // different match entirely.
+  // Run by session ID — bypasses the match/half/HR-code lookup entirely.
+  const [bySessionId, setBySessionId] = useState(false)
+  const [modelSessionIdInput, setModelSessionIdInput] = useState('')
+  const [collSessionIdInput,  setCollSessionIdInput]  = useState('')
   const [videoUrl,  setVideoUrl]  = useState('')
   const [videoName, setVideoName] = useState('')
   // Remembered so "Reopen video" needs no second file picker.
@@ -431,7 +290,11 @@ export default function ComparisonPage({ onBack }) {
   async function handleRun() {
     setError(''); setResult(null); setWritten(false)
     setFEvents([]); setFVerdicts([]); setFModules([])
-    if (!matchId.trim() || !half || !hrCode.trim()) {
+    if (bySessionId) {
+      if (!modelSessionIdInput.trim() || !collSessionIdInput.trim()) {
+        setError('Both session IDs are required.'); return
+      }
+    } else if (!matchId.trim() || !half || !hrCode.trim()) {
       setError('Match ID, Half and Collector HR-Code are all required.'); return
     }
 
@@ -469,56 +332,56 @@ export default function ComparisonPage({ onBack }) {
     setLoading(true)
 
     try {
-      // 1. Resolve model session
-      setLoadingMsg('Looking up model answer…')
-      const modelResult = await resolveModelSession(matchId.trim(), half)
-      if (!modelResult) {
-        setError(`No approved model answer found for match ${matchId} ${half}.`); return
+      // ── 1–3. Sessions and events, ALL from the Sheet ────────────────────
+      // Firestore is no longer read anywhere in this flow. Both sides come
+      // from field_sessions / field_events — same tab, same columns, same
+      // format — so there is nothing to translate between them. One source
+      // object per run, so the lookup and the events share one snapshot.
+      const src = createSource()
+      let mSess, cSess
+
+      if (bySessionId) {
+        // The escape hatch: direct lookup, ignoring match_id, half and
+        // is_model, so a mislabelled row is still reachable.
+        setLoadingMsg('Looking up sessions by ID…')
+        mSess = await src.findById(modelSessionIdInput.trim())
+        if (!mSess) { setError(`No session "${modelSessionIdInput.trim()}" in field_sessions.`); return }
+        cSess = await src.findById(collSessionIdInput.trim())
+        if (!cSess) { setError(`No session "${collSessionIdInput.trim()}" in field_sessions.`); return }
+        if (mSess.session_id === cSess.session_id) {
+          setError('The model and collector session IDs are the same session.'); return
+        }
+      } else {
+        setLoadingMsg('Looking up model answer…')
+        mSess = await src.findSession({ matchId, half, isModel: true })
+        if (!mSess) {
+          const seen = await src.candidatesFor({ matchId, half })
+          console.warn('[COMPARE] no model answer. Sessions for this match:', seen)
+          setError(`No model answer found for match ${matchId} ${half}.`
+            + (seen.length ? ` ${seen.length} other session(s) exist for this match — `
+              + 'see the console, or use Run by session ID.' : '')); return
+        }
+        setLoadingMsg('Looking up collector session…')
+        cSess = await src.findSession({ matchId, half, hrCode, isModel: false })
+        if (!cSess) {
+          const seen = await src.candidatesFor({ matchId, half })
+          console.warn('[COMPARE] no collector session. Sessions for this match:', seen)
+          setError(`No collector session found for match ${matchId} ${half} HR-Code ${hrCode}.`
+            + ' See the console for what exists, or use Run by session ID.'); return
+        }
       }
-      const { session: mSess, source: mSource } = modelResult
       setModelSess(mSess)
-
-      // 2. Resolve collector session
-      setLoadingMsg('Looking up collector session…')
-      const mid = String(matchId.trim())
-      const collSnap = await getDocs(query(
-        collection(db, 'mark_field_sessions'),
-        where('matchId',         '==', mid),
-        where('half',            '==', half),
-        where('collectorHrCode', '==', hrCode.trim()),
-      ))
-      const halfAlt = half.replace('H','')
-      const collSnap2 = await getDocs(query(
-        collection(db, 'mark_field_sessions'),
-        where('matchId',         '==', mid),
-        where('half',            '==', halfAlt),
-        where('collectorHrCode', '==', hrCode.trim()),
-      ))
-      const allColl = [...collSnap.docs, ...collSnap2.docs]
-        .map(d => d.data())
-        .filter(s => s.status === 'completed' || s.totalEvents > 0)
-
-      if (allColl.length === 0) {
-        setError(`No collector session found for match ${matchId} ${half} HR-Code ${hrCode}.`); return
-      }
-      if (allColl.length > 1) {
-        setError(`Multiple collector sessions found. HR-Code ${hrCode} has ${allColl.length} sessions for this half.`); return
-      }
-      const cSess = { ...allColl[0], session_id: allColl[0].sessionId || allColl[0].session_id }
       setCollSess(cSess)
 
-      // 3. Load events
       setLoadingMsg('Loading model events…')
-      console.log('[COMPARE] mSess:', JSON.stringify({session_id:mSess.session_id, source:mSource, match_id:mSess.match_id, half:mSess.half}))
-      const mEvents = await loadSessionEvents(mSess.session_id, mSource)
-      console.log('[COMPARE] mEvents loaded:', mEvents.length)
+      const mEvents = await src.loadEvents(mSess.session_id)
+      console.log('[COMPARE] model', mSess.session_id, '→', mEvents.length, 'events')
       if (mEvents.length === 0)
-        throw new Error(`Model session "${mSess.session_id}" loaded 0 events. Check the field_events tab contains data for this session.`)
+        throw new Error(`Model session "${mSess.session_id}" has 0 events in field_events.`)
 
       setLoadingMsg('Loading collector events…')
-      console.log('[COMPARE] cSess:', JSON.stringify({session_id:cSess.session_id, matchId:cSess.matchId, half:cSess.half}))
-      const cEvents = await loadSessionEvents(cSess.session_id, 'firestore')
-      console.log('[COMPARE] cEvents loaded:', cEvents.length)
+      const cEvents = await src.loadEvents(cSess.session_id)
+      console.log('[COMPARE] collector', cSess.session_id, '→', cEvents.length, 'events')
 
       // 4. Run comparison
       setLoadingMsg('Running comparison…')
@@ -676,6 +539,37 @@ export default function ComparisonPage({ onBack }) {
           <div style={{ fontSize:14, fontWeight:700, color:'var(--t-1)', marginBottom:16 }}>
             Run Comparison
           </div>
+
+          {/* The escape hatch for any lookup problem — a wrong match_id, a
+              half stored as "1" instead of "1H", a mislabelled is_model. The
+              IDs are matched directly against session_id, so none of those
+              fields are consulted. */}
+          <label style={{ display:'flex', alignItems:'center', gap:8, marginBottom:12,
+            fontSize:11, color:'var(--t-2)', cursor:'pointer', width:'fit-content' }}>
+            <input type="checkbox" checked={bySessionId}
+              onChange={e => setBySessionId(e.target.checked)}
+              style={{ accentColor:'var(--p2)', cursor:'pointer' }}/>
+            Run by session ID
+          </label>
+
+          {bySessionId ? (
+            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10, marginBottom:14 }}>
+              {[
+                ['Model session ID', modelSessionIdInput, setModelSessionIdInput, 'model_1366067_1H'],
+                ['Collector session ID', collSessionIdInput, setCollSessionIdInput, 'field_…'],
+              ].map(([label, val, set, ph]) => (
+                <div key={label}>
+                  <div style={{ fontSize:10, fontWeight:700, color:'var(--t-3)',
+                    letterSpacing:0.8, marginBottom:4, textTransform:'uppercase' }}>{label}</div>
+                  <input value={val} onChange={e => set(e.target.value)} placeholder={ph}
+                    style={{ width:'100%', background:'var(--bg-3)', border:'1px solid var(--b-1)',
+                      borderRadius:7, padding:'8px 12px', fontSize:12, color:'var(--t-1)',
+                      fontFamily:'JetBrains Mono,monospace', outline:'none',
+                      boxSizing:'border-box' }}/>
+                </div>
+              ))}
+            </div>
+          ) : (
           <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:10, marginBottom:14 }}>
             <div>
               <div style={{ fontSize:10, fontWeight:700, color:'var(--t-3)',
@@ -717,6 +611,7 @@ export default function ComparisonPage({ onBack }) {
                   fontFamily:'JetBrains Mono,monospace', outline:'none', boxSizing:'border-box' }}/>
             </div>
           </div>
+          )}
 
           {error && (
             <div style={{ fontSize:11, color:'#FF453A', background:'rgba(255,69,58,0.08)',
