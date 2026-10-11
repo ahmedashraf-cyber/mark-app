@@ -154,6 +154,38 @@ export default function SessionSetupPage({ onSessionStart, lastResult, onShowHis
   // caps already has the Role Access Manager's overrides applied.
   const isInternal = caps.scout
 
+  /**
+   * Home-screen card visibility, one permission per card.
+   *
+   * The previous filter was
+   *     isInternal || mode === 'field' || mode === 'tageditor' || mode === 'drill'
+   * — the old internal/external split with caps.scout substituted in. That is
+   * ONE boolean gating every card: scout true showed all of them, scout false
+   * still showed Tag, Tag Editor and Drill. The other twelve columns of
+   * role_access were loaded and never consulted here.
+   *
+   * The Tag slot shows Tag Editor when tagEditor is granted and Tag otherwise,
+   * so 'field' and 'tageditor' are two faces of one card and each checks its
+   * own key.
+   */
+  const cardVisible = mode => {
+    switch (mode) {
+      case 'scout':      return !!caps.scout
+      case 'audit':      return !!caps.audit
+      case 'field':      return !!caps.tag
+      case 'tageditor':  return !!caps.tagEditor
+      case 'drill':      return !!(caps.drillTake || caps.drillCreate)
+      case 'comparison': return !!caps.comparison
+      // a card added later with no permission mapped stays hidden rather than
+      // appearing for everyone by default
+      default:           return false
+    }
+  }
+  // the Tag slot is one tile whose mode flips on tagEditor, so count it once
+  const visibleCardCount = ['scout', 'audit',
+    caps.tagEditor ? 'tageditor' : 'field', 'drill', 'comparison']
+    .filter(cardVisible).length
+
   // Log access level once when profile resolves
   useEffect(() => {
     if (profile?.email) {
@@ -525,7 +557,12 @@ export default function SessionSetupPage({ onSessionStart, lastResult, onShowHis
             </div>
 
             {/* Mode cards */}
-            <div style={{display:'grid',gridTemplateColumns:isInternal?'1fr 1fr':'1fr',gap:16,width:'100%',maxWidth:600}}>
+            {/* Columns follow how many cards are actually VISIBLE. This read
+                isInternal, so a role shown two cards could get one column, and
+                one card could be stretched across two. */}
+            <div style={{display:'grid',
+              gridTemplateColumns: visibleCardCount > 1 ? '1fr 1fr' : '1fr',
+              gap:16,width:'100%',maxWidth:600}}>
               {[
                 {
                   mode:'scout',
@@ -579,7 +616,7 @@ export default function SessionSetupPage({ onSessionStart, lastResult, onShowHis
                   // collection. Only the manager's view changes: isAdmin is
                   // false for every other role, so their Tag tile and mode are
                   // exactly as before.
-                  ...(isAdmin ? {
+                  ...(caps.tagEditor ? {
                     mode:'tageditor',
                     title:'Tag Editor',
                     sub:'Edit an existing model answer',
@@ -624,7 +661,7 @@ export default function SessionSetupPage({ onSessionStart, lastResult, onShowHis
                   desc:'Enter a match ID and collector HR-code to score their session against the approved model answer.',
                   steps:['Enter match ID and half','Select collector HR-code','View score and detail'],
                 },
-              ].filter(m => isInternal || m.mode === 'field' || m.mode === 'tageditor' || m.mode === 'drill').map(m => (
+              ].filter(m => cardVisible(m.mode)).map(m => (
                 <div key={m.mode}
                   onClick={() => {
                     // Field mode: start immediately — no match/half needed
