@@ -103,6 +103,8 @@ export function buildSessionRow(session) {
     is_model:                  '0',
     model_version:             '',
     model_status:              '',
+    collection_method:         session.collectionMethod || '',
+    part:                      session.part != null ? String(session.part) : '',
     scope_event_ids:           session.scopeEventIds    || '',
     mark_version:              CURRENT_VERSION,
     export_date:               exportDate,
@@ -192,6 +194,9 @@ export function buildEventRows(events) {
       miscommunication_team:   ev.miscommunicationTeam || '',
       ...attrCols,
       model_shape:             ev.model_shape || '',  // Pressure Code on model rows; empty on live FIELD rows
+      attr_pass_end:           ev.passEnd   || '',
+      attr_play_phase:         ev.playPhase || '',
+      attr_play_side:          ev.playSide  || '',
     }
     return EVENT_COLUMNS.map(col => String(row[col] ?? ''))
   })

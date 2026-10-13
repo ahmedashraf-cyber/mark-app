@@ -76,6 +76,9 @@ export const EVENT_REGISTRY = [
   { numericId: 9070, code: 'camera_off',       label: 'Camera off'        },
   { numericId: 9080, code: 'camera_on',        label: 'Camera on'         },
   { numericId: 9090, code: 'stoppage',         label: 'Stoppage'          },
+  // new ids after the current maximum (9090), so nothing existing renumbers
+  { numericId: 9100, code: 'referee_ball_drop', label: 'Referee ball drop' },
+  { numericId: 9110, code: 'match_status',      label: 'Match status'      },
 ]
 
 // Startup assertion — duplicate numeric IDs are impossible to ship
@@ -116,6 +119,10 @@ export const SESSION_COLUMNS = [
   'collection_elapsed_raw_ms',
   'collection_events_per_min',
   'collection_incomplete',      // 0 / 1
+  // APPENDED for the two collection methods. At the end so no existing column
+  // moves; rows written before these existed simply read them as blank.
+  'collection_method',          // all / partial — blank on older sessions
+  'part',                       // 1 2 3 4 5 — 5 is penalties
 ]
 
 // ── field_events columns (one row per event) ───────────────────────────────────
@@ -161,6 +168,12 @@ export const EVENT_COLUMNS = [
   // Model answer only — Pressure Code (MP1..MP5, OP1, OP2) from Scout review export.
   // Empty on live FIELD collection rows. Retained for analysis of which shapes get missed.
   'model_shape',
+  // APPENDED for All events. Worked out by the phase chain, not asked; blank in
+  // Not all events except play_side on blocks, which that method asks for.
+  // attr_play_side is NEW rather than attr_side, which already holds left/right.
+  'attr_pass_end',              // complete / incomplete
+  'attr_play_phase',            // carry / defense / uncontrolled — fouls
+  'attr_play_side',             // offense / defense — blocks
 ]
 
 // ── Group id → attr_ column name mapping ──────────────────────────────────────

@@ -117,7 +117,7 @@ export default function DrillBuilderPage({ person, onBack, onSaved }) {
   const [saving, setSaving] = useState(false)
   const [saved,  setSaved]  = useState(null)
 
-  const taggable = FIELD_EVENTS.filter(e => e.panel)
+  const taggable = FIELD_EVENTS.filter(e => e.panel && !e.drillHidden)
   const panels   = [...new Set(taggable.map(e => e.panel))]
   // Every clip in the folder is included. The playability probe that used to
   // filter here rejected sound mp4s whenever a request was slow, and silently

@@ -14,12 +14,13 @@
  * DATA: writes to mark_collected_events (never mark_error_tags).
  *   mode:'field', source:'field' on every document.
  */
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useMemo, useEffect, useRef, useCallback } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { db } from '../firebase/config'
 import { collection, addDoc, updateDoc, doc, setDoc,
          getDocs, query, where, serverTimestamp, deleteDoc } from 'firebase/firestore'
 import { useAuth } from '../hooks/useAuth.jsx'
+import { runChain, teamDecision, keyAllowed } from '../utils/phaseChain'
 import ErrorTimeline from '../components/ErrorTimeline'
 import EventsSidebar from '../components/EventsSidebar'
 import TaggedEventsList from '../components/TaggedEventsList'
@@ -132,7 +133,42 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
 
   // ── Session & events ───────────────────────────────────────────────────────
   const [session,      setSession]      = useState(initialSession || null)
+  // ── Collection method ────────────────────────────────────────────────────
+  // 'partial' = Not all events: MARK exactly as before, every event asks.
+  // 'all'     = All events: the phase chain runs and teams are inferred.
+  // Chosen on a screen before the video, with no default.
+  const [collectionMethod, setCollectionMethod] = useState(initialSession?.collectionMethod || null)
+  const [matchPart, setMatchPart] = useState(initialSession?.part ? String(initialSession.part) : null)
+  // Separate from the two choices: picking both must NOT dismiss the screen —
+  // only Continue does, and Continue is what writes them onto the session.
+  const [methodConfirmed, setMethodConfirmed] = useState(
+    !!(initialSession?.collectionMethod && initialSession?.part))
+  const allEvents = collectionMethod === 'all'
   const [events,       setEvents]       = useState([])  // committed events
+
+  // ── The phase chain (All events only) ────────────────────────────────────
+  // "Mine" is the team that kicked off: the team on the latest half start.
+  // The phase is RECOMPUTED from the events every render, never stored, so it
+  // cannot drift after an edit, delete or reload.
+  const mineTeam = useMemo(() => {
+    if (!allEvents) return null
+    const ks = events.filter(e => e.eventId === 'half_start' && e.team)
+    return ks.length ? ks[ks.length - 1].team : null
+  }, [allEvents, events])
+  const toRel = t => (!mineTeam || !t) ? null : (t === mineTeam ? 'mine' : 'opponent')
+  const toAbs = r => !mineTeam ? null : r === 'mine' ? mineTeam
+    : (mineTeam === 'home' ? 'away' : 'home')
+  const passTypeCode = t => (t && typeof t === 'object') ? (t.code || '') : (t || '')
+  const toChainEvent = e => ({
+    code: e.eventId, team: toRel(e.team), groups: e.groups || [],
+    passType: passTypeCode(e.type),
+  })
+  const chainPart = Number(matchPart) || 1
+  const chain = useMemo(() => allEvents
+    ? runChain(events.map(toChainEvent), { part: chainPart }) : [],
+    // toChainEvent depends only on mineTeam, already in the dependency list
+    [allEvents, events, mineTeam, chainPart])
+  const currentPhase = chain.length ? chain[chain.length - 1].phaseAfter : 'preHalf'
 
   // ── Possession state ───────────────────────────────────────────────────────
   // { team: 'home'|'away'|null, certain: boolean }
@@ -238,6 +274,10 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
       status:'in_progress', startedAt:new Date().toISOString(),
       totalEvents:0, accumulatedMs:0,
       collectionStartWallMs:null, collectionEndWallMs:null,
+      // The session is created on video load, AFTER the method screen, so the
+      // choice is stamped here — otherwise it would never reach the sheet.
+      collectionMethod: collectionMethod || null,
+      part: matchPart ? Number(matchPart) : null,
     }
     try { await setDoc(doc(db,'mark_field_sessions',sessionId),{...s,startedAt:serverTimestamp()}) }
     catch(e) { console.warn('[MARK Field] session create:',e) }
@@ -290,6 +330,10 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
   // ── Start capture ──────────────────────────────────────────────────────────
   function startCapture(eventDef, vt, overrideAsClose) {
     if (!session) return
+
+    // All events: a key that is not valid in the current phase does NOTHING —
+    // no message, by design. Not all events never reaches this check.
+    if (allEvents && !keyAllowed(currentPhase, eventDef.id)) return
     if (collStartRef.current===null) collStartRef.current=Date.now()
 
     // Half end force-closes all open states
@@ -352,6 +396,26 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
 
     setGroupChain(next.chain)
     afterTeamRef.current = next
+
+    // All events: the phase decides whether the team is inferred or asked.
+    // Not all events skips this and always asks, exactly as before.
+    if (allEvents && eventDef.id !== 'half_start') {
+      const decision = teamDecision(currentPhase, eventDef.id)
+      if (decision === 'mine' || decision === 'opponent' || decision === 'none') {
+        const team = decision === 'none' ? null : toAbs(decision)
+        setPendingTeam(team)
+        setPendingTeamSource(decision === 'none' ? null : 'inferred')
+        afterTeamRef.current = null
+        if (next.step === 'type_confirm') { setCaptureStep('type_confirm'); return }
+        if ((next.chain || []).length > 0) {
+          setGroupIndex(0); setCurrentSelections([]); setCaptureStep('group'); return
+        }
+        commitEvent(eventDef, vt, null, [], null, null, team,
+          decision === 'none' ? null : 'inferred')
+        return
+      }
+    }
+    // half_start always asks: its answer IS the kickoff team, i.e. "mine"
     setCaptureStep('team')
   }
 
@@ -395,7 +459,7 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
       // All groups done. Team was chosen BEFORE the groups, so commit now
       // rather than prompting at the end as this used to.
       commitEvent(null, undefined, null, newGroups, null, null,
-        pendingTeam, 'manual')
+        pendingTeam, pendingTeamSource || 'manual')
     }
   }
 
@@ -410,7 +474,7 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
         setCaptureStep('group')
       } else {
         // Team already chosen before the groups.
-        commitEvent(null, undefined, null, saved, null, null, pendingTeam, 'manual')
+        commitEvent(null, undefined, null, saved, null, null, pendingTeam, pendingTeamSource || 'manual')
       }
     }
 
@@ -461,7 +525,7 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
       // The explicit / not-meaningful / inferred branching that used to
       // be here is gone — every event has a manually chosen team.
       commitEvent(null, undefined, null, acc, null, null,
-        pendingTeam, 'manual')
+        pendingTeam, pendingTeamSource || 'manual')
     }
 
     // If this group is the discriminator for variants, resolve branch
@@ -513,7 +577,7 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
       // The explicit / not-meaningful / inferred branching that used to
       // be here is gone — every event has a manually chosen team.
       commitEvent(null, undefined, null, saved, null, null,
-        pendingTeam, 'manual')
+        pendingTeam, pendingTeamSource || 'manual')
     }
   }
 
@@ -598,6 +662,19 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
       source:'field', mode:'field',
       collectorId:profile.uid, collectorEmail:profile.email,
       timestamp:Date.now(),
+    }
+
+    // ── Derived fields (All events only) ────────────────────────────────
+    // pass end, foul phase and block side are worked out by the chain, never
+    // asked. Not all events leaves them blank, except block side, which that
+    // method asks for as an ordinary question.
+    if (allEvents) {
+      const run = runChain([...events, ev].map(toChainEvent), { part: chainPart })
+      const f = run.length ? run[run.length - 1].docEvent.fields : {}
+      const one = k => (f[k] && f[k].size) ? [...f[k]][0] : ''
+      ev.passEnd   = one('pass-end')
+      ev.playPhase = realDef.id === 'foul_committed' ? one('phase') : ''
+      ev.playSide  = realDef.id === 'block' ? one('side') : ''
     }
 
     // Apply possession flip AFTER building the event (uses the committed groups)
@@ -717,7 +794,7 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
           setGroupChain(chain); setGroupIndex(0); setCurrentSelections([])
           if (chain.length>0) setCaptureStep('group')
           // team already chosen; nothing left to ask
-          else commitEvent(null,undefined,null,[],null,null,pendingTeam,'manual')
+          else commitEvent(null,undefined,null,[],null,null,pendingTeam,pendingTeamSource||'manual')
           return
         }
         // Number/letter override
@@ -729,7 +806,7 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
           setGroupChain(chain); setGroupIndex(0); setCurrentSelections([])
           if (chain.length>0) setCaptureStep('group')
           // team already chosen; nothing left to ask
-          else commitEvent(null,undefined,null,[],null,null,pendingTeam,'manual')
+          else commitEvent(null,undefined,null,[],null,null,pendingTeam,pendingTeamSource||'manual')
         }
         return
       }
@@ -739,7 +816,7 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
         if (key==='Escape') { abandonCapture(); return }
         const group = groupChain[groupIndex]
         if (!group) return
-        const opts = getGroupOptions(group, collectedGroups, currentSelections)
+        const opts = getGroupOptions(group, collectedGroups, currentSelections, { allEvents })
 
         // Enter = skip (if optional) or confirm multi-select
         if (key==='Enter') {
@@ -998,6 +1075,69 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
   // ── Open state badges ──────────────────────────────────────────────────────
   const openBadges = OPEN_STATE_PAIRS.filter(p=>openStates[p.openId])
 
+  // ── Collection method choice ───────────────────────────────────────────
+  // Shown before the video, with NO default: the trainer's instruction decides,
+  // and a pre-selected answer would let a collector skip the decision. Part is
+  // asked here too, once per session alongside Half.
+  if (!methodConfirmed) {
+    const pick = (m) => setCollectionMethod(m)
+    const opt = (active) => ({
+      padding:'18px 16px', borderRadius:10, cursor:'pointer', textAlign:'left',
+      background: active ? 'rgba(232,89,12,0.12)' : 'var(--bg-3)',
+      border:`1px solid ${active ? 'var(--p2)' : 'var(--b-1)'}`, color:'var(--t-1)',
+    })
+    return (
+      <div style={{ height:'100vh', display:'flex', alignItems:'center', justifyContent:'center',
+        background:'var(--bg)', color:'var(--t-1)', padding:24 }}>
+        <div className="card" style={{ padding:28, width:'100%', maxWidth:520 }}>
+          <div style={{ fontSize:15, fontWeight:700, marginBottom:4 }}>How will you collect?</div>
+          <div style={{ fontSize:11, color:'var(--t-3)', marginBottom:18 }}>
+            Follow your trainer&rsquo;s instructions.
+          </div>
+          <div style={{ display:'grid', gap:10, marginBottom:20 }}>
+            <button style={opt(collectionMethod === 'partial')} onClick={() => pick('partial')}>
+              <div style={{ fontSize:13, fontWeight:700 }}>Not all events</div>
+              <div style={{ fontSize:11, color:'var(--t-3)', marginTop:3 }}>
+                Tag only the events your trainer asked for. Every event asks Home or Away.
+              </div>
+            </button>
+            <button style={opt(collectionMethod === 'all')} onClick={() => pick('all')}>
+              <div style={{ fontSize:13, fontWeight:700 }}>All events</div>
+              <div style={{ fontSize:11, color:'var(--t-3)', marginTop:3 }}>
+                Tag every event in the half, in order.
+              </div>
+            </button>
+          </div>
+          <div style={{ fontSize:10, fontWeight:700, color:'var(--t-3)', letterSpacing:0.8,
+            textTransform:'uppercase', marginBottom:8 }}>Part of the match</div>
+          <div style={{ display:'flex', flexWrap:'wrap', gap:6, marginBottom:22 }}>
+            {[['1','1st half'],['2','2nd half'],['3','Extra time 1'],['4','Extra time 2'],['5','Penalties']]
+              .map(([v, l]) => (
+                <button key={v} onClick={() => setMatchPart(v)}
+                  style={{ padding:'7px 12px', fontSize:11, borderRadius:7, cursor:'pointer',
+                    background: matchPart === v ? 'rgba(232,89,12,0.14)' : 'transparent',
+                    border:`1px solid ${matchPart === v ? 'var(--p2)' : 'var(--b-1)'}`,
+                    color: matchPart === v ? 'var(--p2)' : 'var(--t-2)' }}>{l}</button>
+              ))}
+          </div>
+          <div style={{ display:'flex', gap:8 }}>
+            <button className="btn-ghost" style={{ padding:'9px 16px', fontSize:12 }}
+              onClick={onBack}>Back</button>
+            <div style={{ flex:1 }}/>
+            <button className="btn-orange" style={{ padding:'9px 20px', fontSize:12,
+              opacity: collectionMethod && matchPart ? 1 : 0.45 }}
+              disabled={!collectionMethod || !matchPart}
+              onClick={() => {
+                // carried on the session so the sheet writer records both
+                setSession(s => s ? { ...s, collectionMethod, part: Number(matchPart) } : s)
+                setMethodConfirmed(true)
+              }}>Continue</button>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div style={{height:'100vh',display:'flex',flexDirection:'column',background:'var(--bg)',userSelect:'none',overflow:'hidden'}}>
 
@@ -1188,7 +1328,7 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
                           setPendingType(opt); setPendingTypeSource('manual')
                           const chain=pendingEvent.variants.variants.find(v=>v.when.includes(opt.code))?.groups||pendingEvent.variants.variants[0].groups
                           setGroupChain(chain);setGroupIndex(0);setCurrentSelections([])
-                          if(chain.length>0)setCaptureStep('group');else commitEvent(null,undefined,null,[],null,null,pendingTeam,'manual')
+                          if(chain.length>0)setCaptureStep('group');else commitEvent(null,undefined,null,[],null,null,pendingTeam,pendingTeamSource||'manual')
                         }}
                         style={{display:'flex',alignItems:'center',gap:7,padding:'6px 10px',
                           background:active?'rgba(48,209,88,0.18)':'var(--bg-3)',
@@ -1212,7 +1352,7 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
                 <button onClick={()=>{
                   const chain=pendingEvent.variants.variants.find(v=>v.when.includes(pendingType?.code))?.groups||pendingEvent.variants.variants[0].groups
                   setGroupChain(chain);setGroupIndex(0);setCurrentSelections([])
-                  if(chain.length>0)setCaptureStep('group');else commitEvent(null,undefined,null,[],null,null,pendingTeam,'manual')
+                  if(chain.length>0)setCaptureStep('group');else commitEvent(null,undefined,null,[],null,null,pendingTeam,pendingTeamSource||'manual')
                 }} style={{marginTop:10,background:'rgba(48,209,88,0.15)',border:'1px solid rgba(48,209,88,0.3)',
                   borderRadius:7,padding:'7px 16px',color:'#30D158',cursor:'pointer',fontSize:12,fontWeight:600}}>
                   Enter — Confirm {pendingType?.label}
@@ -1227,7 +1367,7 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
                   {currentGroup.label} — {currentGroup.selectType==='single'?'select one':'select any, Enter when done'}{!currentGroup.required?' (optional)':''}
                 </div>
                 <div style={{display:'flex',flexWrap:'wrap',gap:6}}>
-                  {getGroupOptions(currentGroup, collectedGroups, currentSelections).map(opt=>{
+                  {getGroupOptions(currentGroup, collectedGroups, currentSelections, { allEvents }).map(opt=>{
                     const sel=currentSelections.find(s=>s.code===opt.code)
                     return (
                       <div key={opt.code}
