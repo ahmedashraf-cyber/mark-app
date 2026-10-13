@@ -259,9 +259,17 @@ export function runChain(events, { part = 1 } = {}) {
 
     // ── derived fields, from the context runChain alone can see ──
     // pass-end: completion of the pass this event ends. Complete only when a
-    // TEAMMATE receives it; a foul — including an offside, which the passer's
-    // own team commits — means the pass was never received.
-    if (lastBall && lastBall.event === 'pass' && !NON_BALL.has(raw.code)) {
+    // TEAMMATE receives it; any foul — including an offside, which the passer's
+    // own team commits — means the pass was never received. The one exception
+    // is a foul played with advantage, handled below.
+    // A foul played with ADVANTAGE does not stop play — the ball carries on and
+    // the next real event decides whether the pass was completed. So it is
+    // treated like a non-ball event: it neither ends the pass nor becomes the
+    // last ball event.
+    const advantagePlayed = raw.code === 'foul_committed' && ev.fields.outcome?.has('advantage')
+    const skipsBall = NON_BALL.has(raw.code) || advantagePlayed
+
+    if (lastBall && lastBall.event === 'pass' && !skipsBall) {
       const received = raw.team === lastBall.team && raw.code !== 'foul_committed'
       ev.fields['pass-end'] = new Set([received ? 'complete' : 'incomplete'])
     }
@@ -305,7 +313,7 @@ export function runChain(events, { part = 1 } = {}) {
       if (n) pressure = n
     }
 
-    if (!NON_BALL.has(raw.code)) lastBall = { event: ev.event, team: raw.team }
+    if (!skipsBall) lastBall = { event: ev.event, team: raw.team }
     out.push({ phaseBefore: before, phaseAfter: phase,
       pressureBefore: pBefore, pressureAfter: pressure, valid, docEvent: ev })
   })
