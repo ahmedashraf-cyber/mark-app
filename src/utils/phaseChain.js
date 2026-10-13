@@ -328,11 +328,31 @@ const M = 'mine', O = 'opponent', A = 'ask', N = 'none'
 const NO_TEAM = ['stoppage', 'end_stoppage', 'half_end', 'match_status',
   'camera_on', 'camera_off', 'unknown_pass_end']
 
-/** phase → { MARK event id → decision }. Anything unlisted asks. */
+/**
+ * Who performs each kind of action, taken from the confirmed table — not a new
+ * list. carry is when MY team has the ball, so its entries are what the team
+ * WITH the ball does; defense is when the OPPONENT has it, so its entries are
+ * what the team WITHOUT the ball does.
+ */
+const WITH_BALL    = ['pass', 'shot', 'dribble', 'miscontrol', 'hold_up_duel', 'separation_duel']
+const WITHOUT_BALL = ['tackle', 'leg_stretch_duel', 'goal_keeper']
+const assign = (ids, who) => Object.fromEntries(ids.map(id => [id, who]))
+
+/**
+ * phase → { MARK event id → decision }. Anything unlisted asks.
+ *
+ * Both teams are collected, so an action by EITHER team can occur in carry or
+ * defense. A tackle while my team has the ball is the opponent's tackle, not an
+ * impossible event — and its outcome then moves the chain (a won tackle takes
+ * it to defense). So each of the two possession phases lists BOTH teams'
+ * actions: the team with the ball does WITH_BALL, the other does WITHOUT_BALL.
+ */
 const TABLE = {
   newHalf:   { pass:M, shot:M },
-  carry:     { pass:M, shot:M, dribble:M, miscontrol:M, hold_up_duel:M, separation_duel:M },
-  defense:   { tackle:M, leg_stretch_duel:M, goal_keeper:M },
+  // my team has the ball
+  carry:     { ...assign(WITH_BALL, M), ...assign(WITHOUT_BALL, O) },
+  // the opponent has the ball
+  defense:   { ...assign(WITHOUT_BALL, M), ...assign(WITH_BALL, O) },
   flightO:   { reception:M, pass_first_time:M, shot:M, miscontrol:M },
   flightD:   { goal_keeper:M, clearance:M, interception:M, ball_recovery:M,
                pass_interception:M, pass_recovery:M },
@@ -368,6 +388,10 @@ export function teamDecision(phase, markId) {
 // ════════════════════════════════════════════════════════════════════════════
 
 /**
+ * NOT USED TO BLOCK KEYS. Both teams are collected, so no event is impossible in
+ * a phase — an "invalid" event is simply the other team's. Kept because it
+ * documents what the Mark Chain considers valid and the test exercises it.
+ *
  * Could ANY answer make this event valid in this phase?
  *
  * A key press arrives before the collector has answered the event's questions,

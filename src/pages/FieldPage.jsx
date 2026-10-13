@@ -20,7 +20,7 @@ import { db } from '../firebase/config'
 import { collection, addDoc, updateDoc, doc, setDoc,
          getDocs, query, where, serverTimestamp, deleteDoc } from 'firebase/firestore'
 import { useAuth } from '../hooks/useAuth.jsx'
-import { runChain, teamDecision, keyAllowed } from '../utils/phaseChain'
+import { runChain, teamDecision } from '../utils/phaseChain'
 import ErrorTimeline from '../components/ErrorTimeline'
 import EventsSidebar from '../components/EventsSidebar'
 import TaggedEventsList from '../components/TaggedEventsList'
@@ -331,9 +331,13 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
   function startCapture(eventDef, vt, overrideAsClose) {
     if (!session) return
 
-    // All events: a key that is not valid in the current phase does NOTHING —
-    // no message, by design. Not all events never reaches this check.
-    if (allEvents && !keyAllowed(currentPhase, eventDef.id)) return
+    // All events never blocks a key. Both teams are collected, so an event that
+    // looks out of place in the current phase is simply the OTHER team's — a
+    // tackle while my team has the ball is the opponent's tackle. teamDecision
+    // below assigns it, and its outcome then moves the chain.
+    //
+    // Before Half start there is no "mine" yet, so nothing can be inferred and
+    // every event asks Home/Away — no wrong team can be saved.
     if (collStartRef.current===null) collStartRef.current=Date.now()
 
     // Half end force-closes all open states
@@ -401,7 +405,10 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
     // Not all events skips this and always asks, exactly as before.
     if (allEvents && eventDef.id !== 'half_start') {
       const decision = teamDecision(currentPhase, eventDef.id)
-      if (decision === 'mine' || decision === 'opponent' || decision === 'none') {
+      // Inferring needs "mine" to turn mine/opponent into a real team. If it is
+      // ever missing, ask instead — never save a blank or guessed team.
+      const canInfer = decision === 'none' || !!mineTeam
+      if (canInfer && (decision === 'mine' || decision === 'opponent' || decision === 'none')) {
         const team = decision === 'none' ? null : toAbs(decision)
         setPendingTeam(team)
         setPendingTeamSource(decision === 'none' ? null : 'inferred')
