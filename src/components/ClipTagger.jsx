@@ -83,7 +83,7 @@ export default function ClipTagger({
   const [pending,  setPending]  = useState(null)   // { eventId, at, selections }
   const [err,      setErr]      = useState('')
 
-  const scoped = FIELD_EVENTS.filter(e => scopeIds.includes(e.id))
+  const scoped = FIELD_EVENTS.filter(e => scopeIds.includes(e.id) && !e.drillHidden)
 
   // reset when the clip changes
   useEffect(() => {
@@ -198,7 +198,7 @@ export default function ClipTagger({
         if (e.key === 'Enter')  { e.preventDefault(); commit(pending); return }
         // option toggle keys within the pending groups
         for (const g of groupsFor(pending.eventId)) {
-          const hit = (g.options || []).find(o => o.toggleKey === k)
+          const hit = (g.options || []).filter(o => !o.allEventsOnly).find(o => o.toggleKey === k)
           if (hit) { e.preventDefault(); pick(g.id, hit.code, g.selectType); return }
         }
         return
@@ -300,7 +300,7 @@ export default function ClipTagger({
                 </span>
               </div>
               <div style={{ display:'flex', flexWrap:'wrap', gap:6 }}>
-                {(g.options || []).map(o => {
+                {(g.options || []).filter(o => !o.allEventsOnly).map(o => {
                   const on = (pending.selections[g.id] || []).includes(o.code)
                   return (
                     <button key={o.code} onClick={() => pick(g.id, o.code, g.selectType)}

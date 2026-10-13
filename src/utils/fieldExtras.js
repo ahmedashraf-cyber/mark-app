@@ -184,6 +184,17 @@ function opt(option, toggleKey) {
   return { ...option, toggleKey }
 }
 
+/**
+ * An answer that exists ONLY in the All events method. These were added because
+ * the Mark Chain rules depend on them (a shootout needs shot type "penalty"; a
+ * conceded goal needs keeper "conceded-no-save"). getGroupOptions HIDES them
+ * unless the caller passes allEvents, so Not all events, Drill and the Tag
+ * Editor are unchanged without having to know these exist.
+ */
+function optAll(option, toggleKey) {
+  return { ...option, toggleKey, allEventsOnly: true }
+}
+
 // ─── Reusable group definitions ───────────────────────────────────────────────
 
 const BODY_PART_SHOT = grp('body_part', 'Body part', 'single', true, [
@@ -291,6 +302,14 @@ const GK_STANCE = grp('gk_stance', 'GK stance', 'single', true, [
 const OUTCOME_SHOT = grp('outcome', 'Outcome', 'single', true, [
   opt(O.OUTCOME_OPEN_PLAY,  '1'),
   opt(O.OUTCOME_FIRST_TIME, '2'),
+  // All events only. The document calls this a shot's "type"; phaseChain maps
+  // MARK's shot outcome onto that, so these sit beside open-play / first-time.
+  optAll({ code:'SHOT_TYPE_CORNER',    label:'Corner'    }, '3'),
+  optAll({ code:'SHOT_TYPE_FREE_KICK', label:'Free kick' }, '4'),
+  optAll({ code:'SHOT_TYPE_GOAL_KICK', label:'Goal kick' }, '5'),
+  optAll({ code:'SHOT_TYPE_KICK_OFF',  label:'Kick off'  }, '6'),
+  optAll({ code:'SHOT_TYPE_PENALTY',   label:'Penalty'   }, '7'),
+  optAll({ code:'SHOT_TYPE_REDIRECT',  label:'Redirect'  }, '8'),
 ])
 
 const EXTRAS_SHOT_HEAD = grp('extras', 'Extras', 'multi', false, [
@@ -436,6 +455,7 @@ export const FIELD_EVENTS = [
         opt(O.FOUL_DIVE,       '6'),
         opt(O.FOUL_OFFSIDE,    '7'),
         opt(O.FOUL_EIGHT_SEC,  '8'),
+        optAll({ code:'FOUL_FOUL_OUT', label:'Foul out' }, '9'),   // All events only
       ]),
       grp('kind', 'Card', 'single', true, [
         opt(O.CARD_NO_CARD,       '1'),
@@ -818,6 +838,10 @@ export const FIELD_EVENTS = [
       opt({ code:'GK_TYPE_SAVE_WON',       label:'Save (Won)'          }, '4'),
       opt({ code:'GK_TYPE_SAVE_SUCCESS',   label:'Save (Success / SE)' }, '5'),
       opt({ code:'GK_TYPE_SMOTHER',        label:'Smother'             }, '6'),
+      // All events only — how the chain learns a goal was conceded, and the
+      // penalty-shootout save attempt.
+      optAll({ code:'GK_TYPE_SAVE_ATTEMPT',     label:'Save attempt'     }, '7'),
+      optAll({ code:'GK_TYPE_CONCEDED_NO_SAVE', label:'Conceded no save' }, '8'),
     ]),
   },
 
@@ -859,6 +883,22 @@ export const FIELD_EVENTS = [
     // Possession marked uncertain — no flip, no team stored.
     id: 'unknown_pass_end', label: 'Unknown pass end', hotkey: null, mouseOnly: true, panel: 'Defense',
     groups: [ MISCOMMUNICATION ],
+  },
+  // ── Added for the Mark Chain (All events) ──────────────────────────────────
+  // No shortcut (click only), no extra questions, shown in every panel.
+  // drillHidden keeps them out of Drill: the quiz builder cannot scope a quiz
+  // to them, and the quiz tagger filters them as well.
+  {
+    id: 'referee_ball_drop', label: 'Referee ball drop', hotkey: null, mouseOnly: true,
+    panel: 'Offense', drillHidden: true,
+    groups: [],
+  },
+  {
+    // What Match status represents is still to be confirmed. It is added so
+    // the document's halfEnd rules can be satisfied; nothing else depends on it.
+    id: 'match_status', label: 'Match status', hotkey: null, mouseOnly: true,
+    panel: 'Offense', drillHidden: true,
+    groups: [],
   },
 ]
 
@@ -1149,8 +1189,10 @@ export function getMiscommunicationTeam(eventId) {
  * named groups already hold one of the listed codes. That is what makes
  * Shot + Head offer Normal / Diving header / Lob instead of the foot options.
  */
-export function getGroupOptions(group, collected, live) {
-  const opts = group?.options || []
+export function getGroupOptions(group, collected, live, { allEvents = false } = {}) {
+  // Default is to HIDE All-events-only answers, so every existing caller —
+  // Drill, the Tag Editor, Not all events — is unchanged without edits.
+  const opts = (group?.options || []).filter(o => allEvents || !o.allEventsOnly)
   if (!opts.some(o => o.visibleWhen)) return opts   // fast path, nothing to filter
 
   const codesFor = groupId => {

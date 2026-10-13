@@ -816,7 +816,7 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
         if (key==='Escape') { abandonCapture(); return }
         const group = groupChain[groupIndex]
         if (!group) return
-        const opts = getGroupOptions(group, collectedGroups, currentSelections)
+        const opts = getGroupOptions(group, collectedGroups, currentSelections, { allEvents })
 
         // Enter = skip (if optional) or confirm multi-select
         if (key==='Enter') {
@@ -1367,7 +1367,7 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
                   {currentGroup.label} — {currentGroup.selectType==='single'?'select one':'select any, Enter when done'}{!currentGroup.required?' (optional)':''}
                 </div>
                 <div style={{display:'flex',flexWrap:'wrap',gap:6}}>
-                  {getGroupOptions(currentGroup, collectedGroups, currentSelections).map(opt=>{
+                  {getGroupOptions(currentGroup, collectedGroups, currentSelections, { allEvents }).map(opt=>{
                     const sel=currentSelections.find(s=>s.code===opt.code)
                     return (
                       <div key={opt.code}

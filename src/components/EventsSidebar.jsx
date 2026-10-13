@@ -45,6 +45,8 @@ const LEFT_EVENTS = [
   { key: null,   label: 'Camera On',       id: 'camera_on' },
   { key: null,   label: 'Half start',      id: 'half_start' },
   { key: null,   label: 'Half end',        id: 'half_end' },
+  { key: null,   label: 'Referee ball drop', id: 'referee_ball_drop' },
+  { key: null,   label: 'Match status',    id: 'match_status' },
 ]
 
 const RIGHT_EVENTS = [
@@ -59,6 +61,9 @@ const RIGHT_EVENTS = [
   { key: 'U',    label: 'Leg Stretch Duel', id: 'leg_stretch_duel' },
   { key: 'K',    label: 'Goal Keeper',      id: 'goal_keeper' },
   { key: 'G',    label: 'Pressure',         id: 'pressure' },
+  // shown in every panel, click only
+  { key: null,   label: 'Referee ball drop', id: 'referee_ball_drop' },
+  { key: null,   label: 'Match status',     id: 'match_status' },
 ]
 
 function EventCard({ ev, active, onClick }) {

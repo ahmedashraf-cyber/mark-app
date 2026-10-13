@@ -76,6 +76,9 @@ export const EVENT_REGISTRY = [
   { numericId: 9070, code: 'camera_off',       label: 'Camera off'        },
   { numericId: 9080, code: 'camera_on',        label: 'Camera on'         },
   { numericId: 9090, code: 'stoppage',         label: 'Stoppage'          },
+  // new ids after the current maximum (9090), so nothing existing renumbers
+  { numericId: 9100, code: 'referee_ball_drop', label: 'Referee ball drop' },
+  { numericId: 9110, code: 'match_status',      label: 'Match status'      },
 ]
 
 // Startup assertion — duplicate numeric IDs are impossible to ship
