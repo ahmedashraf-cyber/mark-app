@@ -383,7 +383,19 @@ const TABLE = {
  * Pressure start is inferred from the main phase: the team WITHOUT the ball is
  * pressing. With no team in possession, it asks.
  */
+/**
+ * Events that ASK in a phase even though they have no team everywhere else.
+ * In both Loose tables, Stoppage and Half End are highlighted: during a loose
+ * ball the collector says which team they relate to.
+ */
+const ASK_OVERRIDE = {
+  looseO: ['stoppage', 'half_end'],
+  looseD: ['stoppage', 'half_end'],
+}
+
 export function teamDecision(phase, markId) {
+  // checked BEFORE the no-team list, which would otherwise hide these
+  if ((ASK_OVERRIDE[phase] || []).includes(markId)) return A
   if (NO_TEAM.includes(markId)) return N
   if (markId === 'pressure_start' || markId === 'pressure_end') {
     if (phase in ATTACKING_IS_MINE) return ATTACKING_IS_MINE[phase] ? O : M
