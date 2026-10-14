@@ -384,8 +384,27 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
     //
     // There is no branch left that saves an event without a chosen side.
     let next = { step: 'group', chain: eventDef.groups || [] }
+    // Set only when the pass type is decided without asking; passed straight to
+    // commitEvent below, because setPendingType is not applied until after this
+    // function returns and an immediate save would otherwise read no type.
+    let autoPassType = null
 
-    if (eventDef.id === 'pass') {
+    // carry = MY team has the ball at its feet; defense = the OPPONENT does. A
+    // pass from either is open play — the same rule, for both teams.
+    if (eventDef.id === 'pass' && allEvents && (currentPhase === 'carry' || currentPhase === 'defense')) {
+      // All events: after a reception the chain is in carry, and the Mark Chain
+      // allows only an OPEN PLAY pass there ('pass field type is open-play').
+      // So the type is not asked. The follow-up questions are the open-play
+      // variant's, chosen exactly as confirming the type would choose them.
+      autoPassType = PASS_TYPE_OPTIONS.find(o => o.code === 'TYPE_OPEN_PLAY') || null
+      setPendingType(autoPassType)
+      setPendingTypeSource('inferred')
+      const vs = eventDef.variants?.variants
+      const chain = vs
+        ? (vs.find(v => v.when.includes('TYPE_OPEN_PLAY'))?.groups || vs[0].groups)
+        : (eventDef.groups || [])
+      next = { step: 'group', chain }
+    } else if (eventDef.id === 'pass') {
       // The pass TYPE is still inferred — that is unchanged and does not use
       // team. Only the team prompt is inserted ahead of it.
       const { type, defaulted } = inferPassType(events, possessionRef.current)
@@ -417,8 +436,8 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
         if ((next.chain || []).length > 0) {
           setGroupIndex(0); setCurrentSelections([]); setCaptureStep('group'); return
         }
-        commitEvent(eventDef, vt, null, [], null, null, team,
-          decision === 'none' ? null : 'inferred')
+        commitEvent(eventDef, vt, autoPassType, [], autoPassType ? 'inferred' : null,
+          null, team, decision === 'none' ? null : 'inferred')
         return
       }
     }

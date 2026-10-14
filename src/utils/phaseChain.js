@@ -339,6 +339,20 @@ const WITHOUT_BALL = ['tackle', 'leg_stretch_duel', 'goal_keeper']
 const assign = (ids, who) => Object.fromEntries(ids.map(id => [id, who]))
 
 /**
+ * Pass in the air. From the confirmed Flight O / Flight D tables: Flight O's
+ * inferred events are done by the PASSING team, Flight D's by the OTHER team.
+ * Out and Own goal against follow the confirmed Flight O decisions — the
+ * passer put it out; a defender turned it into their own net.
+ */
+const FLIGHT_PASSER = ['reception', 'pass_first_time', 'shot', 'miscontrol', 'out']
+const FLIGHT_OTHER  = ['goal_keeper', 'clearance', 'interception', 'ball_recovery',
+  'pass_interception', 'pass_recovery', 'own_goal_against']
+
+/** Shot in the air, from the confirmed Shot Flight tables. */
+const SHOT_SHOOTER = ['end_shot', 'shot']          // shot = Shot Redirect
+const SHOT_OTHER   = ['goal_keeper']
+
+/**
  * phase → { MARK event id → decision }. Anything unlisted asks.
  *
  * Both teams are collected, so an action by EITHER team can occur in carry or
@@ -364,12 +378,20 @@ const TABLE = {
   //   own goal against — a defender turned my pass into their own net, so it is
   //                      the OPPONENT's; the document then sends the chain to
   //                      idle with the opponent kicking off
-  flightO:   { reception:M, pass_first_time:M, shot:M, miscontrol:M,
-               out:M, own_goal_against:O },
-  flightD:   { goal_keeper:M, clearance:M, interception:M, ball_recovery:M,
-               pass_interception:M, pass_recovery:M },
-  shotFlightO: { end_shot:M, shot:M },
-  shotFlightD: { goal_keeper:M },
+  // ── pass in the air ─────────────────────────────────────────────────────
+  // Symmetric, like carry/defense: each flight phase lists what the PASSING
+  // team does and what the OTHER team does, so the same event resolves for
+  // whichever team it belongs to. Before this, each phase was written from one
+  // side only — a reception after the opponent's pass, or a ball recovery
+  // after mine, fell through to asking.
+  //   - reception and first-time pass inherit the passer (the passing team)
+  //   - a ball recovery right after a pass is the OTHER team's
+  flightO:   { ...assign(FLIGHT_PASSER, M), ...assign(FLIGHT_OTHER, O) },
+  flightD:   { ...assign(FLIGHT_PASSER, O), ...assign(FLIGHT_OTHER, M) },
+
+  // ── shot in the air ─────────────────────────────────────────────────────
+  shotFlightO: { ...assign(SHOT_SHOOTER, M), ...assign(SHOT_OTHER, O) },
+  shotFlightD: { ...assign(SHOT_SHOOTER, O), ...assign(SHOT_OTHER, M) },
   restartThrow:{ pass:M, shot:M }, restartGkCorner:{ pass:M, shot:M },
   restartFoul: { pass:M, shot:M }, restartFoulOut: { pass:M, shot:M },
   restartKickoff:{ pass:M, shot:M }, restartEightSeconds:{ pass:M, shot:M },
@@ -378,6 +400,8 @@ const TABLE = {
   // loose ball, my team likely to recover. Every event asks (all highlighted)
   // except Own goal against, which is the OPPONENT's — as in Flight O (confirmed)
   looseO:    { own_goal_against:O },
+  // mirror of Loose O: own goal during the opponent's likely recovery is mine
+  looseD:    { own_goal_against:M },
 }
 
 /**
