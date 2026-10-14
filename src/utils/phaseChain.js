@@ -353,7 +353,16 @@ const TABLE = {
   carry:     { ...assign(WITH_BALL, M), ...assign(WITHOUT_BALL, O) },
   // the opponent has the ball
   defense:   { ...assign(WITHOUT_BALL, M), ...assign(WITH_BALL, O) },
-  flightO:   { reception:M, pass_first_time:M, shot:M, miscontrol:M },
+  // my pass in the air. Ask ONLY on the contested events from the Flight O
+  // table (block, foul, hold-up duel, positioning duel, shield, error); every
+  // other event is inferred:
+  //   out              — nobody else touched it (that would be a block or an
+  //                      interception first), so MY team put it out
+  //   own goal against — a defender turned my pass into their own net, so it is
+  //                      the OPPONENT's; the document then sends the chain to
+  //                      idle with the opponent kicking off
+  flightO:   { reception:M, pass_first_time:M, shot:M, miscontrol:M,
+               out:M, own_goal_against:O },
   flightD:   { goal_keeper:M, clearance:M, interception:M, ball_recovery:M,
                pass_interception:M, pass_recovery:M },
   shotFlightO: { end_shot:M, shot:M },
