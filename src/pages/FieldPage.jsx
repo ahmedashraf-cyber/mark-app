@@ -20,7 +20,7 @@ import { db } from '../firebase/config'
 import { collection, addDoc, updateDoc, doc, setDoc,
          getDocs, query, where, serverTimestamp, deleteDoc } from 'firebase/firestore'
 import { useAuth } from '../hooks/useAuth.jsx'
-import { runChain, teamDecision } from '../utils/phaseChain'
+import { runChain, teamDecision, receptionAllowed } from '../utils/phaseChain'
 import ErrorTimeline from '../components/ErrorTimeline'
 import EventsSidebar from '../components/EventsSidebar'
 import TaggedEventsList from '../components/TaggedEventsList'
@@ -338,6 +338,13 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
     //
     // Before Half start there is no "mine" yet, so nothing can be inferred and
     // every event asks Home/Away — no wrong team can be saved.
+
+    // The ONE key All events blocks: a Reception must follow a pass (camera
+    // off/on and pressure start/end may sit between them, nothing else). With
+    // no pass before it there is nothing for it to be the reception of, so the
+    // key does nothing — confirmed. Not all events never reaches this check.
+    if (allEvents && eventDef.id === 'reception' &&
+        !receptionAllowed(events.map(e => e.eventId))) return
     if (collStartRef.current===null) collStartRef.current=Date.now()
 
     // Half end force-closes all open states

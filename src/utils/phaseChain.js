@@ -458,3 +458,34 @@ export function keyAllowed(phase, markId) {
   // empty postRules = unrestricted (see runChain)
   return post.length === 0 || names(post) || names(ALWAYS) || names(TRANSPARENT)
 }
+
+// ════════════════════════════════════════════════════════════════════════════
+// 7. RECEPTION RULE
+// ════════════════════════════════════════════════════════════════════════════
+
+/** Every kind of pass. A reception may follow any of them. */
+const PASS_FAMILY = new Set(['pass', 'pass_first_time', 'pass_interception', 'pass_recovery'])
+
+/**
+ * Events that may sit BETWEEN a pass and its reception. Only camera off/on and
+ * pressure start/end — confirmed. A CARD is deliberately not here: a card
+ * between the pass and the reception breaks the rule.
+ */
+const BETWEEN_PASS_AND_RECEPTION = new Set(['camera_off', 'camera_on', 'pressure_start', 'pressure_end'])
+
+/**
+ * May a Reception be tagged now? Only when the most recent event — skipping
+ * camera off/on and pressure start/end — is a pass. Otherwise the Reception key
+ * does nothing (confirmed). This is the one key All events blocks: a reception
+ * with no pass before it has nothing to be the reception OF.
+ *
+ * eventIds: the half's MARK event ids, in order, most recent last.
+ */
+export function receptionAllowed(eventIds) {
+  for (let i = eventIds.length - 1; i >= 0; i--) {
+    const id = eventIds[i]
+    if (BETWEEN_PASS_AND_RECEPTION.has(id)) continue
+    return PASS_FAMILY.has(id)
+  }
+  return false   // nothing before it at all
+}
