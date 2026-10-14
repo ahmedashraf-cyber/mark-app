@@ -352,7 +352,10 @@ const TABLE = {
   // my team has the ball
   carry:     { ...assign(WITH_BALL, M), ...assign(WITHOUT_BALL, O) },
   // the opponent has the ball
-  defense:   { ...assign(WITHOUT_BALL, M), ...assign(WITH_BALL, O) },
+  defense:   { ...assign(WITHOUT_BALL, M), ...assign(WITH_BALL, O),
+               // Error is not highlighted in the Defence table: it is MY team's
+               // error, like every other event in that column (confirmed)
+               error:M },
   // my pass in the air. Ask ONLY on the contested events from the Flight O
   // table (block, foul, hold-up duel, positioning duel, shield, error); every
   // other event is inferred:
@@ -372,6 +375,9 @@ const TABLE = {
   restartKickoff:{ pass:M, shot:M }, restartEightSeconds:{ pass:M, shot:M },
   idle:      { pass:O, shot:O },
   keeper:    { goal_keeper:M },
+  // loose ball, my team likely to recover. Every event asks (all highlighted)
+  // except Own goal against, which is the OPPONENT's — as in Flight O (confirmed)
+  looseO:    { own_goal_against:O },
 }
 
 /**
