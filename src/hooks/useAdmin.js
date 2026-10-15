@@ -120,6 +120,9 @@ export function capabilities(role, overrides) {
     quizManage:  operator,           // create, edit, publish
     quizAssign:  operator,
     hrCodeLogin: collector,          // collectors only, by default
+    // Insights (Common Mistakes). Its default is the role's COMPARISON value —
+    // see the override step below, which makes it follow Comparison exactly.
+    insights:    operator,
   }
 
   // ── Role Access Manager overrides ───────────────────────────────────────
@@ -134,6 +137,12 @@ export function capabilities(role, overrides) {
   Object.entries(overrides).forEach(([k, v]) => {
     if (k in base && typeof v === 'boolean') out[k] = v
   })
+
+  // Insights follows the role's EFFECTIVE Comparison access until its own
+  // role_access cell is filled in — so a role whose Comparison was already
+  // switched off in the Role Access Manager does not quietly gain Insights.
+  // Once the insights column holds a value, the two are independent.
+  if (!('insights' in overrides)) out.insights = out.comparison
 
   // A Batch Manager's admin access is NOT editable. Unchecking it would remove
   // the only route back into the matrix and lock the organisation out of its

@@ -295,6 +295,8 @@ export const PERMISSIONS = [
   { key:'drillDashboards',  label:'Dashboards' },
   { key:'admin',            label:'Admin page' },
   { key:'hrCodeLogin',      label:'HR-code login' },
+  // appended last, so every existing role_access column keeps its position
+  { key:'insights',         label:'Insights' },
 ]
 
 export const ACCESS_HEADER = ['role', ...PERMISSIONS.map(p => p.key)]

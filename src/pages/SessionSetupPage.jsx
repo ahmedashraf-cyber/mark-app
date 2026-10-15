@@ -6,6 +6,7 @@ import { useAdmin, useInternalUser } from '../hooks/useAdmin.js'
 import { importRosterCsv } from '../data/roster.js'
 import AdminPage from './AdminPage.jsx'
 import TagEditorPage from './TagEditorPage.jsx'
+import InsightsPage from './InsightsPage.jsx'
 import { CURRENT_VERSION } from '../hooks/useUpdateCheck'
 import { HALVES, formatHalf } from '../utils/half.js'
 
@@ -176,6 +177,7 @@ export default function SessionSetupPage({ onSessionStart, lastResult, onShowHis
       case 'tageditor':  return !!caps.tagEditor
       case 'drill':      return !!(caps.drillTake || caps.drillCreate)
       case 'comparison': return !!caps.comparison
+      case 'insights':   return !!caps.insights
       // a card added later with no permission mapped stays hidden rather than
       // appearing for everyone by default
       default:           return false
@@ -183,7 +185,7 @@ export default function SessionSetupPage({ onSessionStart, lastResult, onShowHis
   }
   // the Tag slot is one tile whose mode flips on tagEditor, so count it once
   const visibleCardCount = ['scout', 'audit',
-    caps.tagEditor ? 'tageditor' : 'field', 'drill', 'comparison']
+    caps.tagEditor ? 'tageditor' : 'field', 'drill', 'comparison', 'insights']
     .filter(cardVisible).length
 
   // Log access level once when profile resolves
@@ -196,6 +198,7 @@ export default function SessionSetupPage({ onSessionStart, lastResult, onShowHis
   const [rosterImporting, setRosterImporting] = useState(false)
   const [showAdmin, setShowAdmin] = useState(false)
   const [showTagEditor, setShowTagEditor] = useState(false)
+  const [showInsights, setShowInsights] = useState(false)
 
   async function handleRosterImport(file) {
     if (!file) return
@@ -437,6 +440,10 @@ export default function SessionSetupPage({ onSessionStart, lastResult, onShowHis
 
   // The admin page takes over the screen. Rendered before the setup UI so it
   // owns the viewport rather than appearing inside it.
+  if (showInsights) return (
+    <InsightsPage role={role} onBack={() => setShowInsights(false)}/>
+  )
+
   if (showTagEditor) return (
     <TagEditorPage role={role} changedBy={profile?.email || 'unknown'}
       onBack={() => setShowTagEditor(false)}/>
@@ -661,6 +668,21 @@ export default function SessionSetupPage({ onSessionStart, lastResult, onShowHis
                   desc:'Enter a match ID and collector HR-code to score their session against the approved model answer.',
                   steps:['Enter match ID and half','Select collector HR-code','View score and detail'],
                 },
+                {
+                  mode:'insights',
+                  color:'#FF9F0A',
+                  glyph: (
+                    <svg width="32" height="32" viewBox="0 0 32 32" fill="none">
+                      <rect x="5"  y="17" width="4" height="9"  rx="1" stroke="#FF9F0A" strokeWidth="1.8"/>
+                      <rect x="14" y="11" width="4" height="15" rx="1" stroke="#FF9F0A" strokeWidth="1.8"/>
+                      <rect x="23" y="6"  width="4" height="20" rx="1" stroke="#FF9F0A" strokeWidth="1.8"/>
+                    </svg>
+                  ),
+                  title:'Insights',
+                  sub:'Common collector mistakes',
+                  desc:'Pick a match and half to see which events collectors got wrong most often, and exactly when.',
+                  steps:['Enter match ID and half','See mistakes ranked by frequency','Click one to watch the moment'],
+                },
               ].filter(m => cardVisible(m.mode)).map(m => (
                 <div key={m.mode}
                   onClick={() => {
@@ -672,6 +694,10 @@ export default function SessionSetupPage({ onSessionStart, lastResult, onShowHis
                     // Comparison mode: start immediately
                     if (m.mode === 'comparison') {
                       onSessionStart({ mode: 'comparison', sessionId: null })
+                      return
+                    }
+                    if (m.mode === 'insights') {
+                      setShowInsights(true)
                       return
                     }
                     if (m.mode === 'tageditor') {
