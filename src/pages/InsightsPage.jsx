@@ -80,6 +80,13 @@ function Analyzer({ onBack }) {
   const [panelOpen, setPanelOpen] = useState(false)
   const [collOpen, setCollOpen] = useState(false)
 
+  useEffect(() => {
+    if (!collOpen) return
+    const close = () => setCollOpen(false)
+    document.addEventListener('click', close)
+    return () => document.removeEventListener('click', close)
+  }, [collOpen])
+
   async function run() {
     const id = matchId.trim()
     if (!id) { setError('Enter a match ID.'); return }
@@ -130,12 +137,20 @@ function Analyzer({ onBack }) {
   }
 
   return (
-    <Shell onBack={onBack}>
-      <div style={{ display:'flex', gap:16, alignItems:'flex-start' }}>
+    <Shell onBack={onBack} drawer={
+      <VideoPanel open={panelOpen} active={active} result={result}
+        onClose={() => { setPanelOpen(false); setActive(null) }}/>
+    }>
+      <div>
         {/* ── main column ── */}
-        <div style={{ flex:1, minWidth:0 }}>
+        <div>
+          {/* Every .card has will-change: transform, which makes it its own
+              stacking context. The dropdown lives INSIDE this card, so its
+              z-index only competes within it — the summary cards and table
+              after it were painted on top regardless of the dropdown's value.
+              Lifting this whole card is what puts the dropdown above them. */}
           <div className="card" style={{ padding:14, marginBottom:12, display:'flex',
-            gap:8, alignItems:'center', flexWrap:'wrap' }}>
+            gap:8, alignItems:'center', flexWrap:'wrap', position:'relative', zIndex:100 }}>
             <input value={matchId} onChange={e => setMatchId(e.target.value.replace(/\D/g, ''))}
               onKeyDown={e => e.key === 'Enter' && run()} placeholder="Match ID"
               inputMode="numeric" style={{ ...inputStyle, width:130,
@@ -150,9 +165,10 @@ function Analyzer({ onBack }) {
             {status === 'ready' && (<>
               <div style={{ width:1, height:22, background:'var(--b-1)', margin:'0 4px' }}/>
               <div style={{ position:'relative' }}>
-                <button style={btn} onClick={() => setCollOpen(o => !o)}>{collLabel} ▾</button>
+                <button style={btn} onClick={e => { e.stopPropagation(); setCollOpen(o => !o) }}>{collLabel} ▾</button>
                 {collOpen && (
-                  <div className="card" style={{ position:'absolute', top:'110%', left:0, zIndex:20,
+                  <div className="card" onClick={e => e.stopPropagation()}
+                    style={{ position:'absolute', top:'110%', left:0, zIndex:100,
                     minWidth:220, maxHeight:320, overflowY:'auto', padding:8 }}>
                     <div style={{ display:'flex', gap:10, padding:'2px 6px 8px', fontSize:10 }}>
                       <a style={{ color:'var(--p2)', cursor:'pointer' }} onClick={() => setSelected(null)}>All</a>
@@ -259,9 +275,6 @@ function Analyzer({ onBack }) {
           </>)}
         </div>
 
-        {/* ── video panel ── */}
-        <VideoPanel open={panelOpen} active={active} result={result}
-          onClose={() => { setPanelOpen(false); setActive(null) }}/>
       </div>
       {/* the seek icon shows on row hover only */}
       <style>{`.insights-seek{opacity:0;transition:opacity .15s}.insights-row:hover .insights-seek{opacity:1}`}</style>
@@ -338,9 +351,10 @@ function VideoPanel({ open, active, result, onClose }) {
   const ctl = { ...btn, padding:'5px 9px', fontSize:12 }
 
   return (
-    <div style={{ width: open ? 420 : 0, flexShrink:0, overflow:'hidden',
-      transition:'width .25s ease', alignSelf:'flex-start', position:'sticky', top:0 }}>
-      <div style={{ width:420 }}>
+    <div style={{ width: open ? 420 : 0, flexShrink:0, overflow:'hidden', height:'100%',
+      transition:'width .2s ease', background:'var(--bg-2)',
+      borderLeft: open ? '1px solid var(--b-1)' : 'none' }}>
+      <div style={{ width:420, height:'100%', overflowY:'auto', padding:12, boxSizing:'border-box' }}>
         <div className="card" style={{ padding:12, marginBottom:12 }}>
           <div style={{ display:'flex', alignItems:'center', marginBottom:10 }}>
             <div style={{ fontSize:12, fontWeight:700, flex:1 }}>Video</div>
@@ -432,7 +446,14 @@ const Spinner = () => (
   </span>
 )
 
-function Shell({ onBack, children }) {
+/**
+ * Layout matches the reference: a header, then a row of [scrolling main |
+ * drawer]. The drawer is OUTSIDE the scroll area, full height, so it stays in
+ * view however far down the table the clicked row is. (It was first built
+ * inside the scroll area, at the top of the table — so after scrolling down,
+ * a clicked row opened the panel above the visible part of the page.)
+ */
+function Shell({ onBack, children, drawer = null }) {
   return (
     <div style={{ height:'100vh', display:'flex', flexDirection:'column', background:'var(--bg)',
       color:'var(--t-1)', overflow:'hidden' }}>
@@ -445,7 +466,10 @@ function Shell({ onBack, children }) {
           letterSpacing:1.5, background:'rgba(232,89,12,0.12)', padding:'2px 8px', borderRadius:4 }}>INSIGHTS</div>
         <span style={{ fontSize:12, fontWeight:600 }}>Common Mistakes</span>
       </div>
-      <div style={{ flex:1, overflowY:'auto', padding:18 }}>{children}</div>
+      <div style={{ flex:1, display:'flex', overflow:'hidden', minHeight:0 }}>
+        <div style={{ flex:1, minWidth:0, overflowY:'auto', padding:18 }}>{children}</div>
+        {drawer}
+      </div>
     </div>
   )
 }
