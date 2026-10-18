@@ -79,24 +79,26 @@ code, .mono { font-family: 'JetBrains Mono', monospace; }
 .scale-in     { animation: scaleIn     0.2s  var(--ease-out-expo)  both; }
 
 /* ── Premium Card ─────────────────────────────────────────────────────────── */
+/* A .card is a CONTAINER — tables, panels, forms, dialogs. It does not react
+   to the mouse.
+
+   It used to lift on hover and squeeze on press:
+       .card:hover  { transform: translateY(-2px) }
+       .card:active { transform: translateY(0) scale(0.995) }
+   scale() shrinks around the card's centre, so its top moves by a quarter of
+   a percent of its height — invisible on a 200px card, but ~48px on a card
+   wrapping a long table (19,000px+). That moved the row under the cursor
+   between mousedown and mouseup, so the click landed on the table instead of
+   the row and never fired.
+
+   No card in MARK is a clickable button (the home-screen mode cards are not
+   .card), so the animation, the hover glow and will-change are all removed.
+   will-change also made the browser keep a GPU layer per card — very large
+   for a long table. */
 .card {
   background: var(--bg-2);
   border: 1px solid var(--b-1);
   border-radius: var(--radius);
-  transition:
-    transform    0.22s var(--ease-out-expo),
-    box-shadow   0.22s var(--ease-out-expo),
-    border-color 0.18s ease;
-  will-change: transform;
-}
-.card:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 8px 32px rgba(0,0,0,0.35), 0 1px 0 rgba(255,255,255,0.06) inset;
-  border-color: var(--b-2);
-}
-.card:active {
-  transform: translateY(0px) scale(0.995);
-  transition-duration: 0.1s;
 }
 
 /* ── Orange button ────────────────────────────────────────────────────────── */
