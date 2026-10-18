@@ -77,6 +77,13 @@ function buildHalfStartMs(events) {
 
 // ── Session row serialiser ─────────────────────────────────────────────────
 export function buildSessionRow(session) {
+  // The log requested for the model answer checkbox: what the session carries,
+  // and what is about to be written.
+  console.log('[MARK save] model answer checkbox → session.is_model =',
+    JSON.stringify(session.is_model), '| writing is_model =',
+    String(session.is_model) === '1' ? '1' : '0',
+    '| model_version =', String(session.is_model) === '1' ? (session.model_version || '1') : '(blank)',
+    '| model_status =', String(session.is_model) === '1' ? (session.model_status || 'approved') : '(blank)')
   const exportDate = new Date().toISOString().slice(0,10)
   const accMs     = session.accumulatedMs || 0
   const startMs   = session.collectionStartWallMs || null
@@ -100,9 +107,12 @@ export function buildSessionRow(session) {
     video_duration_ms:         String(session.videoDurationMs || ''),
     home_team_name:            session.homeTeamName     || '',
     away_team_name:            session.awayTeamName     || '',
-    is_model:                  '0',
-    model_version:             '',
-    model_status:              '',
+    // Read from the session. These were HARDCODED to '0' / '' / '', so every
+    // model answer saved from Tag reached the sheet as a collector session —
+    // invisible to Comparison once it began reading the sheet only (v7.10.2).
+    is_model:                  String(session.is_model) === '1' ? '1' : '0',
+    model_version:             String(session.is_model) === '1' ? String(session.model_version || '1') : '',
+    model_status:              String(session.is_model) === '1' ? String(session.model_status || 'approved') : '',
     collection_method:         session.collectionMethod || '',
     part:                      session.part != null ? String(session.part) : '',
     scope_event_ids:           session.scopeEventIds    || '',
