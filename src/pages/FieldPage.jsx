@@ -21,6 +21,7 @@ import { collection, addDoc, updateDoc, doc, setDoc,
          getDocs, query, where, serverTimestamp, deleteDoc } from 'firebase/firestore'
 import { useAuth } from '../hooks/useAuth.jsx'
 import { runChain, teamDecision, receptionAllowed } from '../utils/phaseChain'
+import { createSource } from '../utils/comparisonSource'
 import ErrorTimeline from '../components/ErrorTimeline'
 import EventsSidebar from '../components/EventsSidebar'
 import TaggedEventsList from '../components/TaggedEventsList'
@@ -109,8 +110,29 @@ const TEAM_OPTIONS = [
   { code:'away', label:'Away', key:'A', color:'#E8590C', bg:'rgba(232,89,12,0.15)'  },
 ]
 
+/** The start screen's Part → the Half stored on the session and matched on. */
+const PART_TO_HALF = { 1:'1H', 2:'2H', 3:'ET1', 4:'ET2', 5:'PEN' }
+export const partToHalf = part => PART_TO_HALF[Number(part)] || ''
+
+/**
+ * Does a model answer exist for this match and half?
+ *
+ * A model answer counts unless its status explicitly says otherwise: approved
+ * and BLANK are valid (blank covers older and imported answers), anything else
+ * — draft, rejected, or a status added later — is not. So a future draft stage
+ * is blocked automatically, with no code change.
+ */
+async function lookupModelAnswer(matchId, half) {
+  const src = createSource()
+  const m = await src.findSession({ matchId, half, isModel: true })
+  if (!m) return null
+  const status = String(m.model_status || '').trim().toLowerCase()
+  if (status && status !== 'approved') return null
+  return { home: m.home_team_name || '', away: m.away_team_name || '' }
+}
+
 export default function FieldPage({ session: initialSession, onDone, onBack }) {
-  const { profile, role, caps } = useAuth()
+  const { profile, role, caps, roleInfo } = useAuth()
   // Gates the model-answer checkbox. Operators only: a model answer becomes the
   // reference every collector is scored against, so a collector must not be
   // able to record one. Previously any @hudl.com address could.
@@ -144,6 +166,40 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
   const [methodConfirmed, setMethodConfirmed] = useState(
     !!(initialSession?.collectionMethod && initialSession?.part))
   const allEvents = collectionMethod === 'all'
+  // Match ID is chosen on the start screen now, and checked against the model
+  // answers before collection can begin.
+  const [startMatchId, setStartMatchId] = useState(initialSession?.matchId ? String(initialSession.matchId) : '')
+  // idle | checking | found | none | error
+  const [modelCheck, setModelCheck] = useState({ state:'idle' })
+
+  // Runs once both Match ID and Part are set. Debounced so typing a match ID
+  // doesn't query the sheet on every keystroke; `live` discards an answer for
+  // an ID the collector has since changed.
+  useEffect(() => {
+    if (methodConfirmed) return
+    const id = startMatchId.trim()
+    if (!id || !matchPart) { setModelCheck({ state:'idle' }); return }
+    let live = true
+    setModelCheck({ state:'checking' })
+    const t = setTimeout(async () => {
+      try {
+        const m = await lookupModelAnswer(id, partToHalf(matchPart))
+        if (live) setModelCheck(m ? { state:'found', ...m } : { state:'none' })
+      } catch (e) {
+        // The sheet could not be reached — usually offline. Collection may
+        // continue, and the session is flagged as unverified.
+        if (live) setModelCheck({ state:'error', message: e?.message || String(e) })
+      }
+    }, 500)
+    return () => { live = false; clearTimeout(t) }
+  }, [startMatchId, matchPart, methodConfirmed])
+
+  // Collectors need a model answer. People with model answer access never
+  // need one — they may be creating the first. An unreachable sheet does not
+  // block: it is flagged instead.
+  const modelOk = modelCheck.state === 'found' || modelCheck.state === 'error'
+    || (modelCheck.state === 'none' && !!caps.modelAnswer)
+  const modelExists = modelCheck.state === 'found'
   const [events,       setEvents]       = useState([])  // committed events
 
   // ── The phase chain (All events only) ────────────────────────────────────
@@ -956,11 +1012,20 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
 
   // ── Save to Sheet ──────────────────────────────────────────────────────────
   async function handleSaveToSheet() {
-    // Validate Match ID
-    const matchErr = validateMatchId(saveMatchId)
+    // Match ID, Half and HR-code are no longer typed here. They come from the
+    // start screen and the sign-in; the fallbacks guard against the save
+    // fields having been cleared, since there is no longer an input to refill
+    // them from.
+    const effMatchId = String(saveMatchId || startMatchId || '').trim()
+    const effHalf    = saveHalf || partToHalf(matchPart)
+    const effHr      = String(saveHrCode || roleInfo?.code || '').trim()
+    const matchErr = validateMatchId(effMatchId)
     if (matchErr) { setSaveMatchError(matchErr); return }
-    if (!saveHalf) { setSaveMatchError('Please select a half'); return }
-    if (!saveHrCode.trim()) { setSaveMatchError('Collector HR-Code is required'); return }
+    if (!effHalf) { setSaveMatchError('The part of the match is missing — go back to the start screen.'); return }
+    if (!effHr) {
+      setSaveMatchError('Your HR-code could not be read from your sign-in. Contact your Batch Manager.')
+      return
+    }
     setSaveMatchError('')
     setSubmitting(true)
     setSaveResult(null)
@@ -977,15 +1042,15 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
     const completed = {
       ...session,
       status:                'pending_sheet_upload',
-      matchId:               String(saveMatchId),
-      half:                  saveHalf,
-      collectorHrCode:       saveHrCode.trim(),
+      matchId:               effMatchId,
+      half:                  effHalf,
+      collectorHrCode:       effHr,
       homeTeamName:          saveHomeTeam.trim(),
       awayTeamName:          saveAwayTeam.trim(),
-      is_model:              isModelAnswer ? '1' : '0',
-      model_version:         isModelAnswer ? '1' : '',
-      model_status:          isModelAnswer ? 'approved' : '',
-      model_source:          isModelAnswer ? 'field' : '',
+      is_model:              (isModelAnswer && !modelExists) ? '1' : '0',
+      model_version:         (isModelAnswer && !modelExists) ? '1' : '',
+      model_status:          (isModelAnswer && !modelExists) ? 'approved' : '',
+      model_source:          (isModelAnswer && !modelExists) ? 'field' : '',
       videoDurationMs:       duration > 0 ? Math.round(duration * 1000) : (session.videoDurationMs || null),
       totalEvents:           events.length,
       accumulatedMs:         totalMs,
@@ -1000,7 +1065,7 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
     try {
       await updateDoc(doc(db, 'mark_field_sessions', session.sessionId), {
         status: 'pending_sheet_upload',
-        matchId: String(saveMatchId), half: saveHalf, collectorHrCode: saveHrCode.trim(),
+        matchId: effMatchId, half: effHalf, collectorHrCode: effHr,
         totalEvents: events.length, accumulatedMs: totalMs,
         collectionEndWallMs: endWall, eventsPerMinute: evPerMin,
         videoDurationSec: duration || null, collectionIncomplete: !hasHalfEnd,
@@ -1153,18 +1218,60 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
                     color: matchPart === v ? 'var(--p2)' : 'var(--t-2)' }}>{l}</button>
               ))}
           </div>
+
+          <div style={{ fontSize:10, fontWeight:700, color:'var(--t-3)', letterSpacing:0.8,
+            textTransform:'uppercase', marginBottom:8 }}>Match ID</div>
+          <input value={startMatchId} inputMode="numeric" placeholder="e.g. 1366067"
+            onChange={e => setStartMatchId(e.target.value.replace(/\D/g, ''))}
+            style={{ width:'100%', boxSizing:'border-box', background:'var(--bg-3)',
+              border:'1px solid var(--b-1)', borderRadius:7, padding:'9px 12px', fontSize:13,
+              color:'var(--t-1)', outline:'none', fontFamily:'JetBrains Mono,monospace' }}/>
+          <div style={{ minHeight:20, margin:'8px 0 16px', fontSize:11, lineHeight:1.5 }}>
+            {modelCheck.state === 'checking' && (
+              <span style={{ color:'var(--t-3)' }}>Checking for a model answer…</span>)}
+            {modelCheck.state === 'none' && !caps.modelAnswer && (
+              <span style={{ color:'#FF453A' }}>No model answer found for this match and half.
+                You cannot collect without a model answer.</span>)}
+            {modelCheck.state === 'none' && caps.modelAnswer && (
+              <span style={{ color:'var(--t-3)' }}>No model answer yet for this match and half.</span>)}
+            {modelCheck.state === 'found' && caps.modelAnswer && (
+              <span style={{ color:'#FFD60A' }}>A model answer already exists for this match and half.
+                You can continue and collect as a regular collector.</span>)}
+            {modelCheck.state === 'found' && !caps.modelAnswer && (
+              <span style={{ color:'#30D158' }}>Model answer found{modelCheck.home ? ` — ${modelCheck.home} v ${modelCheck.away}` : ''}.</span>)}
+            {modelCheck.state === 'error' && (
+              <span style={{ color:'#FF9500' }}>Couldn&rsquo;t check for a model answer — you can
+                continue, and this session will be flagged as unverified.</span>)}
+          </div>
+
           <div style={{ display:'flex', gap:8 }}>
             <button className="btn-ghost" style={{ padding:'9px 16px', fontSize:12 }}
               onClick={onBack}>Back</button>
             <div style={{ flex:1 }}/>
-            <button className="btn-orange" style={{ padding:'9px 20px', fontSize:12,
-              opacity: collectionMethod && matchPart ? 1 : 0.45 }}
-              disabled={!collectionMethod || !matchPart}
-              onClick={() => {
-                // carried on the session so the sheet writer records both
-                setSession(s => s ? { ...s, collectionMethod, part: Number(matchPart) } : s)
-                setMethodConfirmed(true)
-              }}>Continue</button>
+            {(() => {
+              // method + part + match ID + a passing model answer check
+              const ready = !!(collectionMethod && matchPart && startMatchId.trim() && modelOk)
+              return (
+                <button className="btn-orange" style={{ padding:'9px 20px', fontSize:12,
+                  opacity: ready ? 1 : 0.45 }}
+                  disabled={!ready}
+                  onClick={() => {
+                    // Everything the save dialog used to ask for is fixed here:
+                    // match ID, the half (from Part), and the teams from the
+                    // model answer. The HR-code comes from the sign-in.
+                    setSaveMatchId(startMatchId.trim())
+                    setSaveHalf(partToHalf(matchPart))
+                    setSaveHrCode(String(roleInfo?.code || ''))
+                    if (modelExists) {
+                      setSaveHomeTeam(modelCheck.home || ''); setSaveAwayTeam(modelCheck.away || '')
+                    }
+                    setSession(s => s ? { ...s, collectionMethod, part: Number(matchPart),
+                      matchId: startMatchId.trim(),
+                      modelCheckUnverified: modelCheck.state === 'error' } : s)
+                    setMethodConfirmed(true)
+                  }}>Continue</button>
+              )
+            })()}
           </div>
         </div>
       </div>
@@ -1672,49 +1779,19 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
 
                 {/* Required metadata */}
                 <div style={{display:'flex',flexDirection:'column',gap:10,marginBottom:16}}>
-                  <div>
-                    <div style={{fontSize:10,fontWeight:700,color:'var(--t-3)',letterSpacing:0.8,marginBottom:4,textTransform:'uppercase'}}>
-                      Match ID <span style={{color:'#FF453A'}}>*</span>
-                    </div>
-                    <input
-                      value={saveMatchId}
-                      onChange={e=>{ setSaveMatchId(e.target.value); setSaveMatchError('') }}
-                      placeholder="e.g. 1234567"
-                      style={{width:'100%',background:'var(--bg-3)',border:'1px solid var(--b-1)',
-                        borderRadius:7,padding:'8px 12px',fontSize:13,color:'var(--t-1)',
-                        fontFamily:'JetBrains Mono,monospace',outline:'none',boxSizing:'border-box'}}
-                    />
-                  </div>
-                  <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10}}>
-                    <div>
-                      <div style={{fontSize:10,fontWeight:700,color:'var(--t-3)',letterSpacing:0.8,marginBottom:4,textTransform:'uppercase'}}>
-                        Half <span style={{color:'#FF453A'}}>*</span>
+                  {/* Match ID, Half and HR-code were typed here. They are now fixed on
+                      the start screen and from the sign-in, so this is read-only — the
+                      collector confirms them rather than entering them again. */}
+                  <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:10,padding:'10px 12px',
+                    background:'var(--bg-3)',borderRadius:8,border:'1px solid var(--b-1)'}}>
+                    {[['Match ID', saveMatchId || startMatchId],
+                      ['Half', saveHalf || partToHalf(matchPart)],
+                      ['HR-Code', saveHrCode || roleInfo?.code]].map(([l, v]) => (
+                      <div key={l}>
+                        <div style={{fontSize:9,fontWeight:700,color:'var(--t-3)',letterSpacing:0.8,textTransform:'uppercase'}}>{l}</div>
+                        <div style={{fontSize:13,fontWeight:600,marginTop:2,fontFamily:'JetBrains Mono,monospace'}}>{v || '—'}</div>
                       </div>
-                      <div style={{display:'flex',gap:6}}>
-                        {['1','2'].map(h=>(
-                          <button key={h} onClick={()=>setSaveHalf(h)}
-                            style={{flex:1,padding:'8px 0',fontSize:14,fontWeight:700,
-                              background: saveHalf===h ? 'rgba(48,209,88,0.15)' : 'var(--bg-3)',
-                              border:`1px solid ${saveHalf===h ? '#30D158' : 'var(--b-1)'}`,
-                              borderRadius:7,color:saveHalf===h?'#30D158':'var(--t-2)',cursor:'pointer'}}>
-                            {h}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                    <div>
-                      <div style={{fontSize:10,fontWeight:700,color:'var(--t-3)',letterSpacing:0.8,marginBottom:4,textTransform:'uppercase'}}>
-                        Collector HR-Code <span style={{color:'#FF453A'}}>*</span>
-                      </div>
-                      <input
-                        value={saveHrCode}
-                        onChange={e=>{ setSaveHrCode(e.target.value); setSaveMatchError('') }}
-                        placeholder="e.g. 3416"
-                        style={{width:'100%',background:'var(--bg-3)',border:'1px solid var(--b-1)',
-                          borderRadius:7,padding:'8px 12px',fontSize:13,color:'var(--t-1)',
-                          fontFamily:'JetBrains Mono,monospace',outline:'none',boxSizing:'border-box'}}
-                      />
-                    </div>
+                    ))}
                   </div>
                 </div>
 
@@ -1749,12 +1826,14 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
 
                 {/* Model answer toggle — internal users only */}
                 {isInternal && (
-                <div onClick={()=>setIsModelAnswer(v=>!v)}
+                <div onClick={()=>{ if (!modelExists) setIsModelAnswer(v=>!v) }}
+                  title={modelExists ? 'A model answer already exists for this match and half' : ''}
                   style={{display:'flex',alignItems:'center',gap:12,padding:'10px 12px',
                     marginBottom:12,
                     background:isModelAnswer?'rgba(48,209,88,0.1)':'var(--bg-3)',
                     border:`1px solid ${isModelAnswer?'rgba(48,209,88,0.4)':'var(--b-1)'}`,
-                    borderRadius:8,cursor:'pointer'}}>
+                    borderRadius:8,cursor:modelExists?'not-allowed':'pointer',
+                    opacity:modelExists?0.45:1}}>
                   <div style={{width:18,height:18,borderRadius:5,flexShrink:0,
                     background:isModelAnswer?'#30D158':'transparent',
                     border:`2px solid ${isModelAnswer?'#30D158':'var(--b-2)'}`,
