@@ -17,6 +17,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { collection, query, where, getDocs } from 'firebase/firestore'
 import { db } from '../firebase/config'
 import { FIELD_SHEET_ID, FIELD_TAB_SESSIONS } from '../config/fieldConfig'
+import { toSheetHalf } from './fieldSheetSync'
 
 const BASE = 'https://sheets.googleapis.com/v4/spreadsheets'
 const norm = v => String(v ?? '').trim()
@@ -37,7 +38,7 @@ async function readSessions() {
   const values = (await res.json()).values || []
   const header = (values[0] || []).map(norm)
   const idx = n => header.indexOf(n)
-  for (const n of ['session_id', 'is_model', 'model_version', 'model_status']) {
+  for (const n of ['session_id', 'half', 'is_model', 'model_version', 'model_status']) {
     if (idx(n) < 0) throw new Error(`Column ${n} not found in ${FIELD_TAB_SESSIONS}`)
   }
   return { values, idx }
@@ -73,7 +74,16 @@ export async function planRepair() {
     fixes.push({ sessionId: id, rowNumber: i + 2, matchId: m.matchId, half: m.half,
       from: norm(r[idx('is_model')]) || '(blank)', version: m.version, status: m.status })
   })
-  return { modelsInFirestore: models.size, fixes }
+  // Halves written as 1HH / 2HH / ET1H / PENH by v7.12.2. Any row, model or
+  // not — Comparison, Insights and the start-screen check cannot match them.
+  const halfFixes = []
+  values.slice(1).forEach((r, i) => {
+    const raw = norm(r[idx('half')]), good = toSheetHalf(raw)
+    if (raw && good && raw !== good) {
+      halfFixes.push({ sessionId: norm(r[idx('session_id')]), rowNumber: i + 2, from: raw, to: good })
+    }
+  })
+  return { modelsInFirestore: models.size, fixes, halfFixes }
 }
 
 /** Write the planned fixes, re-checking each row's session_id before writing it. */
@@ -87,6 +97,11 @@ export async function applyRepair(plan) {
     data.push({ range: `${FIELD_TAB_SESSIONS}!${colLetter(idx('model_version'))}${f.rowNumber}`, values: [[f.version]] })
     data.push({ range: `${FIELD_TAB_SESSIONS}!${colLetter(idx('model_status'))}${f.rowNumber}`,  values: [[f.status]] })
   })
+  ;(plan.halfFixes || []).forEach(f => {
+    const row = values[f.rowNumber - 1] || []
+    if (norm(row[idx('session_id')]) !== f.sessionId) { skipped.push(f.sessionId); return }
+    data.push({ range: `${FIELD_TAB_SESSIONS}!${colLetter(idx('half'))}${f.rowNumber}`, values: [[f.to]] })
+  })
   if (data.length) {
     const res = await fetch(`${BASE}/${FIELD_SHEET_ID}/values:batchUpdate`, {
       method: 'POST',
@@ -95,5 +110,5 @@ export async function applyRepair(plan) {
     })
     if (!res.ok) throw new Error(`Repair write failed (${res.status}): ${await res.text()}`)
   }
-  return { fixed: data.length / 3, skipped }
+  return { fixed: plan.fixes.length, halvesFixed: (plan.halfFixes || []).length, skipped }
 }

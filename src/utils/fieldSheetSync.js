@@ -76,6 +76,34 @@ function buildHalfStartMs(events) {
 }
 
 // ── Session row serialiser ─────────────────────────────────────────────────
+/**
+ * The ONE place a half is formatted for the sheet. Returns 1H, 2H, ET1, ET2 or
+ * PEN — never anything else.
+ *
+ * The writer used to append "H" itself (`${session.half}H`), which was right
+ * when the save dialog stored "1"/"2". Once the half came from the start
+ * screen already as "1H", that produced "1HH", "ET1H", "PENH" — and the
+ * duplicate-half check, which compared against the same doubled string,
+ * silently stopped matching. Accepting both forms here makes it safe whichever
+ * one a session carries, including sessions saved before the change.
+ */
+const SHEET_HALVES = ['1H', '2H', 'ET1', 'ET2', 'PEN']
+const PART_HALF = { '1':'1H', '2':'2H', '3':'ET1', '4':'ET2', '5':'PEN' }
+export function toSheetHalf(v) {
+  const x = String(v ?? '').trim().toUpperCase()
+  if (!x) return ''
+  if (SHEET_HALVES.includes(x)) return x
+  if (PART_HALF[x]) return PART_HALF[x]            // "1" → "1H", legacy sessions
+  // Repair a doubled value: "1HH" → "1H", "ET1H" → "ET1". After stripping,
+  // only a real half or the old "1"/"2" is accepted — "3H" was never written,
+  // so it must not be read as part 3 (ET1).
+  const strip = x.replace(/H+$/, '')
+  if (SHEET_HALVES.includes(strip)) return strip
+  if (strip === '1' || strip === '2') return PART_HALF[strip]
+  console.warn('[MARK save] unrecognised half', JSON.stringify(v), '— not written')
+  return ''
+}
+
 export function buildSessionRow(session) {
   // The log requested for the model answer checkbox: what the session carries,
   // and what is about to be written.
@@ -93,7 +121,7 @@ export function buildSessionRow(session) {
   const elapsedMins = totalMs > 0 ? totalMs / 60000 : 0
   const evPerMin  = elapsedMins > 0 ? (session.totalEvents / elapsedMins).toFixed(2) : ''
 
-  const half = session.half ? `${session.half}H` : ''  // "1H" / "2H"
+  const half = toSheetHalf(session.half)   // 1H / 2H / ET1 / ET2 / PEN
 
   const row = {
     schema_version:            FIELD_SCHEMA_VERSION,
@@ -228,7 +256,7 @@ export async function downloadFieldCsv(session, events) {
 
   const base     = (session.videoName || 'field').replace(/\.[^.]+$/, '').replace(/[/\\?%*:|"<>]/g,'-')
   const matchPart= session.matchId ? `_${session.matchId}` : ''
-  const halfPart = session.half    ? `_H${session.half}`   : ''
+  const halfPart = session.half    ? `_${toSheetHalf(session.half)}` : ''
   const ts       = new Date().toISOString().slice(0,16).replace(/[T:]/g,'-')
 
   // Two files: sessions CSV and events CSV.
@@ -353,7 +381,7 @@ export async function syncSessionToSheet(session, events) {
     const conflict = sessRows.slice(1).find(r =>
       r[0] && r[0] !== session.sessionId &&
       r[2] === String(session.matchId) &&
-      r[3] === `${session.half}H` &&
+      toSheetHalf(r[3]) === toSheetHalf(session.half) &&   // also matches old 1HH rows
       r[4] === session.collectorHrCode
     )
     if (conflict) {

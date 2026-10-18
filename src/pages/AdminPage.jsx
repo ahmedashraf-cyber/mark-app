@@ -630,11 +630,11 @@ function RepairSection() {
     finally { setBusy('') }
   }
   const apply = async () => {
-    if (!window.confirm(`Correct ${plan.fixes.length} model answer row(s) in field_sessions?`)) return
+    if (!window.confirm(`Correct ${plan.fixes.length} model answer row(s) and ${(plan.halfFixes||[]).length} half value(s) in field_sessions?`)) return
     setBusy('apply'); setMsg('')
     try {
       const r = await applyRepair(plan)
-      setMsg(`Fixed ${r.fixed} row(s).` + (r.skipped.length
+      setMsg(`Fixed ${r.fixed} model answer row(s) and ${r.halvesFixed} half value(s).` + (r.skipped.length
         ? ` Skipped ${r.skipped.length} — the sheet changed since the check; run Check again.` : ''))
       setPlan(null)
     } catch (e) { setMsg(e?.message || String(e)) }
@@ -651,17 +651,22 @@ function RepairSection() {
       </div>
       <div style={{ display:'flex', gap:8 }}>
         <button style={btn} disabled={!!busy} onClick={check}>{busy === 'check' ? 'Checking…' : 'Check'}</button>
-        {plan && plan.fixes.length > 0 && (
+        {plan && (plan.fixes.length + (plan.halfFixes||[]).length) > 0 && (
           <button className="btn-orange" style={{ padding:'6px 14px', fontSize:11 }}
             disabled={!!busy} onClick={apply}>
-            {busy === 'apply' ? 'Applying…' : `Apply — fix ${plan.fixes.length}`}</button>
+            {busy === 'apply' ? 'Applying…' : `Apply — fix ${plan.fixes.length + (plan.halfFixes||[]).length}`}</button>
         )}
       </div>
       {plan && (
         <div style={{ fontSize:11, marginTop:12, color:'var(--t-2)', lineHeight:1.7 }}>
           {plan.modelsInFirestore} model answer(s) in Firestore ·{' '}
           <b>{plan.fixes.length}</b> mislabelled in the sheet
-          {plan.fixes.length === 0 && ' — nothing to fix.'}
+          {' · '}<b>{(plan.halfFixes||[]).length}</b> half value(s) doubled (e.g. 1HH)
+          {plan.fixes.length + (plan.halfFixes||[]).length === 0 && ' — nothing to fix.'}
+          {(plan.halfFixes||[]).slice(0, 6).map(f => (
+            <div key={'h'+f.rowNumber} style={{ fontFamily:'JetBrains Mono,monospace', fontSize:10,
+              color:'var(--t-3)' }}>row {f.rowNumber} · half {f.from} → {f.to}</div>
+          ))}
           {plan.fixes.slice(0, 12).map(f => (
             <div key={f.sessionId} style={{ fontFamily:'JetBrains Mono,monospace', fontSize:10,
               color:'var(--t-3)' }}>row {f.rowNumber} · {f.matchId} {f.half} · is_model {f.from} → 1</div>
