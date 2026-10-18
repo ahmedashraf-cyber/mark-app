@@ -21,6 +21,7 @@ import { useAuth } from '../hooks/useAuth.jsx'
 import { compare } from '../utils/compareEngine'
 import { MODULES_SPLIT, MODULE_LABELS } from '../utils/defectTypes'
 import MultiFilter from '../components/MultiFilter'
+import { scoreRows, rowMatchesEvents } from '../utils/comparisonScope'
 import { writeComparisonResults, findExistingRun } from '../utils/comparisonSheet'
 import { FIELD_SHEET_ID } from '../config/fieldConfig'
 import { CURRENT_VERSION } from '../hooks/useUpdateCheck'
@@ -284,6 +285,18 @@ export default function ComparisonPage({ onBack }) {
       })
   }, [result, fEvents, fVerdicts, fModules])
 
+  // ── Scope: rescore the cards for the selected event types ────────────────
+  // View-only. `result` — what the engine produced and what gets written to
+  // the sheet — is never changed; `shown` is what the score cards display.
+  // Only the EVENT filter rescopes the score: narrowing by verdict or module
+  // would rescore a meaningless subset (only the correct rows → 100%).
+  const scopeActive = fEvents.length > 0
+  const shown = useMemo(() => {
+    if (!result || !fEvents.length) return result
+    const rows = result.detailRows.filter(r => rowMatchesEvents(r, fEvents))
+    return { ...result, ...scoreRows(rows, Object.keys(result.verdictCounts || {})) }
+  }, [result, fEvents])
+
   const anyShape = useMemo(
     () => (result?.detailRows || []).some(r => r.model_shape), [result])
 
@@ -458,7 +471,7 @@ export default function ComparisonPage({ onBack }) {
     } finally { setLoading(false); setLoadingMsg('') }
   }
 
-  const vc = result?.verdictCounts || {}
+  const vc = shown?.verdictCounts || {}
 
   return (
     <div style={{ height:'100vh', display:'flex', flexDirection:'column',
@@ -667,12 +680,20 @@ export default function ComparisonPage({ onBack }) {
                   </div>
                 )}
               </div>
+              {scopeActive && (
+                // Makes it unmistakable that the figures below are a subset.
+                <div style={{ fontSize:11, fontWeight:700, color:'#FFD60A', marginBottom:6,
+                  padding:'5px 10px', borderRadius:6, background:'rgba(255,214,10,0.10)',
+                  border:'1px solid rgba(255,214,10,0.35)', display:'inline-block' }}>
+                  Showing score for: {fEvents.join(', ')}
+                </div>
+              )}
               <div style={{ display:'flex', alignItems:'baseline', gap:8, marginBottom:16 }}>
                 <span style={{ fontSize:48, fontWeight:900,
-                  color: result.score >= 90 ? '#30D158' : result.score >= 75 ? '#FFD60A' : '#FF453A' }}>
-                  {result.score !== null ? result.score : '—'}
+                  color: shown.score >= 90 ? '#30D158' : shown.score >= 75 ? '#FFD60A' : '#FF453A' }}>
+                  {shown.score !== null ? shown.score : '—'}
                 </span>
-                {result.score !== null && <span style={{ fontSize:20, color:'var(--t-3)' }}>%</span>}
+                {shown.score !== null && <span style={{ fontSize:20, color:'var(--t-3)' }}>%</span>}
               </div>
 
               <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:8 }}>
@@ -704,7 +725,7 @@ export default function ComparisonPage({ onBack }) {
               </div>
 
               <div style={{ marginTop:12, fontSize:10, color:'var(--t-3)' }}>
-                Model: {result.modelEventCount} events ·
+                Model: {shown.modelEventCount} events ·
                 Collector: {result.collectorEventCount} events ·
                 {result.errorUnits} scored errors
                 {(vc.wrong_side || 0) > 0 &&
@@ -717,7 +738,7 @@ export default function ComparisonPage({ onBack }) {
                 NOT match Audit's C. Deliberate — Audit can follow later.
                 A module the model answer does not cover reads "no data", never
                 0% and never 100%. ───────────────────────────────────────── */}
-            {result.moduleStats && (
+            {shown.moduleStats && (
               <div className="card" style={{ padding:16, marginBottom:14 }}>
                 <div style={{ display:'flex', alignItems:'baseline', gap:10, marginBottom:4 }}>
                   <div style={{ fontSize:14, fontWeight:700 }}>By module</div>
@@ -739,7 +760,7 @@ export default function ComparisonPage({ onBack }) {
                   const rows = result.detailRows || []
                   const covered = MODULES_SPLIT.filter(m =>
                     rows.some(r => r.event_module === m && r.verdict !== 'missing_event'))
-                  const withModel = MODULES_SPLIT.filter(m => (result.moduleStats?.[m]?.events || 0) > 0)
+                  const withModel = MODULES_SPLIT.filter(m => (shown.moduleStats?.[m]?.events || 0) > 0)
                   if (!withModel.length || !covered.length || covered.length === withModel.length) return null
                   return (
                     <div style={{ background:'rgba(255,214,10,0.07)',
@@ -758,11 +779,11 @@ export default function ComparisonPage({ onBack }) {
                   {/* Overall first, then the six modules */}
                   {(() => {
                     const coveredMods = MODULES_SPLIT.filter(m => {
-                      const st = result.moduleStats?.[m]
+                      const st = shown.moduleStats?.[m]
                       return st && st.events > 0 && st.score > 0
                     })
                     const modelMods = MODULES_SPLIT.filter(m => {
-                      const st = result.moduleStats?.[m]
+                      const st = shown.moduleStats?.[m]
                       return st && st.events > 0
                     })
                     const partialCoverage = coveredMods.length > 0 && coveredMods.length < modelMods.length
@@ -770,14 +791,14 @@ export default function ComparisonPage({ onBack }) {
                       <div style={{ background:'var(--bg-3)', borderRadius:8, padding:'10px 6px',
                         textAlign:'center', border:'1px solid var(--b-1)' }}>
                         <div style={{ fontSize:18, fontWeight:900,
-                          color: result.score === null ? 'var(--t-3)'
-                            : result.score >= 90 ? '#30D158' : result.score >= 75 ? '#FFD60A' : '#FF453A' }}>
-                          {result.score !== null ? result.score + '%' : '—'}
+                          color: shown.score === null ? 'var(--t-3)'
+                            : shown.score >= 90 ? '#30D158' : shown.score >= 75 ? '#FFD60A' : '#FF453A' }}>
+                          {shown.score !== null ? shown.score + '%' : '—'}
                         </div>
                         <div style={{ fontSize:9, fontWeight:800, color:'var(--t-2)', marginTop:3,
                           letterSpacing:0.6 }}>OVERALL</div>
                         <div style={{ fontSize:8, color:'var(--t-3)', marginTop:2 }}>
-                          {(result.verdictCounts?.correct || 0)}/{result.modelEventCount}
+                          {(shown.verdictCounts?.correct || 0)}/{shown.modelEventCount}
                         </div>
                         {partialCoverage && (
                           <div style={{ fontSize:8, color:'#FF9500', marginTop:4, lineHeight:1.4 }}>
@@ -791,7 +812,7 @@ export default function ComparisonPage({ onBack }) {
                     )
                   })()}
                   {MODULES_SPLIT.map(mod => {
-                    const st = result.moduleStats[mod] || { score:null, correct:0, errors:0, events:0 }
+                    const st = shown.moduleStats[mod] || { score:null, correct:0, errors:0, events:0 }
                     const noData = st.events === 0
                     return (
                       <div key={mod} style={{ background:'var(--bg-3)', borderRadius:8,
@@ -833,7 +854,7 @@ export default function ComparisonPage({ onBack }) {
                 <div style={{ fontSize:13, fontWeight:700 }}>
                   Event Detail ({shownRows.length === result.detailRows.length
                     ? `${result.detailRows.length} rows`
-                    : `${shownRows.length} of ${result.detailRows.length} rows`})
+                    : `${shownRows.length} of ${result.detailRows.length} rows — filtered`})
                 </div>
                 <div style={{ flex:1 }}/>
                 <MultiFilter label="All events" options={filterOptions.events}
@@ -992,8 +1013,13 @@ export default function ComparisonPage({ onBack }) {
 
             {/* Write to Sheet */}
             {!written ? (
-              <button className="btn-orange" style={{ width:'100%', padding:'12px 0', fontSize:13 }}
-                disabled={loading} onClick={handleWriteToSheet}>
+              <button className="btn-orange" style={{ width:'100%', padding:'12px 0', fontSize:13,
+                  opacity: scopeActive ? 0.45 : 1 }}
+                // Only the full comparison may be written. The sheet always holds
+                // every event; a scoped score is a view, not a result.
+                disabled={loading || scopeActive}
+                title={scopeActive ? 'Clear filter to write full results.' : ''}
+                onClick={handleWriteToSheet}>
                 {loading ? loadingMsg : 'Write Results to Sheet'}
               </button>
             ) : existingRun ? (
