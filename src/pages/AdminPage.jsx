@@ -23,6 +23,7 @@ import {
 import { sendPasswordResetEmail } from 'firebase/auth'
 import { auth } from '../firebase/config'
 import { CURRENT_VERSION } from '../hooks/useUpdateCheck'
+import { planRepair, applyRepair } from '../utils/modelRepair'
 import { showToast } from '../utils/toast'
 
 const INACTIVE = ['inactive', 'removed', 'disabled', 'no', 'false', '0']
@@ -60,7 +61,7 @@ export default function AdminPage({ role, changedBy, onBack }) {
     <Shell onBack={onBack} tab={tab} setTab={setTab}>
       {tab === 'users'   ? <UsersSection changedBy={changedBy}/>
        : tab === 'access' ? <AccessSection changedBy={changedBy}/>
-       : tab === 'app'    ? <AppSection changedBy={changedBy}/>
+       : tab === 'app'    ? <><AppSection changedBy={changedBy}/><RepairSection/></>
        : <QuizzesSection changedBy={changedBy} canEdit={caps.editQuizSettings}/>}
     </Shell>
   )
@@ -610,6 +611,65 @@ function AppSection({ changedBy }) {
           version that has actually been released.
         </div>
       )}
+    </div>
+  )
+}
+
+/**
+ * One-off repair: model answers saved from Tag before v7.12.2 reached the sheet
+ * as collector sessions. Check first — it lists what it would change and writes
+ * nothing — then apply.
+ */
+function RepairSection() {
+  const [plan, setPlan] = useState(null)
+  const [busy, setBusy] = useState('')
+  const [msg, setMsg]   = useState('')
+  const check = async () => {
+    setBusy('check'); setMsg('')
+    try { setPlan(await planRepair()) } catch (e) { setMsg(e?.message || String(e)) }
+    finally { setBusy('') }
+  }
+  const apply = async () => {
+    if (!window.confirm(`Correct ${plan.fixes.length} model answer row(s) in field_sessions?`)) return
+    setBusy('apply'); setMsg('')
+    try {
+      const r = await applyRepair(plan)
+      setMsg(`Fixed ${r.fixed} row(s).` + (r.skipped.length
+        ? ` Skipped ${r.skipped.length} — the sheet changed since the check; run Check again.` : ''))
+      setPlan(null)
+    } catch (e) { setMsg(e?.message || String(e)) }
+    finally { setBusy('') }
+  }
+  return (
+    <div className="card" style={{ padding:16, maxWidth:560, marginTop:12 }}>
+      <div style={{ fontSize:13, fontWeight:700, marginBottom:4 }}>Repair model answers</div>
+      <div style={{ fontSize:10, color:'var(--t-3)', marginBottom:12, lineHeight:1.6 }}>
+        Before v7.12.2, model answers saved from Tag reached the sheet marked as collector
+        sessions, so Comparison and the start-screen check couldn&rsquo;t find them. This
+        corrects them from Firestore. <b>Check</b> only reads; nothing is written until you
+        press <b>Apply</b>.
+      </div>
+      <div style={{ display:'flex', gap:8 }}>
+        <button style={btn} disabled={!!busy} onClick={check}>{busy === 'check' ? 'Checking…' : 'Check'}</button>
+        {plan && plan.fixes.length > 0 && (
+          <button className="btn-orange" style={{ padding:'6px 14px', fontSize:11 }}
+            disabled={!!busy} onClick={apply}>
+            {busy === 'apply' ? 'Applying…' : `Apply — fix ${plan.fixes.length}`}</button>
+        )}
+      </div>
+      {plan && (
+        <div style={{ fontSize:11, marginTop:12, color:'var(--t-2)', lineHeight:1.7 }}>
+          {plan.modelsInFirestore} model answer(s) in Firestore ·{' '}
+          <b>{plan.fixes.length}</b> mislabelled in the sheet
+          {plan.fixes.length === 0 && ' — nothing to fix.'}
+          {plan.fixes.slice(0, 12).map(f => (
+            <div key={f.sessionId} style={{ fontFamily:'JetBrains Mono,monospace', fontSize:10,
+              color:'var(--t-3)' }}>row {f.rowNumber} · {f.matchId} {f.half} · is_model {f.from} → 1</div>
+          ))}
+          {plan.fixes.length > 12 && <div style={{ color:'var(--t-3)' }}>…and {plan.fixes.length - 12} more</div>}
+        </div>
+      )}
+      {msg && <div style={{ fontSize:11, marginTop:10, color:'var(--p2)' }}>{msg}</div>}
     </div>
   )
 }
