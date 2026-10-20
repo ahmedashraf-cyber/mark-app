@@ -1,10 +1,10 @@
 import { useState } from 'react'
+import { invoke } from '@tauri-apps/api/core'
 import { auth, signInWithEmailAndPassword } from '../firebase/config'
 
 import { canUseHrCodeLogin } from '../hooks/useAdmin.js'
 
 const TRAINERS_SHEET_ID  = '1bErhs3yQiJMl6PXRJFgH512wLgfm2dM6Cpj2owimLuw'
-const SHEETS_API_KEY     = 'AIzaSyDEO-0MZ4-LOdIJ7aIyscgmLWGN5h8MpNI'
 
 // Searches both Trainers and Supervisors tabs for an HR code.
 // Tries multiple tab name variants exactly as FIELD does.
@@ -12,6 +12,9 @@ const SHEETS_API_KEY     = 'AIzaSyDEO-0MZ4-LOdIJ7aIyscgmLWGN5h8MpNI'
 // Supervisors tab: A=HR Code, B=Name, C=Role, D=Email,  E=Password
 async function lookupHrCode(hrCode) {
   const code = hrCode.trim().replace(/\s+/g, '').toUpperCase()
+
+  // Token obtained once; shared across all tab-name attempts.
+  const token = await invoke('get_google_access_token_cmd')
 
   const tabs = [
     // Trainers — try all name variants FIELD uses
@@ -23,8 +26,8 @@ async function lookupHrCode(hrCode) {
   for (const tabGroup of tabs) {
     for (const tabName of tabGroup.names) {
       try {
-        const url = `https://sheets.googleapis.com/v4/spreadsheets/${TRAINERS_SHEET_ID}/values/${encodeURIComponent(tabName + '!' + tabGroup.range)}?key=${SHEETS_API_KEY}`
-        const res  = await fetch(url)
+        const url = `https://sheets.googleapis.com/v4/spreadsheets/${TRAINERS_SHEET_ID}/values/${encodeURIComponent(tabName + '!' + tabGroup.range)}`
+        const res  = await fetch(url, { headers: { Authorization: `Bearer ${token}` } })
         if (!res.ok) continue
         const data = await res.json()
         const rows = data.values || []

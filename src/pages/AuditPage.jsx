@@ -2113,7 +2113,6 @@ export default function AuditPage({ session, onBack, onFullReport, initialResult
 
   // ── Check Sheet for existing session when navigating to this match+half ──
   const COLLECTOR_SHEET_ID  = '1-XbJFxAhR2QYxOQHdwIUVp-XSqol-3VJdHVhSoSkPmw'
-  const COLLECTOR_SHEET_KEY = 'AIzaSyDEO-0MZ4-LOdIJ7aIyscgmLWGN5h8MpNI'
   const SES_MATCH_ID = 2, SES_HALF = 4, SES_COMPLETED_AT = 5, SES_SCORE = 6
   const SES_SESSION_ID = 1, SES_REVIEWER = 22, SES_COLLECTOR = 25, SES_HR = 0
   const SES_TOTAL_EVENTS = 13, SES_TOTAL_ERRORS = 14
@@ -2123,8 +2122,10 @@ export default function AuditPage({ session, onBack, onFullReport, initialResult
     async function checkSheetForExistingSession() {
       setCheckingSheet(true)
       try {
-        const url = `https://sheets.googleapis.com/v4/spreadsheets/${COLLECTOR_SHEET_ID}/values/Sessions!A2:Z?key=${COLLECTOR_SHEET_KEY}`
-        const res  = await fetch(url)
+        const token = await invoke('get_google_access_token_cmd')
+        const auth  = { headers: { Authorization: `Bearer ${token}` } }
+        const url = `https://sheets.googleapis.com/v4/spreadsheets/${COLLECTOR_SHEET_ID}/values/Sessions!A2:Z`
+        const res  = await fetch(url, auth)
         const data = await res.json()
         if (data.error) throw new Error(data.error.message)
         const rows = data.values || []
@@ -2152,8 +2153,8 @@ export default function AuditPage({ session, onBack, onFullReport, initialResult
         const sessionId = latest[SES_SESSION_ID] || ''
         let amendments = []
         try {
-          const evtUrl = `https://sheets.googleapis.com/v4/spreadsheets/${COLLECTOR_SHEET_ID}/values/Events!A2:K?key=${COLLECTOR_SHEET_KEY}`
-          const evtRes  = await fetch(evtUrl)
+          const evtUrl = `https://sheets.googleapis.com/v4/spreadsheets/${COLLECTOR_SHEET_ID}/values/Events!A2:K`
+          const evtRes  = await fetch(evtUrl, auth)
           const evtData = await evtRes.json()
           amendments = (evtData.values || []).filter(r => (r[1]||'') === sessionId)
         } catch(e) { console.warn('[MARK] Events tab load failed:', e.message) }

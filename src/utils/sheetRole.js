@@ -11,10 +11,9 @@
  * immediately. That is intentional — the alternative is polling the sheet
  * constantly for a change that happens a few times a month.
  */
+import { invoke } from '@tauri-apps/api/core'
 import { PEOPLE_SHEET_ID, PEOPLE_TAB_NAMES } from '../config/drillConfig'
 import { COLLECTOR_ROLES, isCollector, capabilities } from '../hooks/useAdmin'
-
-const SHEETS_API_KEY = 'AIzaSyDEO-0MZ4-LOdIJ7aIyscgmLWGN5h8MpNI'
 const CACHE_KEY = 'mark_role_cache_v1'
 const COL = { code: 0, name: 1, role: 2, mail: 3, pass: 4, status: 5 }
 
@@ -58,9 +57,10 @@ export const ACCESS_TAB = 'role_access'
 /** key/value pairs from the config tab. {} when absent or unreadable. */
 export async function fetchConfig() {
   try {
+    const token = await invoke('get_google_access_token_cmd')
     const url = `https://sheets.googleapis.com/v4/spreadsheets/${PEOPLE_SHEET_ID}`
-      + `/values/${encodeURIComponent(CONFIG_TAB + '!A1:B100')}?key=${SHEETS_API_KEY}`
-    const res = await fetch(url)
+      + `/values/${encodeURIComponent(CONFIG_TAB + '!A1:B100')}`
+    const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } })
     if (!res.ok) return {}
     const rows = (await res.json()).values || []
     const out = {}
@@ -86,9 +86,10 @@ export async function fetchRoleAccess() {
   console.log('[MARK access] Reading role_access from sheet...')
   let res
   try {
+    const token = await invoke('get_google_access_token_cmd')
     const url = `https://sheets.googleapis.com/v4/spreadsheets/${PEOPLE_SHEET_ID}`
-      + `/values/${encodeURIComponent(ACCESS_TAB + '!A1:Z40')}?key=${SHEETS_API_KEY}`
-    res = await fetch(url)
+      + `/values/${encodeURIComponent(ACCESS_TAB + '!A1:Z40')}`
+    res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } })
   } catch (e) {
     console.error('[MARK access] FAILED — network error:', e?.message || e)
     console.warn('[MARK access] Falling back to hardcoded defaults')
@@ -146,13 +147,17 @@ export function isBelowMinimum(version, minimum) {
 
 /** Every row of the Supervisor tab. Throws if the sheet cannot be read. */
 export async function fetchPeople() {
+  // Token is obtained once and shared across all tab-name attempts.
+  // If invoke throws (no network, Tauri unavailable), the exception propagates
+  // to resolveRole()'s try/catch which activates the offline fallback.
+  const token = await invoke('get_google_access_token_cmd')
   let lastErr = null
   for (const tab of PEOPLE_TAB_NAMES) {
     const range = encodeURIComponent(`${tab}!A1:F2000`)
     const url = `https://sheets.googleapis.com/v4/spreadsheets/${PEOPLE_SHEET_ID}`
-      + `/values/${range}?key=${SHEETS_API_KEY}`
+      + `/values/${range}`
     try {
-      const res = await fetch(url)
+      const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } })
       if (!res.ok) { lastErr = new Error(`HTTP ${res.status}`); continue }
       const rows = (await res.json()).values || []
       if (rows.length < 2) { lastErr = new Error('tab empty'); continue }

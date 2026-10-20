@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
+import { invoke } from '@tauri-apps/api/core'
 import { db } from '../firebase/config'
 import { collection, query, where, getDocs, doc, setDoc, getDoc, deleteDoc, serverTimestamp, orderBy, limit } from 'firebase/firestore'
 import { useAuth } from '../hooks/useAuth.jsx'
@@ -10,7 +11,6 @@ import InsightsPage from './InsightsPage.jsx'
 import { CURRENT_VERSION } from '../hooks/useUpdateCheck'
 import { HALVES, formatHalf } from '../utils/half.js'
 
-const SHEETS_API_KEY   = 'AIzaSyDEO-0MZ4-LOdIJ7aIyscgmLWGN5h8MpNI'
 const MATCHES_SHEET_ID = '1zoh7CmoQKPMLGBEklHXznG1Y8xBS-iuu0phRWn8-wXc'
 
 // Column aliases — exact sheet headers: Production ID, Staging ID, Game Week,
@@ -69,10 +69,12 @@ function autoDetectCols(rows) {
 }
 
 async function fetchMatchesFromSheet() {
-  const base = `https://sheets.googleapis.com/v4/spreadsheets/${MATCHES_SHEET_ID}`
+  const base  = `https://sheets.googleapis.com/v4/spreadsheets/${MATCHES_SHEET_ID}`
+  const token = await invoke('get_google_access_token_cmd')
+  const auth  = { headers: { Authorization: `Bearer ${token}` } }
 
   // Step 1: get metadata to find the first sheet's real tab name
-  const metaRes = await fetch(`${base}?key=${SHEETS_API_KEY}`)
+  const metaRes = await fetch(base, auth)
   if (!metaRes.ok) throw new Error(`Sheets API error ${metaRes.status}`)
   const meta     = await metaRes.json()
   const firstTab = meta?.sheets?.[0]?.properties?.title || 'Sheet1'
@@ -80,7 +82,7 @@ async function fetchMatchesFromSheet() {
 
   // Step 2: fetch data
   const range   = encodeURIComponent(`${firstTab}!A1:Z`)
-  const dataRes = await fetch(`${base}/values/${range}?key=${SHEETS_API_KEY}`)
+  const dataRes = await fetch(`${base}/values/${range}`, auth)
   if (!dataRes.ok) throw new Error(`Sheets API error ${dataRes.status}`)
   const data = await dataRes.json()
   const rows = data.values || []

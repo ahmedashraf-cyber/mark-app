@@ -5,8 +5,7 @@
  *   · the Supervisor roster — user rows, roles, status, and the role_changes log
  *   · the DRILL sheet       — quiz pass mark / time limit, and quiz_changes
  *
- * Reads go through the API key (read-only). Every WRITE goes through the
- * service account, because an API key cannot write.
+ * All reads and writes go through the service account.
  *
  * ── Why every write re-reads first ─────────────────────────────────────────
  * Updating one person's role means writing an exact cell, e.g. Supervisor!C147.
@@ -23,7 +22,6 @@ import { PEOPLE_SHEET_ID, PEOPLE_TAB_NAMES } from '../config/drillConfig'
 import { getDrillSheetId } from './drillSheet'
 
 const BASE = 'https://sheets.googleapis.com/v4/spreadsheets'
-const API_KEY = 'AIzaSyDEO-0MZ4-LOdIJ7aIyscgmLWGN5h8MpNI'
 
 export const ROLE_TAB   = 'Supervisor'
 export const LOG_TAB    = 'role_changes'
@@ -44,11 +42,9 @@ async function saToken() {
 
 // ── generic helpers ─────────────────────────────────────────────────────────
 
-async function readRange(sheetId, range, useKey = true) {
+async function readRange(sheetId, range) {
   const url = `${BASE}/${sheetId}/values/${encodeURIComponent(range)}`
-    + (useKey ? `?key=${API_KEY}` : '')
-  const headers = useKey ? {} : { Authorization: `Bearer ${await saToken()}` }
-  const res = await fetch(url, { headers })
+  const res = await fetch(url, { headers: { Authorization: `Bearer ${await saToken()}` } })
   if (!res.ok) throw new Error(`Read failed (${res.status}) on ${range}`)
   return (await res.json()).values || []
 }
@@ -91,7 +87,7 @@ async function ensureTab(sheetId, tab, header) {
     await writeRange(sheetId, `${tab}!A1`, [header])
     return
   }
-  const first = await readRange(sheetId, `${tab}!A1:Z1`, false)
+  const first = await readRange(sheetId, `${tab}!A1:Z1`)
   if (!first.length || !first[0].length) await writeRange(sheetId, `${tab}!A1`, [header])
 }
 
@@ -210,7 +206,7 @@ export const QUIZ_LOG_HEADER = [
 export async function loadQuizzes() {
   const sheetId = await getDrillSheetId()
   if (!sheetId) throw new Error('DRILL sheet is not configured')
-  const rows = await readRange(sheetId, 'quizzes!A1:Z2000', false)
+  const rows = await readRange(sheetId, 'quizzes!A1:Z2000')
   if (rows.length < 2) return { sheetId, header: rows[0] || [], quizzes: [] }
   const header = rows[0]
   const idx = Object.fromEntries(header.map((h, i) => [norm(h), i]))
@@ -248,7 +244,7 @@ export async function setQuizSetting({ quiz, field, value, changedBy }) {
   if (colIdx == null) throw new Error(`Column ${field} not found on the quizzes tab`)
 
   // verify the row still holds this quiz before writing
-  const check = await readRange(sheetId, `quizzes!A${quiz.rowNumber}:Z${quiz.rowNumber}`, false)
+  const check = await readRange(sheetId, `quizzes!A${quiz.rowNumber}:Z${quiz.rowNumber}`)
   const row = check[0] || []
   if (norm(row[idx.quiz_id]) !== norm(quiz.quiz_id)) {
     throw new Error(`Row ${quiz.rowNumber} no longer holds ${quiz.quiz_id}. `

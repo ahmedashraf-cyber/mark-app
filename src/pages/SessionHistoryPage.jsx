@@ -36,7 +36,6 @@ import { formatHalf } from '../utils/half.js'
 
 // ── Collector Results Sheet — read audit sessions from here ───────
 const COLLECTOR_SHEET_ID  = '1-XbJFxAhR2QYxOQHdwIUVp-XSqol-3VJdHVhSoSkPmw'
-const COLLECTOR_SHEET_KEY = 'AIzaSyDEO-0MZ4-LOdIJ7aIyscgmLWGN5h8MpNI'
 const SES = {
   HR_CODE:0, SESSION_ID:1, MATCH_ID:2, MATCH_NAME:3, HALF:4, COMPLETED_AT:5,
   SCORE_OVERALL:6, SCORE_BASE:7, SCORE_PRESSURE:8, SCORE_PLAYERS:9,
@@ -49,8 +48,9 @@ const SES = {
 
 async function loadAuditSessionsFromSheet(reviewerEmail) {
   try {
-    const url = `https://sheets.googleapis.com/v4/spreadsheets/${COLLECTOR_SHEET_ID}/values/Sessions!A2:Z?key=${COLLECTOR_SHEET_KEY}`
-    const res  = await fetch(url)
+    const token = await invoke('get_google_access_token_cmd')
+    const url = `https://sheets.googleapis.com/v4/spreadsheets/${COLLECTOR_SHEET_ID}/values/Sessions!A2:Z`
+    const res  = await fetch(url, { headers: { Authorization: `Bearer ${token}` } })
     const data = await res.json()
     if (data.error) throw new Error(data.error.message)
     const rows = data.values || []
