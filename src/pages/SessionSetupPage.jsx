@@ -151,7 +151,7 @@ async function fetchMatchesFromSheet() {
 }
 
 export default function SessionSetupPage({ onSessionStart, lastResult, onShowHistory, onWatchSession, onSelfReviewDirty }) {
-  const { profile, logout, role, caps } = useAuth()
+  const { profile, logout, role, caps, roleInfo } = useAuth()
   // caps.admin carries the overrides AND the Batch-Manager lock. The bootstrap
   // email check stays so a bad roster edit cannot remove the last way in.
   const isAdmin    = caps.admin || useAdmin(profile, role)
@@ -454,7 +454,7 @@ export default function SessionSetupPage({ onSessionStart, lastResult, onShowHis
   )
 
   if (showInsights) return (
-    <InsightsPage role={role} onBack={() => setShowInsights(false)}/>
+    <InsightsPage role={role} onBack={() => setShowInsights(false)} roleInfo={roleInfo}/>
   )
 
   if (showTagEditor) return (

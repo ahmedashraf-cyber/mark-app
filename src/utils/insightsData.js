@@ -174,3 +174,133 @@ export function toCsv(rows, { matchId, half, totalRuns }) {
       g.count, totalRuns, g.pct + '%'].map(cell).join(',')),
   ].join('\n')
 }
+
+// ── Cross-match analysis (used by the new Insights filter feature) ────────────
+// The original analyze() function is unchanged — it still powers the single-match view.
+// These new functions work across ALL matches + halves.
+
+import { normHalfNum } from './sampledHalves'
+
+/** Normalise a half string from comparison_detail to the 1H/2H/ET1/ET2 form. */
+function normHalfKey(v) {
+  const u = String(v ?? '').trim().toUpperCase()
+  // e.g. "1H", "1", "2H", "ET1" — normHalfNum handles all of them
+  return normHalfNum(u)
+}
+
+/**
+ * Analyse comparison_detail rows across all match+half pairs that appear in
+ * the given halfKeys set (from sampledHalves.filteredHalfKeys).
+ *
+ * When includeUnsampled is true, rows whose half is NOT in sampledIdx are also
+ * included (halfKeys is then treated as "all known keys" plus unsampled ones).
+ *
+ * Returns:
+ *   totalHalves — distinct (matchId, half) pairs with at least one run
+ *   unsampledHalves — pairs not in Sampled Halves (0 when includeUnsampled=false)
+ *   groupMap    — Map<event_code, { event_code, halves:Set, errorCount, verdict_counts }>
+ *   collectors  — Map<hrCode, collectorName>  (for display only)
+ */
+export function analyzeFiltered(compRows, sampledIdx, halfKeys, includeUnsampled) {
+  // Build a set of all comparison half-keys
+  const allCompKeys = new Set()
+  for (const r of compRows) {
+    const key = `${norm(r.match_id)}_${normHalfKey(r.half)}`
+    allCompKeys.add(key)
+  }
+
+  // Decide which half-keys to include
+  let include
+  if (includeUnsampled) {
+    // All keys: sampled+filtered UNION unsampled comparison keys
+    include = new Set([...halfKeys, ...[...allCompKeys].filter(k => !sampledIdx.has(k))])
+  } else {
+    include = halfKeys
+  }
+
+  const halfSet     = new Set()   // distinct halves contributing to the analysis
+  const unsampledSet = new Set()  // distinct halves not in Sampled Halves
+  const groupMap    = new Map()   // event_code → { halves:Set, errorCount, rows }
+  const collectors  = new Map()
+
+  for (const r of compRows) {
+    const key = `${norm(r.match_id)}_${normHalfKey(r.half)}`
+    if (!include.has(key)) continue
+    halfSet.add(key)
+    if (!sampledIdx.has(key)) unsampledSet.add(key)
+    if (r.collector_hr_code) collectors.set(norm(r.collector_hr_code), norm(r.collector_hr_code))
+    if (!ERROR_VERDICTS.has(r.verdict)) continue
+
+    const ec = norm(r.event_code)
+    if (!groupMap.has(ec)) {
+      groupMap.set(ec, {
+        event_code: ec, halves: new Set(), errorCount: 0, rows: [],
+        verdict_counts: {},
+      })
+    }
+    const g = groupMap.get(ec)
+    g.halves.add(key)
+    g.errorCount++
+    g.verdict_counts[r.verdict] = (g.verdict_counts[r.verdict] || 0) + 1
+    g.rows.push(r)
+  }
+
+  return {
+    totalHalves:     halfSet.size,
+    unsampledHalves: unsampledSet.size,
+    groupMap,
+    collectors,
+  }
+}
+
+/**
+ * Convert analyzeFiltered's groupMap into a sorted array of event rows,
+ * each with rate = errorCount / totalHalves.
+ */
+export function rankEvents(groupMap, totalHalves) {
+  if (!totalHalves) return []
+  return [...groupMap.values()].map(g => ({
+    event_code:     g.event_code,
+    halveCount:     g.halves.size,
+    errorCount:     g.errorCount,
+    rate:           g.errorCount / totalHalves,
+    verdict_counts: g.verdict_counts,
+    rows:           g.rows,
+  })).sort((a, b) => b.rate - a.rate || b.errorCount - a.errorCount)
+}
+
+/**
+ * Batch comparison: for each event in the ranked list, compute error rates
+ * for the selected batch vs everyone else (same non-batch filters applied).
+ *
+ * compRows       — all comparison_detail rows
+ * sampledIdx     — full sampled index (unfiltered for batch dimension)
+ * batchHalfKeys  — halfKeys for the selected batch (with non-batch filters)
+ * othersHalfKeys — halfKeys for all other batches (same non-batch filters)
+ * MIN_HALVES = 5  — minimum on each side to show a ratio
+ *
+ * Returns Map<event_code, { batchRate, othersRate, ratio, batchHalves, othersHalves }>
+ */
+const MIN_HALVES_FOR_RATIO = 5
+export function batchComparison(compRows, batchHalfKeys, othersHalfKeys) {
+  const batchData  = analyzeFiltered(compRows, new Map(), batchHalfKeys, false)
+  const othersData = analyzeFiltered(compRows, new Map(), othersHalfKeys, false)
+  const allCodes   = new Set([...batchData.groupMap.keys(), ...othersData.groupMap.keys()])
+  const result = new Map()
+  for (const ec of allCodes) {
+    const batchG  = batchData.groupMap.get(ec)
+    const othersG = othersData.groupMap.get(ec)
+    const batchHalves  = batchData.totalHalves
+    const othersHalves = othersData.totalHalves
+    const batchRate  = batchHalves  ? (batchG?.errorCount  || 0) / batchHalves  : 0
+    const othersRate = othersHalves ? (othersG?.errorCount || 0) / othersHalves : 0
+    const canCompare = batchHalves >= MIN_HALVES_FOR_RATIO && othersHalves >= MIN_HALVES_FOR_RATIO
+    result.set(ec, {
+      batchRate, othersRate,
+      ratio:        canCompare && othersRate > 0 ? batchRate / othersRate : null,
+      canCompare,
+      batchHalves, othersHalves,
+    })
+  }
+  return result
+}
