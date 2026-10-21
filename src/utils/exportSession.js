@@ -86,6 +86,13 @@ function tsForName(s) {
 
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycby94BMwgE3kY_EUshYzd_Zxx6E-m8fEvi0_ThqOc9raUUKq2LTGV_LC43OOd3uYgqPtJw/exec'
 
+// Shared folder where all "MARK Review" sheets are created.
+// The SA (mark-reporter) is Editor on this folder, so every file created here
+// is automatically readable by the SA — no per-file share call needed.
+// Must be shared with each reviewer as Editor for them to be able to open
+// sheets inside it.
+const TRAINER_REVIEWS_FOLDER_ID = '18lGrKFiZwgg3IRJUA59ryBh3TJVWWyn8'
+
 export async function exportSessionToGoogleSheets({ session, tags, quality, tagCount, total, videoPath }) {
   const { home, away } = parseTeams(session.matchName)
 
@@ -232,30 +239,13 @@ export async function exportSessionToXlsx({ session, tags, quality, tagCount, to
   return savedPath // null if the user cancelled the dialog
 }
 
-// STAGE 1 — sign-in-as-reviewer Google Sheet (OAuth + drive.file).
-// Builds the same single-session sheet, then uploads it to the SIGNED-IN USER's
-// own Google Drive (converted to a native Sheet). No service account, no app
-// verification — uses only the non-sensitive drive.file scope. Returns the URL.
+// Creates a "MARK Review" sheet inside the shared MARK Trainer Reviews folder using
+// the service-account token (full drive scope). No reviewer OAuth sign-in needed.
+// Returns { url }.
 export async function exportSessionToUserDrive({ session, tags, quality, tagCount, total }) {
   const { invoke } = await import('@tauri-apps/api/core')
 
-  // 1. Valid access token: refresh if we already signed in, otherwise sign in.
-  let accessToken = ''
-  const stored = localStorage.getItem('mark_g_refresh')
-  if (stored) {
-    try {
-      const r = await invoke('google_oauth_refresh', { refreshToken: stored })
-      accessToken = r.access_token || ''
-    } catch (e) { /* refresh failed → fall through to interactive sign-in */ }
-  }
-  if (!accessToken) {
-    const t = await invoke('google_oauth_sign_in')
-    accessToken = t.access_token || ''
-    if (t.refresh_token) localStorage.setItem('mark_g_refresh', t.refresh_token)
-  }
-  if (!accessToken) throw new Error('Could not obtain a Google access token')
-
-  // 2. Cut a 10-second clip per error into Downloads/<matchId>_<half>/.
+  // 1. Cut a 10-second clip per error into Downloads/<matchId>_<half>/.
   const matchId   = (session.matchId || session.sessionId || 'Session').toString()
   const half      = normalizeHalf(session.half)
   const subfolder = `${matchId}_${half}`
@@ -305,16 +295,14 @@ export async function exportSessionToUserDrive({ session, tags, quality, tagCoun
   XLSX.utils.book_append_sheet(wb, ws, tabName)
   const wbout = XLSX.write(wb, { bookType: 'xlsx', type: 'array' })
 
-  // 3. Upload to the user's Drive as a native Sheet; return url + share status.
+  // 3. Upload to the shared MARK Trainer Reviews folder via SA (full drive scope).
   const name = `MARK Review — ${session.matchName || session.matchId || 'Session'}`
   const res  = await invoke('drive_create_sheet', {
-    accessToken,
+    accessToken: '',          // unused — SA token is used inside the Rust command
     name,
     data: Array.from(new Uint8Array(wbout)),
+    folderId: TRAINER_REVIEWS_FOLDER_ID,
   })
   const url = res.webViewLink || (res.id ? `https://docs.google.com/spreadsheets/d/${res.id}` : '')
-  // sa_share_failed is true when drive_create_sheet could not grant the service
-  // account reader access. The sheet still exists; collectors just won't be able
-  // to load it in Self-Review until the reviewer shares it manually.
-  return { url, saShareFailed: !!res.sa_share_failed }
+  return { url }
 }

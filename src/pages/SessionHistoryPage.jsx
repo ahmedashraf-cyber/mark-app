@@ -1101,7 +1101,7 @@ export default function SessionHistoryPage({ onBack, initialSession }) {
       const q    = query(collection(db, 'mark_error_tags'), where('sessionId', '==', session.sessionId))
       const snap = await getDocs(q)
       const tags = snap.docs.map(d => ({ id: d.id, ...d.data() }))
-      const { url, saShareFailed } = await exportSessionToUserDrive({
+      const { url } = await exportSessionToUserDrive({
         session,
         tags,
         quality: session.qualityScore || 0,
@@ -1110,10 +1110,6 @@ export default function SessionHistoryPage({ onBack, initialSession }) {
       })
       const { invoke } = await import('@tauri-apps/api/core')
       if (url) await invoke('open_file', { path: url })
-      if (saShareFailed) {
-        console.warn('[MARK] Session History export: SA reader share failed for', session.matchId, session.half)
-        alert("Saved to your Drive, but MARK couldn't share it with the service account. Collectors won't be able to self-review this half until you share the sheet manually with mark-reporter@mark-app-498618.iam.gserviceaccount.com (Viewer).")
-      }
     } catch(e) {
       console.error('[MARK] Google Sheets export failed:', e)
       alert('Google Sheets export failed:\n\n' + (e?.message || e))

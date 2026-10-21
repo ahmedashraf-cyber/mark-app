@@ -1311,21 +1311,40 @@ async fn google_oauth_refresh(refresh_token: String) -> Result<serde_json::Value
 }
 
 // Create a Google Sheet in the signed-in user's Drive from .xlsx bytes (converted
-// to a native Sheet on upload), attempt "anyone with link (view)", also share with the
-// service account so collectors can read it. Both permission calls are non-fatal —
-// the sheet is always returned even when sharing fails under Workspace policy.
-// Returns { id, webViewLink, sa_share_failed: bool }.
+// Creates a Google Sheet inside the shared MARK Trainer Reviews folder using the
+// service-account token (full drive scope — required for parents with arbitrary folder IDs;
+// drive.file reviewer OAuth cannot reference a folder it did not create).
+// The folder inherits sharing with mark-reporter, so no per-file permission call is needed.
+// access_token is kept in the signature for backward compat but is no longer used.
+// folder_id must be set; if omitted the function returns an error rather than silently
+// saving to Drive root.
+// Returns { id, webViewLink }.
 #[command]
 async fn drive_create_sheet(
-    access_token: String,
+    _access_token: String,   // reserved — SA token is used instead
     name: String,
     data: Vec<u8>,
+    folder_id: Option<String>,
 ) -> Result<serde_json::Value, String> {
+    let fid = folder_id.as_deref().unwrap_or("").trim().to_string();
+    if fid.is_empty() {
+        return Err(
+            "Couldn't save to the MARK Trainer Reviews folder — folder_id was not supplied.".to_string()
+        );
+    }
+
+    // Use the service-account token so the upload works regardless of which Google
+    // account the reviewer is signed in to, and so the file lands in a folder
+    // shared with mark-reporter (drive.file scope would 404 on a foreign parent).
+    let sa_token = get_google_access_token().await
+        .map_err(|e| format!("Couldn't save to the MARK Trainer Reviews folder — SA token error: {}", e))?;
+
     let client = reqwest::Client::new();
     let boundary = "MARKb0undary7e3f2a";
     let metadata = serde_json::json!({
         "name": name,
-        "mimeType": "application/vnd.google-apps.spreadsheet"
+        "mimeType": "application/vnd.google-apps.spreadsheet",
+        "parents": [fid]
     });
 
     let mut body: Vec<u8> = Vec::new();
@@ -1339,75 +1358,43 @@ async fn drive_create_sheet(
     body.extend_from_slice(&data);
     body.extend_from_slice(format!("\r\n--{}--\r\n", boundary).as_bytes());
 
-    let mut json: serde_json::Value = client
-        .post("https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,webViewLink")
-        .header("Authorization", format!("Bearer {}", access_token))
+    let json: serde_json::Value = client
+        .post("https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,webViewLink,parents")
+        .header("Authorization", format!("Bearer {}", sa_token))
         .header("Content-Type", format!("multipart/related; boundary={}", boundary))
         .body(body)
         .send()
         .await
-        .map_err(|e| format!("Drive upload failed: {}", e))?
+        .map_err(|e| format!("Couldn't save to the MARK Trainer Reviews folder — upload failed: {}", e))?
         .json()
         .await
-        .map_err(|e| format!("Drive upload parse failed: {}", e))?;
+        .map_err(|e| format!("Couldn't save to the MARK Trainer Reviews folder — response parse failed: {}", e))?;
+
     if json.get("error").is_some() {
-        return Err(format!("Drive upload error: {}", json));
+        let msg = json["error"]["message"].as_str().unwrap_or("unknown Drive error");
+        eprintln!("[MARK] drive_create_sheet: Drive API error: {}", json);
+        return Err(format!(
+            "Couldn't save to the MARK Trainer Reviews folder — ask Fady to give you access. ({})",
+            msg
+        ));
     }
 
-    let mut sa_share_failed = false;
-
-    if let Some(id) = json.get("id").and_then(|v| v.as_str()).map(|s| s.to_string()) {
-        let perm_url = format!(
-            "https://www.googleapis.com/drive/v3/files/{}/permissions",
-            id
+    // Verify the file landed in the expected folder.
+    let parents: Vec<&str> = json["parents"]
+        .as_array()
+        .unwrap_or(&vec![])
+        .iter()
+        .filter_map(|v| v.as_str())
+        .collect();
+    if !parents.contains(&fid.as_str()) {
+        eprintln!("[MARK] drive_create_sheet: file {} has parents {:?}, expected {}", json["id"], parents, fid);
+        return Err(
+            "Couldn't save to the MARK Trainer Reviews folder — file ended up in a different location. Ask Fady for help.".to_string()
         );
-
-        // 1. "Anyone with the link" — non-fatal; fails silently under Workspace policy.
-        let anyone_perm = serde_json::json!({ "role": "reader", "type": "anyone" });
-        let _ = client
-            .post(&perm_url)
-            .header("Authorization", format!("Bearer {}", access_token))
-            .json(&anyone_perm)
-            .send()
-            .await;
-
-        // 2. Service-account reader share — non-fatal, but we surface the failure to JS
-        // so the reviewer can warn the collector. The SA email comes from SA_CLIENT_EMAIL,
-        // the single source of truth; it is not hardcoded a second time here.
-        let sa_perm = serde_json::json!({
-            "role": "reader",
-            "type": "user",
-            "emailAddress": SA_CLIENT_EMAIL
-        });
-        let sa_result = client
-            .post(&perm_url)
-            .header("Authorization", format!("Bearer {}", access_token))
-            .json(&sa_perm)
-            .send()
-            .await;
-        match sa_result {
-            Err(e) => {
-                eprintln!("[MARK] drive_create_sheet: SA share network error for {}: {}", id, e);
-                sa_share_failed = true;
-            }
-            Ok(resp) => {
-                let status = resp.status();
-                if !status.is_success() {
-                    let body = resp.text().await.unwrap_or_default();
-                    eprintln!("[MARK] drive_create_sheet: SA share failed for {} (HTTP {}): {}", id, status, body);
-                    sa_share_failed = true;
-                }
-            }
-        }
     }
 
-    // Augment the returned object so JS can show a warning without a second call.
-    if let Some(obj) = json.as_object_mut() {
-        obj.insert("sa_share_failed".to_string(), serde_json::Value::Bool(sa_share_failed));
-    }
     Ok(json)
 }
-
 
 // --- ffmpeg clip cutting ------------------------------------------------------
 // Resolve the bundled ffmpeg.exe (shipped as a Tauri resource), falling back to
