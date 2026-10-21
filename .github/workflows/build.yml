@@ -120,7 +120,7 @@ jobs:
       # No secrets are exposed. GIST_TOKEN needs 'gist' scope only.
       # Set MARK_UPDATER_GIST_ID in repo secrets to the ID of the public gist.
       - name: Publish latest.json to public Gist
-        if: github.ref == 'refs/heads/main' && secrets.TAURI_SIGNING_PRIVATE_KEY != ''
+        if: github.ref == 'refs/heads/main'
         shell: pwsh
         env:
           GIST_TOKEN: ${{ secrets.GIST_TOKEN }}
