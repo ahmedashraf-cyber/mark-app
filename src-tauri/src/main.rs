@@ -1380,9 +1380,10 @@ async fn drive_create_sheet(
     }
 
     // Verify the file landed in the expected folder.
+    let empty = vec![];
     let parents: Vec<&str> = json["parents"]
         .as_array()
-        .unwrap_or(&vec![])
+        .unwrap_or(&empty)
         .iter()
         .filter_map(|v| v.as_str())
         .collect();
