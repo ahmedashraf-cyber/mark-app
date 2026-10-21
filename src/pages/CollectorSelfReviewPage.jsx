@@ -129,9 +129,10 @@ export default function CollectorSelfReviewPage({ onBack, onDirtyChange }) {
   const [saving,       setSaving]       = useState(false)
 
   // ── Video pop-out (same mechanism as ComparisonPage) ───────────────────────
-  const [videoPath,    setVideoPath]    = useState('')   // remembered per match
+  const [videoPath,    setVideoPath]    = useState('')   // remembered per match+half
   const [videoUrl,     setVideoUrl]     = useState('')   // local proxy URL
   const [videoName,    setVideoName]    = useState('')
+  const [videoMissing, setVideoMissing] = useState(false) // remembered file no longer exists
   const [popOpen,      setPopOpen]      = useState(false)
   const [popLinked,    setPopLinked]    = useState(false)
   const [seekRow,      setSeekRow]      = useState(-1)   // briefly highlighted row index
@@ -253,34 +254,69 @@ export default function CollectorSelfReviewPage({ onBack, onDirtyChange }) {
     return () => { alive = false; unPong?.(); unTime?.() }
   }, [])
 
-  // ── Pick or reuse video file for the current match ────────────────────────
-  async function handleOpenVideo() {
+  // ── Video localStorage key: per match + half, isolated from Scout ─────────
+  // Uses mark_selfreview_video_{matchId}_{half} — NOT Scout's mark_video_path_{matchId}.
+  function videoStorageKey() {
+    if (!selectedHalf) return null
+    return `mark_selfreview_video_${selectedHalf.matchId}_${selectedHalf.half}`
+  }
+
+  // Load the remembered path for the current half into state on half change.
+  useEffect(() => {
+    setVideoPath(''); setVideoUrl(''); setVideoName(''); setVideoMissing(false)
+    if (!selectedHalf) return
+    const key = `mark_selfreview_video_${selectedHalf.matchId}_${selectedHalf.half}`
+    try {
+      const p = localStorage.getItem(key) || ''
+      if (p) setVideoPath(p)
+    } catch {}
+  }, [selectedHalf?.matchId, selectedHalf?.half])
+
+  // ── Open / change the video pop-out ──────────────────────────────────────
+  // forceChange=true: always show the picker, even if a path is remembered.
+  async function handleOpenVideo(forceChange = false) {
     const matchId = selectedHalf?.matchId
     if (!matchId) return
+    const key = videoStorageKey()
 
-    // Try remembered path first (same key ReviewPage uses)
-    let path = videoPath
-    if (!path) {
-      try { path = localStorage.getItem('mark_video_path_' + matchId) || '' } catch {}
+    let path = forceChange ? '' : videoPath
+    if (!path && key) {
+      try { path = localStorage.getItem(key) || '' } catch {}
     }
-    // If nothing remembered, ask the user to pick
+
+    // Check remembered file still exists on disk before using it
+    if (path && !forceChange) {
+      try {
+        await invoke('get_file_size', { path })
+        setVideoMissing(false)
+      } catch {
+        console.warn('[SELF-REVIEW][video] remembered file gone:', path)
+        if (key) try { localStorage.removeItem(key) } catch {}
+        setVideoPath(''); setVideoMissing(true)
+        path = ''
+      }
+    } else {
+      setVideoMissing(false)
+    }
+
+    // No valid path: ask the user to pick a file
     if (!path) {
       try {
         path = await invoke('pick_video_file') || ''
         if (!path) return
-        try { localStorage.setItem('mark_video_path_' + matchId, path) } catch {}
+        if (key) try { localStorage.setItem(key, path) } catch {}
+        setVideoMissing(false)
       } catch (e) {
         console.error('[SELF-REVIEW][video] pick failed:', e)
         return
       }
     }
 
-    let url = videoUrl
-    if (!url || !popOpen) {
-      try { url = await invoke('get_video_url', { path }) } catch (e) {
-        console.error('[SELF-REVIEW][video] get_video_url failed:', e)
-        return
-      }
+    // Obtain the local proxy URL and open (or reload) the pop-out window
+    let url
+    try { url = await invoke('get_video_url', { path }) } catch (e) {
+      console.error('[SELF-REVIEW][video] get_video_url failed:', e)
+      return
     }
     const name = String(path).split(/[/\\]/).pop()
     setVideoPath(path); setVideoUrl(url); setVideoName(name)
@@ -290,8 +326,8 @@ export default function CollectorSelfReviewPage({ onBack, onDirtyChange }) {
   // ── Emit a seek to the pop-out ────────────────────────────────────────────
   async function seekTo(sec, label) {
     if (!popOpen) {
-      // Not open yet — open first, then let the user click the seek button again
-      await handleOpenVideo()
+      // Not open yet — open/reuse the remembered file, then the user can click again
+      await handleOpenVideo(false)
       return
     }
     try {
@@ -581,19 +617,37 @@ export default function CollectorSelfReviewPage({ onBack, onDirtyChange }) {
         {hrCode && <span style={S.sub}>· {hrCode}</span>}
         <div style={{ flex:1 }}/>
         {selectedHalf && (
-          <div style={{ display:'flex', alignItems:'center', gap:8 }}>
-            {popOpen && (
-              <span style={{ fontSize:10, color: popLinked ? '#30D158' : '#FFD60A',
-                display:'flex', alignItems:'center', gap:4 }}>
-                <span style={{ width:6, height:6, borderRadius:'50%',
-                  background: popLinked ? '#30D158' : '#FFD60A', flexShrink:0 }}/>
-                {popLinked ? 'video linked' : 'linking…'}
+          <div style={{ display:'flex', alignItems:'center', gap:8, flexWrap:'wrap' }}>
+            {/* File name + link status */}
+            {videoName && (
+              <span style={{ fontSize:10, color:'var(--t-3)', maxWidth:160,
+                overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap',
+                display:'flex', alignItems:'center', gap:5 }}>
+                {popOpen && (
+                  <span style={{ width:6, height:6, borderRadius:'50%', flexShrink:0,
+                    background: popLinked ? '#30D158' : '#FFD60A' }}/>
+                )}
+                {videoName}
               </span>
             )}
+            {videoMissing && (
+              <span style={{ fontSize:10, color:'#FF453A' }}>
+                The video you used before can't be found. Choose the file again.
+              </span>
+            )}
+            {/* Change button — always visible when a path is known (open or closed) */}
+            {videoPath && !videoMissing && (
+              <button onClick={() => handleOpenVideo(true)}
+                style={{ background:'none', border:'none', color:'var(--t-3)',
+                  fontSize:10, cursor:'pointer', padding:'0 2px', textDecoration:'underline' }}>
+                Change
+              </button>
+            )}
+            {/* Open / close / reopen */}
             <button
-              onClick={popOpen ? closeVideoWindow : handleOpenVideo}
+              onClick={popOpen ? closeVideoWindow : () => handleOpenVideo(false)}
               style={{ ...S.btnGhost, padding:'5px 12px', fontSize:11 }}>
-              {popOpen ? 'Close video' : videoPath ? 'Reopen video' : 'Open video'}
+              {popOpen ? 'Close video' : (videoPath && !videoMissing) ? 'Open video' : 'Choose video'}
             </button>
           </div>
         )}
@@ -708,7 +762,7 @@ export default function CollectorSelfReviewPage({ onBack, onDirtyChange }) {
                   <button
                     title={popOpen ? 'Fill from video current time' : 'Open video first'}
                     onClick={() => {
-                      if (!popOpen) { handleOpenVideo(); return }
+                      if (!popOpen) { handleOpenVideo(false); return }
                       const t = videoTimeSec.current
                       updateRow(row.id, 'min', String(Math.floor(t / 60)))
                       updateRow(row.id, 'sec', String(t % 60))

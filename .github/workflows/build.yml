@@ -108,3 +108,38 @@ jobs:
           prerelease: false
           tauriScript: npx tauri
           args: --target x86_64-pc-windows-msvc
+          # Generate latest.json + .sig files for the updater plugin.
+          # Requires TAURI_SIGNING_PRIVATE_KEY and TAURI_SIGNING_PRIVATE_KEY_PASSWORD
+          # secrets to be set. If they are absent, tauri-action silently skips this.
+          createUpdaterArtifacts: v2Compatible
+
+      # Upload latest.json to a PUBLIC Gist so the updater plugin can fetch it
+      # without authentication. The repo is private so /releases/latest/download/latest.json
+      # is inaccessible to the plugin. The Gist contains only public data:
+      # version number, installer download URLs, and cryptographic signatures.
+      # No secrets are exposed. GIST_TOKEN needs 'gist' scope only.
+      # Set MARK_UPDATER_GIST_ID in repo secrets to the ID of the public gist.
+      - name: Publish latest.json to public Gist
+        if: github.ref == 'refs/heads/main' && secrets.TAURI_SIGNING_PRIVATE_KEY != ''
+        shell: pwsh
+        env:
+          GIST_TOKEN: ${{ secrets.GIST_TOKEN }}
+          GIST_ID: ${{ secrets.MARK_UPDATER_GIST_ID }}
+        run: |
+          $jsonPath = "src-tauri/target/x86_64-pc-windows-msvc/release/bundle/latest.json"
+          if (-not (Test-Path $jsonPath)) {
+            Write-Host "latest.json not found at $jsonPath — skipping Gist upload (signing keys may not be set)"
+            exit 0
+          }
+          if (-not $env:GIST_TOKEN -or -not $env:GIST_ID) {
+            Write-Host "GIST_TOKEN or MARK_UPDATER_GIST_ID not set — skipping Gist upload"
+            exit 0
+          }
+          $content = Get-Content $jsonPath -Raw
+          Write-Host "Uploading latest.json to Gist $env:GIST_ID"
+          $body = @{ files = @{ "latest.json" = @{ content = $content } } } | ConvertTo-Json -Depth 5
+          $headers = @{ Authorization = "token $env:GIST_TOKEN"; "Content-Type" = "application/json" }
+          $resp = Invoke-RestMethod -Method Patch `
+            -Uri "https://api.github.com/gists/$env:GIST_ID" `
+            -Headers $headers -Body $body
+          Write-Host "Gist updated: $($resp.html_url)"

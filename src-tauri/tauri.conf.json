@@ -1,6 +1,6 @@
 {
   "productName": "MARK",
-  "version": "7.12.13",
+  "version": "7.12.14",
   "identifier": "com.hudlegy.mark",
   "build": {
     "frontendDist": "../dist",
@@ -49,7 +49,7 @@
   "plugins": {
     "updater": {
       "endpoints": [
-        "https://github.com/ahmedashraf-cyber/mark-app/releases/latest/download/latest.json"
+        "https://gist.githubusercontent.com/ahmedashraf-cyber/REPLACE_WITH_GIST_ID/raw/latest.json"
       ],
       "pubkey": "REPLACE_WITH_YOUR_PUBLIC_KEY"
     }

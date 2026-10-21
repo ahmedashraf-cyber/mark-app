@@ -22,75 +22,84 @@ async function showInFolder(path) {
 }
 
 // ── Plugin-based download → verify → install → close ────────────────────────
-// Uses tauri-plugin-updater. The plugin:
-//   1. Downloads from the GitHub release asset
-//   2. Verifies the signature against the pubkey in tauri.conf.json
-//   3. Launches the installer (on Windows this exits the app automatically)
-//
-// This only runs when checkForUpdate() already confirmed a newer approved
-// version exists — the approval gate (GitHub non-draft main-branch release)
-// is already enforced before this button is clicked.
-//
-// Returns { ok, installerPath, error }
+// Returns { ok, verifyFailed, fallback, error }
+//   ok          — install succeeded (Windows: process already exited, unreachable here)
+//   verifyFailed — signature check explicitly rejected; must NOT fall back to browser
+//   fallback    — plugin unavailable or endpoint unreachable; caller should use browser
+//   error       — human-readable message
 async function pluginInstall(onProgress) {
   try {
     const { check } = await import('@tauri-apps/plugin-updater')
     onProgress({ phase: 'checking', pct: 0 })
-    const update = await check()
+
+    let update
+    try {
+      update = await check()
+    } catch (e) {
+      // Endpoint unreachable, latest.json missing, pubkey placeholder, network error —
+      // all of these mean the plugin path isn't set up yet. Fall back silently.
+      console.warn('[MARK updater] check() failed, falling back to browser:', e?.message || e)
+      return { ok: false, fallback: true, error: e?.message || String(e) }
+    }
+
     if (!update) {
-      // Shouldn't happen (checkForUpdate already found one), but handle it.
-      return { ok: false, error: 'No update found via plugin — the release may still be processing. Try again in a minute.' }
+      // check() resolved but found no update — edge case if the manifest version
+      // matches current. Fall back to browser so the user can still install.
+      console.warn('[MARK updater] check() returned null — falling back to browser')
+      return { ok: false, fallback: true, error: 'No update found in manifest' }
     }
 
     let downloaded = 0, total = 0
     onProgress({ phase: 'downloading', pct: 0 })
 
-    await update.download(ev => {
-      if (ev.event === 'Started')  { total = ev.data.contentLength || 0; onProgress({ phase: 'downloading', pct: 0 }) }
-      if (ev.event === 'Progress') { downloaded += ev.data.chunkLength; onProgress({ phase: 'downloading', pct: total ? Math.round(downloaded / total * 100) : -1 }) }
-      if (ev.event === 'Finished') { onProgress({ phase: 'installing', pct: 100 }) }
-    })
+    try {
+      await update.download(ev => {
+        if (ev.event === 'Started')  { total = ev.data.contentLength || 0 }
+        if (ev.event === 'Progress') {
+          downloaded += ev.data.chunkLength
+          onProgress({ phase: 'downloading', pct: total ? Math.round(downloaded / total * 100) : -1 })
+        }
+        if (ev.event === 'Finished') { onProgress({ phase: 'installing', pct: 100 }) }
+      })
+    } catch (e) {
+      const msg = e?.message || String(e)
+      console.error('[MARK updater] download failed:', msg)
+      // Signature verification failure — security: do NOT fall back
+      if (msg.includes('signature') || msg.includes('verify') || msg.includes('SignatureError')
+          || msg.includes('invalid signature') || msg.includes('PublicKey')) {
+        return {
+          ok: false, verifyFailed: true,
+          error: "The update couldn't be verified, so it wasn't installed. Try again or contact Fady.",
+        }
+      }
+      // Network or other download error — fall back to browser
+      return { ok: false, fallback: true, error: msg }
+    }
 
-    // install() on Windows exits the process after launching the installer.
-    // The MARK window closes, the installer opens, and the new version starts.
     onProgress({ phase: 'installing', pct: 100 })
     await update.install()
-
-    // Unreachable on Windows (install() exits), reached on macOS/Linux
+    // Unreachable on Windows (install() exits the process)
     return { ok: true }
   } catch (e) {
+    // Top-level catch: plugin module unavailable, import failed, unexpected error
     const msg = e?.message || String(e)
-    console.error('[MARK updater] plugin install failed:', msg)
-
-    // Signature verification failure — must not install
-    if (msg.includes('signature') || msg.includes('verify') || msg.includes('invalid')) {
-      return {
-        ok: false,
-        verified: false,
-        error: "The update couldn't be verified, so it wasn't installed. Try again or contact Fady.",
-      }
-    }
-    // Plugin not configured yet (pubkey placeholder or plugin missing)
-    if (msg.includes('REPLACE_WITH') || msg.includes('pubkey') || msg.includes('plugin:updater')) {
-      return { ok: false, notConfigured: true, error: msg }
-    }
-    return { ok: false, error: msg }
+    console.warn('[MARK updater] unexpected error, falling back:', msg)
+    return { ok: false, fallback: true, error: msg }
   }
 }
 
 export default function UpdateBanner({ update, onDismiss, hasUnsavedWork }) {
   if (!update) return null
 
-  const [phase, setPhase]     = useState(null)  // null | 'downloading' | 'installing' | 'done' | 'error'
-  const [pct, setPct]         = useState(0)
-  const [errMsg, setErrMsg]   = useState('')
+  const [phase, setPhase]   = useState(null)  // null | 'checking' | 'downloading' | 'installing' | 'done' | 'error' | 'fallback'
+  const [pct, setPct]       = useState(0)
+  const [errMsg, setErrMsg] = useState('')
   const [installerPath, setInstallerPath] = useState('')
-  const busy = phase === 'downloading' || phase === 'installing'
+  const busy = phase === 'checking' || phase === 'downloading' || phase === 'installing'
 
   async function handleInstall() {
     if (busy) return
 
-    // Unsaved work warning
     if (hasUnsavedWork?.()) {
       const ok = window.confirm(
         'You have unsaved work. Installing the update will close MARK.\n\nInstall now and lose unsaved work?'
@@ -98,11 +107,11 @@ export default function UpdateBanner({ update, onDismiss, hasUnsavedWork }) {
       if (!ok) return
     }
 
-    setPhase('downloading'); setPct(0); setErrMsg('')
+    setPhase('checking'); setPct(0); setErrMsg('')
 
     const result = await pluginInstall(ev => {
       setPhase(ev.phase)
-      setPct(ev.pct)
+      if (ev.pct != null) setPct(ev.pct)
     })
 
     if (result.ok) {
@@ -110,21 +119,33 @@ export default function UpdateBanner({ update, onDismiss, hasUnsavedWork }) {
       return
     }
 
-    // Not configured yet (pubkey placeholder) → fall back to browser download silently
-    if (result.notConfigured) {
-      console.warn('[MARK updater] plugin not fully configured, falling back to browser download')
-      setPhase(null)
+    // Signature verification failed — show error, do NOT fall back to browser.
+    // A tampered file must never be offered as an alternative.
+    if (result.verifyFailed) {
+      setPhase('error')
+      setErrMsg(result.error)
+      return
+    }
+
+    // Plugin path unavailable (endpoint 404, latest.json missing, pubkey placeholder,
+    // network error, etc.) — fall back to browser silently, show informational message.
+    if (result.fallback) {
+      console.warn('[MARK updater] using browser fallback. Reason:', result.error)
+      setPhase('fallback')
+      setErrMsg("Automatic install isn't available right now — downloading the installer instead.")
       await openExternal(update.downloadUrl || update.url)
       return
     }
 
+    // Other error — show it
     setPhase('error')
     setErrMsg(result.error || 'Update failed.')
     if (result.installerPath) setInstallerPath(result.installerPath)
   }
 
   const label =
-    phase === 'downloading' ? (pct >= 0 ? `Downloading… ${pct}%` : 'Downloading…') :
+    phase === 'checking'    ? 'Checking…' :
+    phase === 'downloading' ? (pct > 0 ? `Downloading… ${pct}%` : 'Downloading…') :
     phase === 'installing'  ? 'Installing…' :
     phase === 'done'        ? 'Done ✓' :
     `Install v${update.version}`
@@ -156,10 +177,18 @@ export default function UpdateBanner({ update, onDismiss, hasUnsavedWork }) {
             <div style={{ height:4, background:'var(--bg-3)', borderRadius:2, marginBottom:10, overflow:'hidden' }}>
               <div style={{
                 height:'100%', borderRadius:2, background:'#30D158',
-                width: phase === 'installing' ? '100%' : pct >= 0 ? `${pct}%` : '40%',
+                width: phase === 'installing' ? '100%' : pct > 0 ? `${pct}%` : '20%',
                 transition: 'width 0.3s',
-                animation: (pct < 0 || phase === 'installing') ? 'pulse 1s ease infinite' : 'none',
+                animation: (pct === 0 || phase === 'installing') ? 'pulse 1s ease infinite' : 'none',
               }}/>
+            </div>
+          )}
+
+          {/* Fallback info message — not an error */}
+          {phase === 'fallback' && (
+            <div style={{ fontSize:11, color:'var(--t-2)', marginBottom:10, lineHeight:1.5,
+              background:'rgba(255,255,255,0.05)', borderRadius:6, padding:'7px 10px' }}>
+              {errMsg}
             </div>
           )}
 
@@ -178,21 +207,21 @@ export default function UpdateBanner({ update, onDismiss, hasUnsavedWork }) {
           )}
 
           <div style={{ display:'flex', gap:8 }}>
-            {/* Primary: plugin-based install (auto-downloads, verifies, installs) */}
+            {/* Primary: plugin install — falls back to browser automatically on any non-security failure */}
             <button
               onClick={handleInstall}
-              disabled={busy || phase === 'done'}
+              disabled={busy || phase === 'done' || phase === 'fallback'}
               style={{
-                flex:2, background: phase === 'done' ? '#30D158' : '#30D158',
-                color:'#000', border:'none', borderRadius:8, padding:'8px 0',
-                fontSize:12, fontWeight:700, cursor: busy ? 'wait' : 'pointer',
+                flex:2, background:'#30D158', color:'#000', border:'none', borderRadius:8,
+                padding:'8px 0', fontSize:12, fontWeight:700,
+                cursor: busy ? 'wait' : (phase === 'done' || phase === 'fallback') ? 'default' : 'pointer',
                 textAlign:'center', opacity: busy ? 0.7 : 1,
               }}
             >
               {label}
             </button>
 
-            {/* Fallback: open in browser (always available, keeps old flow working) */}
+            {/* Manual browser fallback — always visible unless installing or done */}
             {!busy && phase !== 'done' && (
               <button
                 onClick={() => openExternal(update.downloadUrl || update.url)}
