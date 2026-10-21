@@ -4,6 +4,56 @@ import { doc, getDoc } from 'firebase/firestore'
 import { resolveRole } from '../utils/sheetRole'
 import { capabilities } from './useAdmin'
 
+// ── Bootstrap full-access accounts ──────────────────────────────────────────
+// These email addresses get every capability regardless of the Supervisor sheet.
+// The check requires the Firebase user's emailVerified flag to be true (which
+// Google OAuth always sets, and which email+password accounts only get after
+// clicking a verification link — so an attacker who creates a fake account with
+// one of these addresses cannot exploit this).
+//
+// Add entries here only. Do not change any other part of the auth flow.
+// Comparison is lower-cased and trimmed on both sides.
+const FULL_ACCESS_EMAILS = ['ahmed.ashraf@hudl.com']
+
+/** Returns true only when both the email matches AND Firebase has verified it. */
+function isFullAccessUser(firebaseUser) {
+  if (!firebaseUser) return false
+  const email = (firebaseUser.email || '').toLowerCase().trim()
+  if (!FULL_ACCESS_EMAILS.includes(email)) return false
+  // emailVerified is true for Google sign-ins and for email+password accounts
+  // after the user has clicked the verification link Google sends.
+  return firebaseUser.emailVerified === true
+}
+
+/** The capability object granted to full-access users — every flag is true. */
+function fullAccessCaps() {
+  // Build via capabilities('Batch Manager') so we get every key automatically,
+  // then override every boolean to true. This means a newly added capability
+  // key is included automatically without touching this function.
+  const base = capabilities('Batch Manager', null)
+  const out = { ...base }
+  Object.keys(out).forEach(k => { if (typeof out[k] === 'boolean') out[k] = true })
+  return out
+}
+
+/** The roleInfo object for a full-access user. role and known are set so that
+ *  diagnostics and the "Access denied" screen read cleanly. code is intentionally
+ *  blank so Self-Review shows the normal "no HR-Code" message. */
+function fullAccessRoleInfo() {
+  return {
+    role:            'Batch Manager',
+    known:           true,
+    name:            '',
+    code:            '',   // no HR-code → Self-Review shows its normal guard
+    email:           '',
+    active:          true,
+    minimumVersion:  '',   // never version-gated
+    accessOverrides: null,
+    source:          'builtin',
+    offline:         false,
+  }
+}
+
 const AuthContext = createContext(null)
 
 export function AuthProvider({ children }) {
@@ -22,6 +72,19 @@ export function AuthProvider({ children }) {
         setUser(null); setProfile(null); setSheetRole(null); setLoading(false); return
       }
       setUser(firebaseUser)
+
+      // ── Full-access bypass (verified email only) ──────────────────────
+      // Must run before the sheet lookup so the sheet is never consulted
+      // for these accounts. All other accounts skip this block entirely.
+      if (isFullAccessUser(firebaseUser)) {
+        console.log('[MARK] full-access account — skipping sheet lookup')
+        setProfile({ uid: firebaseUser.uid, email: firebaseUser.email, role: 'Batch Manager' })
+        setSheetRole(fullAccessRoleInfo())
+        setLoading(false)
+        return
+      }
+      // ── Normal path (unchanged) ──────────────────────────────────────
+
       try {
         const snap = await getDoc(doc(db, 'users', firebaseUser.uid))
         if (snap.exists()) {
@@ -62,7 +125,11 @@ export function AuthProvider({ children }) {
       // overrides applied. Screens read this rather than re-deriving from the
       // role string — the overrides were being fetched and then dropped,
       // because the useInternalUser shim never received them.
-      caps: capabilities(sheetRole?.role, sheetRole?.accessOverrides),
+      // Full-access accounts (source:'builtin') get every capability true.
+      // Every other account uses the existing sheet-derived path unchanged.
+      caps: sheetRole?.source === 'builtin'
+        ? fullAccessCaps()
+        : capabilities(sheetRole?.role, sheetRole?.accessOverrides),
       setSheetRole,
     }}>
       {children}
