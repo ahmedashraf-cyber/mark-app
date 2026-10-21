@@ -862,12 +862,12 @@ export default function CollectorSelfReviewPage({ onBack, onDirtyChange }) {
                 ))}
               </div>
 
-              {/* Results table */}
+              {/* Results table — click a row to seek, ↑/↓ to navigate while tbody is focused */}
               <div style={{ overflowX:'auto', borderRadius:8, border:'1px solid var(--b-1)' }}>
                 <table style={{ width:'100%', borderCollapse:'collapse', fontSize:13 }}>
                   <thead>
                     <tr>
-                      {['#','Status','Event','','Trainer time','','Your time','Δ','Trainer error type','Your error type'].map((h, hi) => (
+                      {['#','Status','Event','Trainer time','Your time','Δ','Trainer error type','Your error type'].map(h => (
                         <th key={h} style={{ background:'var(--bg-3)', padding:'9px 12px', textAlign:'left',
                                              fontSize:11, fontWeight:600, color:'var(--t-3)',
                                              letterSpacing:'0.07em', textTransform:'uppercase',
@@ -877,12 +877,30 @@ export default function CollectorSelfReviewPage({ onBack, onDirtyChange }) {
                       ))}
                     </tr>
                   </thead>
-                  <tbody>
+                  <tbody
+                    tabIndex={0}
+                    onKeyDown={e => {
+                      if (!filteredResults.length) return
+                      if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return
+                      e.preventDefault()
+                      const cur = seekRow < 0 ? (e.key === 'ArrowDown' ? -1 : filteredResults.length) : seekRow
+                      const next = e.key === 'ArrowDown'
+                        ? Math.min(filteredResults.length - 1, cur + 1)
+                        : Math.max(0, cur - 1)
+                      const r = filteredResults[next]
+                      const sec = r.tSec ?? r.cSec
+                      if (sec != null) seekTo(sec, codeToLabel(r.code))
+                      setSeekRow(next)
+                      document.getElementById(`sr-row-${next}`)?.scrollIntoView({ block:'nearest', behavior:'smooth' })
+                    }}
+                    style={{ outline:'none' }}
+                  >
                     {filteredResults.length === 0 ? (
                       <tr><td colSpan={8} style={{ textAlign:'center', padding:28, color:'var(--t-3)', fontSize:13 }}>
                         No rows in this filter
                       </td></tr>
                     ) : filteredResults.map((r, i) => {
+                      const isActive = seekRow === i
                       const label = {
                         matched:'Matched', wrong_event:'Wrong event',
                         missed:'Missed', collector_only:'Only you',
@@ -892,8 +910,27 @@ export default function CollectorSelfReviewPage({ onBack, onDirtyChange }) {
                                          color: Math.abs(r.delta) <= 1 ? '#4caf82' : '#d29922' }}>
                             {r.delta > 0 ? '+' : ''}{r.delta}s
                           </span>
+                      // Seek target: trainer time first, fall back to collector time (Only you rows)
+                      const seekSec = r.tSec ?? r.cSec
                       return (
-                        <tr key={i} style={{ borderBottom:'1px solid var(--b-1)' }}>
+                        <tr
+                          id={`sr-row-${i}`}
+                          key={i}
+                          title={seekSec != null ? (popOpen ? `Seek to ${fmtSec(seekSec)}` : 'Click to open video and seek') : undefined}
+                          onClick={async () => {
+                            if (seekSec == null) return
+                            await seekTo(seekSec, codeToLabel(r.code))
+                            setSeekRow(i)
+                          }}
+                          onMouseEnter={e => { if (seekSec != null) e.currentTarget.style.background = isActive ? 'rgba(232,89,12,0.18)' : 'rgba(255,255,255,0.04)' }}
+                          onMouseLeave={e => { e.currentTarget.style.background = isActive ? 'rgba(232,89,12,0.13)' : 'transparent' }}
+                          style={{
+                            borderBottom: '1px solid var(--b-1)',
+                            cursor: seekSec != null ? 'pointer' : 'default',
+                            background: isActive ? 'rgba(232,89,12,0.13)' : 'transparent',
+                            transition: 'background .2s',
+                          }}
+                        >
                           <td style={{ padding:'9px 12px', color:'var(--t-3)', fontFamily:'monospace', fontSize:11 }}>{i+1}</td>
                           <td style={{ padding:'9px 12px' }}>
                             <span style={S.badge(r.status)}>{label}</span>
@@ -909,45 +946,8 @@ export default function CollectorSelfReviewPage({ onBack, onDirtyChange }) {
                               </div>
                             )}
                           </td>
-                          {/* Seek button — Trainer time */}
-                          <td style={{ padding:'3px 2px 3px 4px' }}>
-                            {r.tSec != null && (
-                              <button
-                                title={popOpen ? `Seek to ${fmtSec(r.tSec)}` : 'Open video to seek'}
-                                onClick={async e => {
-                                  await seekTo(r.tSec, codeToLabel(r.code))
-                                  setSeekRow(i)
-                                  setTimeout(() => setSeekRow(x => x === i ? -1 : x), 2200)
-                                  e.currentTarget.closest('tr')?.scrollIntoView({ block:'center', behavior:'smooth' })
-                                }}
-                                style={{ width:19, height:19, borderRadius:4, padding:0,
-                                  cursor:'pointer', fontSize:8, lineHeight:1,
-                                  background:'rgba(232,89,12,0.14)', border:'1px solid var(--p2)',
-                                  color:'var(--p2)' }}>▶</button>
-                            )}
-                          </td>
-                          <td style={{ padding:'9px 12px', fontFamily:'monospace', fontSize:11,
-                            color:'var(--t-2)',
-                            background: seekRow === i ? 'rgba(232,89,12,0.13)' : 'transparent',
-                            transition:'background .4s' }}>
+                          <td style={{ padding:'9px 12px', fontFamily:'monospace', fontSize:11, color:'var(--t-2)' }}>
                             {r.tSec != null ? fmtSec(r.tSec) : '—'}
-                          </td>
-                          {/* Seek button — Your time */}
-                          <td style={{ padding:'3px 2px 3px 4px' }}>
-                            {r.cSec != null && (
-                              <button
-                                title={popOpen ? `Seek to ${fmtSec(r.cSec)}` : 'Open video to seek'}
-                                onClick={async e => {
-                                  await seekTo(r.cSec, codeToLabel(r.collectorCode || r.code))
-                                  setSeekRow(i)
-                                  setTimeout(() => setSeekRow(x => x === i ? -1 : x), 2200)
-                                  e.currentTarget.closest('tr')?.scrollIntoView({ block:'center', behavior:'smooth' })
-                                }}
-                                style={{ width:19, height:19, borderRadius:4, padding:0,
-                                  cursor:'pointer', fontSize:8, lineHeight:1,
-                                  background:'rgba(88,166,255,0.14)', border:'1px solid #58a6ff',
-                                  color:'#58a6ff' }}>▶</button>
-                            )}
                           </td>
                           <td style={{ padding:'9px 12px', fontFamily:'monospace', fontSize:11, color:'var(--t-2)' }}>
                             {r.cSec != null ? fmtSec(r.cSec) : '—'}
@@ -957,8 +957,7 @@ export default function CollectorSelfReviewPage({ onBack, onDirtyChange }) {
                           <td style={{ padding:'9px 12px', fontSize:11, color:'var(--t-2)', fontStyle:'italic' }}>{r.cErr || '—'}</td>
                         </tr>
                       )
-                    })}
-                  </tbody>
+                    })}                  </tbody>
                 </table>
               </div>
             </div>
