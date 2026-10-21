@@ -118,6 +118,8 @@ export function capabilities(role, overrides) {
     // no matching capability would be silently ignored.
     tagEditor:   manager,            // the Tag Editor replaces Tag for managers
     quizManage:  operator,           // create, edit, publish
+    // Collector Self-Review: defaults to the same access as Tag (all roles).
+    selfReview:  operator || collector,
     quizAssign:  operator,
     hrCodeLogin: collector,          // collectors only, by default
     // Insights (Common Mistakes). Its default is the role's COMPARISON value —

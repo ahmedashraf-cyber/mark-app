@@ -1311,7 +1311,10 @@ async fn google_oauth_refresh(refresh_token: String) -> Result<serde_json::Value
 }
 
 // Create a Google Sheet in the signed-in user's Drive from .xlsx bytes (converted
-// to a native Sheet on upload), share "anyone with link (view)", return id+url.
+// to a native Sheet on upload), attempt "anyone with link (view)", also share with the
+// service account so collectors can read it. Both permission calls are non-fatal —
+// the sheet is always returned even when sharing fails under Workspace policy.
+// Returns { id, webViewLink, sa_share_failed: bool }.
 #[command]
 async fn drive_create_sheet(
     access_token: String,
@@ -1336,7 +1339,7 @@ async fn drive_create_sheet(
     body.extend_from_slice(&data);
     body.extend_from_slice(format!("\r\n--{}--\r\n", boundary).as_bytes());
 
-    let json: serde_json::Value = client
+    let mut json: serde_json::Value = client
         .post("https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,webViewLink")
         .header("Authorization", format!("Bearer {}", access_token))
         .header("Content-Type", format!("multipart/related; boundary={}", boundary))
@@ -1351,17 +1354,56 @@ async fn drive_create_sheet(
         return Err(format!("Drive upload error: {}", json));
     }
 
-    if let Some(id) = json.get("id").and_then(|v| v.as_str()) {
-        let perm = serde_json::json!({ "role": "reader", "type": "anyone" });
+    let mut sa_share_failed = false;
+
+    if let Some(id) = json.get("id").and_then(|v| v.as_str()).map(|s| s.to_string()) {
+        let perm_url = format!(
+            "https://www.googleapis.com/drive/v3/files/{}/permissions",
+            id
+        );
+
+        // 1. "Anyone with the link" — non-fatal; fails silently under Workspace policy.
+        let anyone_perm = serde_json::json!({ "role": "reader", "type": "anyone" });
         let _ = client
-            .post(format!(
-                "https://www.googleapis.com/drive/v3/files/{}/permissions",
-                id
-            ))
+            .post(&perm_url)
             .header("Authorization", format!("Bearer {}", access_token))
-            .json(&perm)
+            .json(&anyone_perm)
             .send()
             .await;
+
+        // 2. Service-account reader share — non-fatal, but we surface the failure to JS
+        // so the reviewer can warn the collector. The SA email comes from SA_CLIENT_EMAIL,
+        // the single source of truth; it is not hardcoded a second time here.
+        let sa_perm = serde_json::json!({
+            "role": "reader",
+            "type": "user",
+            "emailAddress": SA_CLIENT_EMAIL
+        });
+        let sa_result = client
+            .post(&perm_url)
+            .header("Authorization", format!("Bearer {}", access_token))
+            .json(&sa_perm)
+            .send()
+            .await;
+        match sa_result {
+            Err(e) => {
+                eprintln!("[MARK] drive_create_sheet: SA share network error for {}: {}", id, e);
+                sa_share_failed = true;
+            }
+            Ok(resp) => {
+                let status = resp.status();
+                if !status.is_success() {
+                    let body = resp.text().await.unwrap_or_default();
+                    eprintln!("[MARK] drive_create_sheet: SA share failed for {} (HTTP {}): {}", id, status, body);
+                    sa_share_failed = true;
+                }
+            }
+        }
+    }
+
+    // Augment the returned object so JS can show a warning without a second call.
+    if let Some(obj) = json.as_object_mut() {
+        obj.insert("sa_share_failed".to_string(), serde_json::Value::Bool(sa_share_failed));
     }
     Ok(json)
 }
@@ -1708,12 +1750,12 @@ async fn create_google_sheet(payload: String) -> Result<String, String> {
         .await
         .map_err(|e| format!("Format failed: {}", e))?;
 
-    // 5. Make sheet publicly viewable (anyone with link)
+    // 5. Make sheet publicly viewable (anyone with link) — non-fatal under Workspace policy.
     let drive_body = serde_json::json!({
         "role": "reader",
         "type": "anyone"
     });
-    client
+    let _ = client
         .post(format!(
             "https://www.googleapis.com/drive/v3/files/{}/permissions",
             spreadsheet_id
@@ -1721,8 +1763,7 @@ async fn create_google_sheet(payload: String) -> Result<String, String> {
         .bearer_auth(&token)
         .json(&drive_body)
         .send()
-        .await
-        .map_err(|e| format!("Share failed: {}", e))?;
+        .await;
 
     Ok(sheet_url)
 }

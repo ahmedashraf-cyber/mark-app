@@ -8,6 +8,7 @@ import { importRosterCsv } from '../data/roster.js'
 import AdminPage from './AdminPage.jsx'
 import TagEditorPage from './TagEditorPage.jsx'
 import InsightsPage from './InsightsPage.jsx'
+import CollectorSelfReviewPage from './CollectorSelfReviewPage.jsx'
 import { CURRENT_VERSION } from '../hooks/useUpdateCheck'
 import { HALVES, formatHalf } from '../utils/half.js'
 
@@ -179,7 +180,8 @@ export default function SessionSetupPage({ onSessionStart, lastResult, onShowHis
       case 'tageditor':  return !!caps.tagEditor
       case 'drill':      return !!(caps.drillTake || caps.drillCreate)
       case 'comparison': return !!caps.comparison
-      case 'insights':   return !!caps.insights
+      case 'insights':    return !!caps.insights
+      case 'selfreview':  return !!caps.selfReview
       // a card added later with no permission mapped stays hidden rather than
       // appearing for everyone by default
       default:           return false
@@ -187,7 +189,7 @@ export default function SessionSetupPage({ onSessionStart, lastResult, onShowHis
   }
   // the Tag slot is one tile whose mode flips on tagEditor, so count it once
   const visibleCardCount = ['scout', 'audit',
-    caps.tagEditor ? 'tageditor' : 'field', 'drill', 'comparison', 'insights']
+    caps.tagEditor ? 'tageditor' : 'field', 'drill', 'comparison', 'insights', 'selfreview']
     .filter(cardVisible).length
 
   // Log access level once when profile resolves
@@ -200,7 +202,8 @@ export default function SessionSetupPage({ onSessionStart, lastResult, onShowHis
   const [rosterImporting, setRosterImporting] = useState(false)
   const [showAdmin, setShowAdmin] = useState(false)
   const [showTagEditor, setShowTagEditor] = useState(false)
-  const [showInsights, setShowInsights] = useState(false)
+  const [showInsights,    setShowInsights]    = useState(false)
+  const [showSelfReview,  setShowSelfReview]  = useState(false)
 
   async function handleRosterImport(file) {
     if (!file) return
@@ -442,6 +445,10 @@ export default function SessionSetupPage({ onSessionStart, lastResult, onShowHis
 
   // The admin page takes over the screen. Rendered before the setup UI so it
   // owns the viewport rather than appearing inside it.
+  if (showSelfReview) return (
+    <CollectorSelfReviewPage onBack={() => setShowSelfReview(false)}/>
+  )
+
   if (showInsights) return (
     <InsightsPage role={role} onBack={() => setShowInsights(false)}/>
   )
@@ -671,6 +678,21 @@ export default function SessionSetupPage({ onSessionStart, lastResult, onShowHis
                   steps:['Enter match ID and half','Select collector HR-code','View score and detail'],
                 },
                 {
+                  mode:'selfreview',
+                  color:'var(--p2)',
+                  glyph: (
+                    <svg width="32" height="32" viewBox="0 0 32 32" fill="none">
+                      <circle cx="16" cy="11" r="5" stroke="var(--p2)" strokeWidth="1.8"/>
+                      <path d="M6 27c0-5.523 4.477-10 10-10s10 4.477 10 10" stroke="var(--p2)" strokeWidth="1.8" strokeLinecap="round"/>
+                      <path d="M11 20l3 3 7-7" stroke="var(--p2)" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/>
+                    </svg>
+                  ),
+                  title:'Self-Review',
+                  sub:'Review your own half',
+                  desc:'Compare what you think you collected against the trainer review for your assigned halves.',
+                  steps:['Choose a half you collected','Enter what errors you think you made','See how it matches the trainer review'],
+                },
+                {
                   mode:'insights',
                   color:'#FF9F0A',
                   glyph: (
@@ -700,6 +722,10 @@ export default function SessionSetupPage({ onSessionStart, lastResult, onShowHis
                     }
                     if (m.mode === 'insights') {
                       setShowInsights(true)
+                      return
+                    }
+                    if (m.mode === 'selfreview') {
+                      setShowSelfReview(true)
                       return
                     }
                     if (m.mode === 'tageditor') {

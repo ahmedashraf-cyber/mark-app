@@ -305,12 +305,16 @@ export async function exportSessionToUserDrive({ session, tags, quality, tagCoun
   XLSX.utils.book_append_sheet(wb, ws, tabName)
   const wbout = XLSX.write(wb, { bookType: 'xlsx', type: 'array' })
 
-  // 3. Upload to the user's Drive as a native Sheet; return the shareable link.
+  // 3. Upload to the user's Drive as a native Sheet; return url + share status.
   const name = `MARK Review — ${session.matchName || session.matchId || 'Session'}`
   const res  = await invoke('drive_create_sheet', {
     accessToken,
     name,
     data: Array.from(new Uint8Array(wbout)),
   })
-  return res.webViewLink || (res.id ? `https://docs.google.com/spreadsheets/d/${res.id}` : '')
+  const url = res.webViewLink || (res.id ? `https://docs.google.com/spreadsheets/d/${res.id}` : '')
+  // sa_share_failed is true when drive_create_sheet could not grant the service
+  // account reader access. The sheet still exists; collectors just won't be able
+  // to load it in Self-Review until the reviewer shares it manually.
+  return { url, saShareFailed: !!res.sa_share_failed }
 }
