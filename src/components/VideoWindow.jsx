@@ -51,6 +51,16 @@ export default function VideoWindow() {
           if (url) setSrc({ url, name: name || 'video', status: status || 'unknown' })
         })
 
+        // Emit current video time back to the main window so "Now" buttons
+        // in Self-Review (and any future mode) can read it. Comparison has
+        // no listener for mark:video-time, so it is silently ignored there.
+        const emitTime = async (sec) => {
+          try { await emit('mark:video-time', { sec }) } catch {}
+        }
+        // We wire this via a window-level message because VideoPanel's
+        // timeupdate fires inside a child component we don't own here.
+        window._markVideoTimeEmit = emitTime
+
         unlisten = await listen('mark:video-seek', ev => {
           console.log('[VIDEO WIN] received mark:video-seek', ev.payload)
           const { ms, label } = ev.payload || {}

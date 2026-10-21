@@ -2926,6 +2926,7 @@ fn save_binary_file(path: String, data: Vec<u8>) -> Result<(), String> {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_fs::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(VideoState { path: video_path, port: port_holder })
         .invoke_handler(tauri::generate_handler![
             send_key_to_collection_app,

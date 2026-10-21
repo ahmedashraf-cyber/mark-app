@@ -203,7 +203,11 @@ const VideoPanel = forwardRef(function VideoPanel({ url, filename, matchStatus, 
                  : fill ? { flex:1, minHeight:0, display:'flex', alignItems:'center',
                             justifyContent:'center' } : {}) }}>
         <video ref={vidRef} src={url} playsInline muted
-          onTimeUpdate={() => setTime(vidRef.current?.currentTime || 0)}
+          onTimeUpdate={() => {
+            const t = vidRef.current?.currentTime || 0
+            setTime(t)
+            window._markVideoTimeEmit?.(t)
+          }}
           onLoadedMetadata={() => setDuration(vidRef.current?.duration || 0)}
           onClick={toggle}
           style={(isFs || fill)

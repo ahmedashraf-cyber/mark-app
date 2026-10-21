@@ -150,7 +150,7 @@ async function fetchMatchesFromSheet() {
   return result
 }
 
-export default function SessionSetupPage({ onSessionStart, lastResult, onShowHistory, onWatchSession }) {
+export default function SessionSetupPage({ onSessionStart, lastResult, onShowHistory, onWatchSession, onSelfReviewDirty }) {
   const { profile, logout, role, caps } = useAuth()
   // caps.admin carries the overrides AND the Batch-Manager lock. The bootstrap
   // email check stays so a bad roster edit cannot remove the last way in.
@@ -203,7 +203,8 @@ export default function SessionSetupPage({ onSessionStart, lastResult, onShowHis
   const [showAdmin, setShowAdmin] = useState(false)
   const [showTagEditor, setShowTagEditor] = useState(false)
   const [showInsights,    setShowInsights]    = useState(false)
-  const [showSelfReview,  setShowSelfReview]  = useState(false)
+  const [showSelfReview,     setShowSelfReview]     = useState(false)
+  const [selfReviewDirty,    setSelfReviewDirty]    = useState(false)
 
   async function handleRosterImport(file) {
     if (!file) return
@@ -446,7 +447,10 @@ export default function SessionSetupPage({ onSessionStart, lastResult, onShowHis
   // The admin page takes over the screen. Rendered before the setup UI so it
   // owns the viewport rather than appearing inside it.
   if (showSelfReview) return (
-    <CollectorSelfReviewPage onBack={() => setShowSelfReview(false)}/>
+    <CollectorSelfReviewPage
+      onBack={() => { setShowSelfReview(false); setSelfReviewDirty(false) }}
+      onDirtyChange={dirty => { setSelfReviewDirty(dirty); onSelfReviewDirty?.(dirty) }}
+    />
   )
 
   if (showInsights) return (

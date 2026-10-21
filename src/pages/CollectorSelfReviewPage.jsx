@@ -9,7 +9,8 @@
  * HR-code: taken from roleInfo.code (resolved at sign-in). Never typed by the collector.
  */
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
+import { invoke } from '@tauri-apps/api/core'
 import { db } from '../firebase/config'
 import {
   doc, getDoc, runTransaction, updateDoc, serverTimestamp,
@@ -100,7 +101,13 @@ let _rowId = 0
 function newRow() { return { id: ++_rowId, min:'', sec:'', eventCode:'', errorType:'Missing event' } }
 
 // ── Component ────────────────────────────────────────────────────────────────
-export default function CollectorSelfReviewPage({ onBack }) {
+// isDirty: any row has a time or event filled in on an un-saved half
+export function selfReviewIsDirty(rows, isLocked) {
+  if (isLocked) return false
+  return rows.some(r => r.eventCode || r.min !== '' || r.sec !== '')
+}
+
+export default function CollectorSelfReviewPage({ onBack, onDirtyChange }) {
   const { roleInfo } = useAuth()
   const hrCode = (roleInfo?.code || '').trim().toUpperCase()
 
@@ -120,6 +127,16 @@ export default function CollectorSelfReviewPage({ onBack }) {
   const [activeFilter, setActiveFilter] = useState('all')
 
   const [saving,       setSaving]       = useState(false)
+
+  // ── Video pop-out (same mechanism as ComparisonPage) ───────────────────────
+  const [videoPath,    setVideoPath]    = useState('')   // remembered per match
+  const [videoUrl,     setVideoUrl]     = useState('')   // local proxy URL
+  const [videoName,    setVideoName]    = useState('')
+  const [popOpen,      setPopOpen]      = useState(false)
+  const [popLinked,    setPopLinked]    = useState(false)
+  const [seekRow,      setSeekRow]      = useState(-1)   // briefly highlighted row index
+  // Current video time in whole seconds — updated by the pop-out via event
+  const videoTimeSec   = useRef(0)
 
   // ── No HR-code guard ─────────────────────────────────────────────────────
   if (!hrCode) {
@@ -170,6 +187,120 @@ export default function CollectorSelfReviewPage({ onBack }) {
   const selectedHalf   = halves.find(h => h.key === selectedKey) || null
   const isLocked       = selectedKey ? savedMap.has(selectedKey) : false
   const savedRows      = isLocked ? savedMap.get(selectedKey) : null
+
+  // Notify parent whenever dirty state changes so the update banner can warn
+  useEffect(() => {
+    onDirtyChange?.(selfReviewIsDirty(rows, isLocked))
+  }, [rows, isLocked])
+
+  // ── Video pop-out helpers (same mechanism as ComparisonPage) ──────────────
+  async function openVideoWindow(url, name) {
+    try {
+      const { WebviewWindow } = await import('@tauri-apps/api/webviewWindow')
+      const existing = await WebviewWindow.getByLabel('mark-video')
+      if (existing) {
+        await existing.setFocus()
+        const { emit } = await import('@tauri-apps/api/event')
+        await emit('mark:video-load', { url, name, status: 'unknown' })
+        setPopOpen(true)
+        return
+      }
+      const qs = new URLSearchParams({ url, name: name || '', status: 'unknown' })
+      const target = new URL(window.location.href)
+      target.search = ''
+      target.hash = '#video-player?' + qs.toString()
+      const win = new WebviewWindow('mark-video', {
+        url: target.href, title: 'MARK — ' + (name || 'video'),
+        width: 960, height: 620, resizable: true, maximizable: true,
+      })
+      await win.once('tauri://created', () => setPopOpen(true))
+      await win.once('tauri://error', () => setPopOpen(false))
+      await win.once('tauri://destroyed', () => { setPopOpen(false); setPopLinked(false) })
+      setTimeout(async () => {
+        try { const { emit } = await import('@tauri-apps/api/event'); await emit('mark:video-ping', { at: Date.now() }) } catch {}
+      }, 900)
+      setTimeout(async () => {
+        try { const w = await WebviewWindow.getByLabel('mark-video'); if (w) setPopOpen(true) } catch {}
+      }, 700)
+    } catch (e) {
+      console.error('[SELF-REVIEW][video] open failed:', e)
+    }
+  }
+
+  async function closeVideoWindow() {
+    setPopLinked(false)
+    try {
+      const { WebviewWindow } = await import('@tauri-apps/api/webviewWindow')
+      const w = await WebviewWindow.getByLabel('mark-video')
+      if (w) await w.close()
+    } catch {}
+    setPopOpen(false)
+  }
+
+  // Listen for pong (confirms two-way link) and video time updates from pop-out
+  useEffect(() => {
+    let unPong = null, unTime = null, alive = true
+    ;(async () => {
+      try {
+        const { listen } = await import('@tauri-apps/api/event')
+        unPong = await listen('mark:video-pong', () => { if (alive) setPopLinked(true) })
+        // The pop-out emits mark:video-time so "Now" buttons stay accurate
+        unTime = await listen('mark:video-time', ev => {
+          if (alive) videoTimeSec.current = Math.floor((ev.payload?.sec ?? 0))
+        })
+      } catch {}
+    })()
+    return () => { alive = false; unPong?.(); unTime?.() }
+  }, [])
+
+  // ── Pick or reuse video file for the current match ────────────────────────
+  async function handleOpenVideo() {
+    const matchId = selectedHalf?.matchId
+    if (!matchId) return
+
+    // Try remembered path first (same key ReviewPage uses)
+    let path = videoPath
+    if (!path) {
+      try { path = localStorage.getItem('mark_video_path_' + matchId) || '' } catch {}
+    }
+    // If nothing remembered, ask the user to pick
+    if (!path) {
+      try {
+        path = await invoke('pick_video_file') || ''
+        if (!path) return
+        try { localStorage.setItem('mark_video_path_' + matchId, path) } catch {}
+      } catch (e) {
+        console.error('[SELF-REVIEW][video] pick failed:', e)
+        return
+      }
+    }
+
+    let url = videoUrl
+    if (!url || !popOpen) {
+      try { url = await invoke('get_video_url', { path }) } catch (e) {
+        console.error('[SELF-REVIEW][video] get_video_url failed:', e)
+        return
+      }
+    }
+    const name = String(path).split(/[/\\]/).pop()
+    setVideoPath(path); setVideoUrl(url); setVideoName(name)
+    await openVideoWindow(url, name)
+  }
+
+  // ── Emit a seek to the pop-out ────────────────────────────────────────────
+  async function seekTo(sec, label) {
+    if (!popOpen) {
+      // Not open yet — open first, then let the user click the seek button again
+      await handleOpenVideo()
+      return
+    }
+    try {
+      const { emit } = await import('@tauri-apps/api/event')
+      await emit('mark:video-seek', { ms: sec * 1000, label })
+    } catch (e) {
+      console.error('[SELF-REVIEW][video] seek failed:', e)
+    }
+  }
 
   // ── Scope helpers ─────────────────────────────────────────────────────────
   function toggleScope(code) {
@@ -448,6 +579,24 @@ export default function CollectorSelfReviewPage({ onBack }) {
         <button style={S.backBtn} onClick={onBack}>←</button>
         <span style={S.title}>Self-Review</span>
         {hrCode && <span style={S.sub}>· {hrCode}</span>}
+        <div style={{ flex:1 }}/>
+        {selectedHalf && (
+          <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+            {popOpen && (
+              <span style={{ fontSize:10, color: popLinked ? '#30D158' : '#FFD60A',
+                display:'flex', alignItems:'center', gap:4 }}>
+                <span style={{ width:6, height:6, borderRadius:'50%',
+                  background: popLinked ? '#30D158' : '#FFD60A', flexShrink:0 }}/>
+                {popLinked ? 'video linked' : 'linking…'}
+              </span>
+            )}
+            <button
+              onClick={popOpen ? closeVideoWindow : handleOpenVideo}
+              style={{ ...S.btnGhost, padding:'5px 12px', fontSize:11 }}>
+              {popOpen ? 'Close video' : videoPath ? 'Reopen video' : 'Open video'}
+            </button>
+          </div>
+        )}
       </div>
 
       <div style={S.body}>
@@ -539,22 +688,38 @@ export default function CollectorSelfReviewPage({ onBack }) {
               <div key={row.id}
                 style={{ display:'grid', gridTemplateColumns:'140px 1fr 180px 32px', gap:8,
                          alignItems:'center', marginBottom:8 }}>
-                {/* Time inputs */}
+                {/* Time inputs + Now button */}
                 <div style={{ display:'flex', alignItems:'center', gap:4 }}>
                   <input type='number' min='0' max='130' placeholder='mm'
-                    style={{ ...S.input, width:56 }}
+                    style={{ ...S.input, width:50 }}
                     value={row.min}
                     onChange={e => updateRow(row.id, 'min', e.target.value)}
                   />
                   <span style={{ color:'var(--t-3)', fontFamily:'monospace' }}>:</span>
                   <input type='number' min='0' max='59' placeholder='ss'
-                    style={{ ...S.input, width:56 }}
+                    style={{ ...S.input, width:50 }}
                     value={row.sec}
                     onChange={e => {
                       const v = e.target.value
                       updateRow(row.id, 'sec', v !== '' && +v > 59 ? '59' : v)
                     }}
                   />
+                  {/* "Now" — fills from video current time (whole seconds, ms dropped) */}
+                  <button
+                    title={popOpen ? 'Fill from video current time' : 'Open video first'}
+                    onClick={() => {
+                      if (!popOpen) { handleOpenVideo(); return }
+                      const t = videoTimeSec.current
+                      updateRow(row.id, 'min', String(Math.floor(t / 60)))
+                      updateRow(row.id, 'sec', String(t % 60))
+                    }}
+                    style={{ width:28, height:28, borderRadius:6, flexShrink:0,
+                      border: `1px solid ${popOpen ? 'var(--p2)' : 'var(--b-1)'}`,
+                      background: popOpen ? 'rgba(232,89,12,0.1)' : 'none',
+                      color: popOpen ? 'var(--p2)' : 'var(--t-3)',
+                      fontSize:9, fontWeight:700, cursor:'pointer', lineHeight:1 }}>
+                    Now
+                  </button>
                 </div>
                 {/* Event */}
                 <select style={S.select} value={row.eventCode}
@@ -702,7 +867,7 @@ export default function CollectorSelfReviewPage({ onBack }) {
                 <table style={{ width:'100%', borderCollapse:'collapse', fontSize:13 }}>
                   <thead>
                     <tr>
-                      {['#','Status','Event','Trainer time','Your time','Δ','Trainer error type','Your error type'].map(h => (
+                      {['#','Status','Event','','Trainer time','','Your time','Δ','Trainer error type','Your error type'].map((h, hi) => (
                         <th key={h} style={{ background:'var(--bg-3)', padding:'9px 12px', textAlign:'left',
                                              fontSize:11, fontWeight:600, color:'var(--t-3)',
                                              letterSpacing:'0.07em', textTransform:'uppercase',
@@ -744,8 +909,45 @@ export default function CollectorSelfReviewPage({ onBack }) {
                               </div>
                             )}
                           </td>
-                          <td style={{ padding:'9px 12px', fontFamily:'monospace', fontSize:11, color:'var(--t-2)' }}>
+                          {/* Seek button — Trainer time */}
+                          <td style={{ padding:'3px 2px 3px 4px' }}>
+                            {r.tSec != null && (
+                              <button
+                                title={popOpen ? `Seek to ${fmtSec(r.tSec)}` : 'Open video to seek'}
+                                onClick={async e => {
+                                  await seekTo(r.tSec, codeToLabel(r.code))
+                                  setSeekRow(i)
+                                  setTimeout(() => setSeekRow(x => x === i ? -1 : x), 2200)
+                                  e.currentTarget.closest('tr')?.scrollIntoView({ block:'center', behavior:'smooth' })
+                                }}
+                                style={{ width:19, height:19, borderRadius:4, padding:0,
+                                  cursor:'pointer', fontSize:8, lineHeight:1,
+                                  background:'rgba(232,89,12,0.14)', border:'1px solid var(--p2)',
+                                  color:'var(--p2)' }}>▶</button>
+                            )}
+                          </td>
+                          <td style={{ padding:'9px 12px', fontFamily:'monospace', fontSize:11,
+                            color:'var(--t-2)',
+                            background: seekRow === i ? 'rgba(232,89,12,0.13)' : 'transparent',
+                            transition:'background .4s' }}>
                             {r.tSec != null ? fmtSec(r.tSec) : '—'}
+                          </td>
+                          {/* Seek button — Your time */}
+                          <td style={{ padding:'3px 2px 3px 4px' }}>
+                            {r.cSec != null && (
+                              <button
+                                title={popOpen ? `Seek to ${fmtSec(r.cSec)}` : 'Open video to seek'}
+                                onClick={async e => {
+                                  await seekTo(r.cSec, codeToLabel(r.collectorCode || r.code))
+                                  setSeekRow(i)
+                                  setTimeout(() => setSeekRow(x => x === i ? -1 : x), 2200)
+                                  e.currentTarget.closest('tr')?.scrollIntoView({ block:'center', behavior:'smooth' })
+                                }}
+                                style={{ width:19, height:19, borderRadius:4, padding:0,
+                                  cursor:'pointer', fontSize:8, lineHeight:1,
+                                  background:'rgba(88,166,255,0.14)', border:'1px solid #58a6ff',
+                                  color:'#58a6ff' }}>▶</button>
+                            )}
                           </td>
                           <td style={{ padding:'9px 12px', fontFamily:'monospace', fontSize:11, color:'var(--t-2)' }}>
                             {r.cSec != null ? fmtSec(r.cSec) : '—'}

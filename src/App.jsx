@@ -175,6 +175,19 @@ function AppInner() {
   const [lastResult, setLastResult]   = useState(null)
   const [update, setUpdate]           = useState(null)
   const [updateDismissed, setUpdateDismissed] = useState(false)
+  const [selfReviewDirty, setSelfReviewDirty] = useState(false)
+
+  // Returns true when there is unsaved work in any mode.
+  // Called by UpdateBanner before auto-installing so the user can cancel.
+  function hasUnsavedWork() {
+    // Active Scout session (ReviewPage open)
+    if (session?.mode === 'scout' || session?.mode === 'review') return true
+    // Active FIELD session
+    if (session?.mode === 'field') return true
+    // Self-Review: entries filled in on an un-saved half
+    if (selfReviewDirty) return true
+    return false
+  }
   const [bridgeSyncStatus, setBridgeSyncStatus] = useState('disconnected')
   const [auditResults,   setAuditResults]   = useState(null)
   const [auditScore,     setAuditScore]     = useState(null)
@@ -373,6 +386,7 @@ function AppInner() {
             lastResult={lastResult}
             onShowHistory={(session) => { setHistorySession(session || null); setShowHistory(true) }}
             onWatchSession={(s) => setObservingSession(s)}
+            onSelfReviewDirty={setSelfReviewDirty}
           />
         )}
       </PageTransition>
@@ -381,6 +395,7 @@ function AppInner() {
         <UpdateBanner
           update={update}
           onDismiss={() => setUpdateDismissed(true)}
+          hasUnsavedWork={hasUnsavedWork}
         />
       )}
     </>

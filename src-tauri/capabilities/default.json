@@ -18,6 +18,10 @@
     "core:webview:allow-create-webview-window",
     "core:window:allow-destroy",
     "core:event:allow-emit",
-    "core:event:allow-listen"
+    "core:event:allow-listen",
+    "updater:allow-check",
+    "updater:allow-download",
+    "updater:allow-install",
+    "updater:allow-download-and-install"
   ]
 }

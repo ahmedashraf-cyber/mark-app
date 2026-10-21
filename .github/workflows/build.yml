@@ -85,6 +85,16 @@ jobs:
           # to the embedded copy, so nothing breaks in the meantime.
           MARK_SA_PRIVATE_KEY: ${{ secrets.MARK_SA_PRIVATE_KEY }}
           VITE_GH_SYNC_TOKEN: ${{ secrets.VITE_GH_SYNC_TOKEN }}
+          # Updater signing. When absent the build succeeds but the updater
+          # plugin cannot verify downloads. Add these secrets before shipping
+          # the updater feature to users.
+          # Generate with: npx tauri signer generate -w ~/.tauri/mark-app.key
+          # Then put the PRIVATE KEY string in TAURI_SIGNING_PRIVATE_KEY
+          # and the PASSWORD in TAURI_SIGNING_PRIVATE_KEY_PASSWORD.
+          # The PUBLIC KEY goes ONLY in tauri.conf.json plugins.updater.pubkey
+          # (already committed — never put the private key there).
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           tagName: v__VERSION__
           releaseName: 'MARK v__VERSION__'
