@@ -111,8 +111,14 @@ export { ERROR_TYPES }
 // tolerance:        seconds (default 2)
 //
 // Returns { results, summary }
-//   results: [{status, code, tSec, cSec, delta, tErr, cErr, unmapped}]
-//   summary: {trainerTotal, matched, missed, collectorOnly, score}
+//   results: [{status, code, collectorCode, tSec, cSec, delta, tErr, cErr, unmapped}]
+//   summary: {trainerTotal, matched, wrongEvent, missed, collectorOnly, score}
+//
+// Two-pass algorithm:
+//   Pass 1: same event_code, |Δ| ≤ tolerance → matched (exactly as before)
+//   Pass 2: among remaining rows, any (trainer, collector) pair with |Δ| ≤ tolerance,
+//           sorted by |Δ| ascending, greedily taken → wrong_event
+//   Remainder: trainer → missed, collector → collector_only
 export function compare(collectorEntries, trainerRows, toleranceSec = 2) {
   const trainer = trainerRows.map(r => ({
     code:      labelToCode(r.eventLabel),
@@ -120,6 +126,7 @@ export function compare(collectorEntries, trainerRows, toleranceSec = 2) {
     sec:       trainerTsToSec(r.timestamp),
     errorType: normaliseErrorType(r.errorType),
     unmapped:  !codeKnown(labelToCode(r.eventLabel)),
+    used:      false,
   }))
 
   const coll = collectorEntries.map(r => ({
@@ -131,7 +138,7 @@ export function compare(collectorEntries, trainerRows, toleranceSec = 2) {
 
   const results = []
 
-  // For each trainer row, find closest unused collector row with same code and |Δ| ≤ tolerance.
+  // ── Pass 1: same event_code, |Δ| ≤ tolerance ────────────────────────────
   for (const t of trainer) {
     let best = null, bestDelta = Infinity
     if (t.sec != null) {
@@ -143,30 +150,59 @@ export function compare(collectorEntries, trainerRows, toleranceSec = 2) {
     }
     if (best) {
       best.used = true
+      t.used = true
       results.push({
         status: 'matched',
-        code:   t.code, rawLabel: t.rawLabel,
+        code:   t.code, collectorCode: t.code, rawLabel: t.rawLabel,
         tSec:   t.sec,  cSec: best.sec,
         delta:  best.sec - t.sec,
         tErr:   t.errorType, cErr: best.errorType,
         unmapped: t.unmapped,
       })
-    } else {
-      results.push({
-        status: 'missed',
-        code:   t.code, rawLabel: t.rawLabel,
-        tSec:   t.sec,  cSec: null, delta: null,
-        tErr:   t.errorType, cErr: '',
-        unmapped: t.unmapped,
-      })
     }
   }
 
-  // Unmatched collector rows → collector_only
+  // ── Pass 2: cross-event pairs within tolerance → wrong_event ─────────────
+  // Build all (unused trainer, unused collector) pairs with |Δ| ≤ tolerance,
+  // different event codes. Sort by |Δ| ascending; greedily take each pair.
+  const pairs = []
+  for (const t of trainer) {
+    if (t.used || t.sec == null) continue
+    for (const c of coll) {
+      if (c.used || c.sec == null || c.code === t.code) continue
+      const d = Math.abs(c.sec - t.sec)
+      if (d <= toleranceSec) pairs.push({ t, c, d })
+    }
+  }
+  pairs.sort((a, b) => a.d - b.d)
+  for (const { t, c, d } of pairs) {
+    if (t.used || c.used) continue
+    t.used = true
+    c.used = true
+    results.push({
+      status: 'wrong_event',
+      code:   t.code, collectorCode: c.code, rawLabel: t.rawLabel,
+      tSec:   t.sec,  cSec: c.sec,
+      delta:  c.sec - t.sec,
+      tErr:   t.errorType, cErr: c.errorType,
+      unmapped: t.unmapped,
+    })
+  }
+
+  // ── Remainders ───────────────────────────────────────────────────────────
+  trainer.filter(t => !t.used).forEach(t =>
+    results.push({
+      status: 'missed',
+      code:   t.code, collectorCode: '', rawLabel: t.rawLabel,
+      tSec:   t.sec,  cSec: null, delta: null,
+      tErr:   t.errorType, cErr: '',
+      unmapped: t.unmapped,
+    })
+  )
   coll.filter(c => !c.used).forEach(c =>
     results.push({
       status: 'collector_only',
-      code:   c.code, rawLabel: '',
+      code:   c.code, collectorCode: c.code, rawLabel: '',
       tSec:   null,   cSec: c.sec, delta: null,
       tErr:   '',     cErr: c.errorType,
       unmapped: false,
@@ -178,16 +214,18 @@ export function compare(collectorEntries, trainerRows, toleranceSec = 2) {
 
   const trainerTotal  = trainer.length
   const matched       = results.filter(r => r.status === 'matched').length
+  const wrongEvent    = results.filter(r => r.status === 'wrong_event').length
   const missed        = results.filter(r => r.status === 'missed').length
   const collectorOnly = results.filter(r => r.status === 'collector_only').length
 
-  // score = max(0, 100 − (missed + collectorOnly) / trainerTotal × 100), 1 decimal.
+  // score = max(0, 100 − (missed + wrongEvent + collectorOnly) / trainerTotal × 100), 1 decimal.
+  // wrong_event counts as ONE error (the trainer row), not two.
   // If trainerTotal = 0 → score is null (shown as "—").
   const score = trainerTotal
-    ? Math.max(0, Math.round((1 - (missed + collectorOnly) / trainerTotal) * 1000) / 10)
+    ? Math.max(0, Math.round((1 - (missed + wrongEvent + collectorOnly) / trainerTotal) * 1000) / 10)
     : null
 
-  return { results, summary: { trainerTotal, matched, missed, collectorOnly, score } }
+  return { results, summary: { trainerTotal, matched, wrongEvent, missed, collectorOnly, score } }
 }
 
 // ── Event groups (Offense / Defense / Close) derived from fieldConfig numeric IDs ─

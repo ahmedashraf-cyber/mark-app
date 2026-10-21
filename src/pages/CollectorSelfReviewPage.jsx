@@ -77,9 +77,10 @@ const S = {
   }),
   badge:    (type) => {
     const map = {
-      matched:        { bg:'rgba(76,175,130,0.15)', color:'#4caf82', border:'rgba(76,175,130,0.3)' },
-      missed:         { bg:'rgba(224,92,92,0.15)',  color:'#e05c5c', border:'rgba(224,92,92,0.3)' },
-      collector_only: { bg:'rgba(88,166,255,0.15)', color:'#58a6ff', border:'rgba(88,166,255,0.3)' },
+      matched:        { bg:'rgba(76,175,130,0.15)',  color:'#4caf82', border:'rgba(76,175,130,0.3)' },
+      wrong_event:    { bg:'rgba(210,153,34,0.15)',  color:'#d29922', border:'rgba(210,153,34,0.3)' },
+      missed:         { bg:'rgba(224,92,92,0.15)',   color:'#e05c5c', border:'rgba(224,92,92,0.3)' },
+      collector_only: { bg:'rgba(88,166,255,0.15)',  color:'#58a6ff', border:'rgba(88,166,255,0.3)' },
     }
     const c = map[type] || { bg:'rgba(255,255,255,0.05)', color:'var(--t-2)', border:'var(--b-1)' }
     return { display:'inline-flex', alignItems:'center', padding:'2px 8px', borderRadius:12,
@@ -373,7 +374,7 @@ export default function CollectorSelfReviewPage({ onBack }) {
     a.click()
   }
 
-  // ── Build sheet rows ──────────────────────────────────────────────────────
+  // ── Build sheet rows (19 columns) ────────────────────────────────────────
   function buildSheetRows(run, runId, savedAt) {
     const s = run.summary
     return run.results.map(r => [
@@ -384,6 +385,9 @@ export default function CollectorSelfReviewPage({ onBack }) {
       fmtSec(r.tSec), fmtSec(r.cSec),
       r.delta == null ? '' : r.delta,
       r.tErr, r.cErr,
+      // cols 18-19: wrong_event count (summary, repeated on every row), collector event label
+      s.wrongEvent ?? 0,
+      r.status === 'wrong_event' ? codeToLabel(r.collectorCode) : '',
     ])
   }
 
@@ -394,8 +398,13 @@ export default function CollectorSelfReviewPage({ onBack }) {
     return {
       hrCode, matchId: half.matchId, half: half.half,
       results: rows.map(r => ({
-        status:   r[10],
-        code:     labelToCode(r[11] || ''),
+        status:        r[10],
+        code:          labelToCode(r[11] || ''),
+        // collectorCode: filled from col S (index 18) on wrong_event rows;
+        // blank on rows saved by v7.12.8 (only 17 cols) → falls back to trainer code
+        collectorCode: r[10] === 'wrong_event'
+          ? labelToCode(r[18] || r[11] || '')
+          : labelToCode(r[11] || ''),
         tSec:     trainerTsToSec(r[12]),
         cSec:     trainerTsToSec(r[13]),
         delta:    num(r[14]),
@@ -409,6 +418,8 @@ export default function CollectorSelfReviewPage({ onBack }) {
         matched:       num(f[7]) || 0,
         missed:        num(f[8]) || 0,
         collectorOnly: num(f[9]) || 0,
+        // col R (index 17): wrong_event count — blank on v7.12.8 rows → treat as 0
+        wrongEvent:    num(f[17]) || 0,
       },
       saved: true, readOnly: true, runId: f[0], savedAt: f[1],
     }
@@ -640,7 +651,7 @@ export default function CollectorSelfReviewPage({ onBack }) {
                       {sc == null ? '—' : `${sc}%`}
                     </span>
                     <span style={{ fontSize:12, color:'var(--t-3)' }}>
-                      100% − (missed {s.missed} + only you {s.collectorOnly}) ÷ trainer errors {s.trainerTotal}
+                      100% − (missed {s.missed} + wrong event {s.wrongEvent ?? 0} + only you {s.collectorOnly}) ÷ trainer errors {s.trainerTotal}
                       {!s.trainerTotal ? ' — no trainer errors in scope' : ''}
                     </span>
                   </div>
@@ -648,12 +659,13 @@ export default function CollectorSelfReviewPage({ onBack }) {
               })()}
 
               {/* Counter blocks */}
-              <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:12, marginBottom:18 }}>
+              <div style={{ display:'grid', gridTemplateColumns:'repeat(5,1fr)', gap:12, marginBottom:18 }}>
                 {[
-                  ['Matched',       lastRun.summary.matched,       '#4caf82'],
-                  ['Missed',        lastRun.summary.missed,        '#e05c5c'],
-                  ['Only you',      lastRun.summary.collectorOnly, '#58a6ff'],
-                  ['Trainer errors',lastRun.summary.trainerTotal,  'var(--t-1)'],
+                  ['Matched',       lastRun.summary.matched,            '#4caf82'],
+                  ['Wrong event',   lastRun.summary.wrongEvent ?? 0,    '#d29922'],
+                  ['Missed',        lastRun.summary.missed,             '#e05c5c'],
+                  ['Only you',      lastRun.summary.collectorOnly,      '#58a6ff'],
+                  ['Trainer errors',lastRun.summary.trainerTotal,       'var(--t-1)'],
                 ].map(([label, val, color]) => (
                   <div key={label} style={{ background:'var(--bg-3)', border:'1px solid var(--b-1)',
                                             borderRadius:8, padding:'14px 12px', textAlign:'center' }}>
@@ -668,10 +680,11 @@ export default function CollectorSelfReviewPage({ onBack }) {
               {/* Filter row */}
               <div style={{ display:'flex', gap:8, marginBottom:14, flexWrap:'wrap' }}>
                 {[
-                  ['all',            'All',      lastRun.results.length],
-                  ['matched',        'Matched',  lastRun.summary.matched],
-                  ['missed',         'Missed',   lastRun.summary.missed],
-                  ['collector_only', 'Only you', lastRun.summary.collectorOnly],
+                  ['all',            'All',         lastRun.results.length],
+                  ['matched',        'Matched',     lastRun.summary.matched],
+                  ['wrong_event',    'Wrong event', lastRun.summary.wrongEvent ?? 0],
+                  ['missed',         'Missed',      lastRun.summary.missed],
+                  ['collector_only', 'Only you',    lastRun.summary.collectorOnly],
                 ].map(([k, label, count]) => (
                   <button key={k}
                     style={{ padding:'5px 12px', borderRadius:20, border:'1px solid var(--b-1)',
@@ -705,7 +718,10 @@ export default function CollectorSelfReviewPage({ onBack }) {
                         No rows in this filter
                       </td></tr>
                     ) : filteredResults.map((r, i) => {
-                      const label = { matched:'Matched', missed:'Missed', collector_only:'Only you' }[r.status] || r.status
+                      const label = {
+                        matched:'Matched', wrong_event:'Wrong event',
+                        missed:'Missed', collector_only:'Only you',
+                      }[r.status] || r.status
                       const delta = r.delta == null ? '—'
                         : <span style={{ fontFamily:'monospace', fontSize:11,
                                          color: Math.abs(r.delta) <= 1 ? '#4caf82' : '#d29922' }}>
@@ -720,7 +736,14 @@ export default function CollectorSelfReviewPage({ onBack }) {
                               <span style={{ marginLeft:6, fontSize:10, color:'#d29922', fontStyle:'italic' }}>unmapped event</span>
                             )}
                           </td>
-                          <td style={{ padding:'9px 12px', fontWeight:500 }}>{codeToLabel(r.code)}</td>
+                          <td style={{ padding:'9px 12px', fontWeight:500 }}>
+                            {codeToLabel(r.code)}
+                            {r.status === 'wrong_event' && r.collectorCode && r.collectorCode !== r.code && (
+                              <div style={{ fontSize:11, color:'#d29922', marginTop:2 }}>
+                                You: {codeToLabel(r.collectorCode)}
+                              </div>
+                            )}
+                          </td>
                           <td style={{ padding:'9px 12px', fontFamily:'monospace', fontSize:11, color:'var(--t-2)' }}>
                             {r.tSec != null ? fmtSec(r.tSec) : '—'}
                           </td>

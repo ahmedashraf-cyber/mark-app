@@ -18,7 +18,17 @@ const SAVE_TAB         = 'Collector Self Review'
 const BASE             = 'https://sheets.googleapis.com/v4/spreadsheets'
 const DRIVE_BASE       = 'https://www.googleapis.com/drive/v3/files'
 
+// The authoritative 19-column header (v7.12.9+).
+// Columns 18-19 (wrong_event, collector_event) were appended in v7.12.9.
+// The 17-column v7.12.8 header is migrated on first write after the upgrade.
 const SAVE_HEADER = [
+  'run_id','saved_at_iso','collector_hr_code','match_id','half',
+  'score_percent','trainer_rows','matched','missed','collector_only',
+  'status','event','trainer_time','collector_time','delta_s',
+  'trainer_error_type','collector_error_type',
+  'wrong_event','collector_event',
+]
+const SAVE_HEADER_V788 = [
   'run_id','saved_at_iso','collector_hr_code','match_id','half',
   'score_percent','trainer_rows','matched','missed','collector_only',
   'status','event','trainer_time','collector_time','delta_s',
@@ -156,7 +166,9 @@ export async function loadSavedReviews(hrCode) {
   const tok  = await saToken()
   const norm = s => String(s || '').trim().toUpperCase()
   const data = await sheetGet(
-    `${BASE}/${SAMPLED_SHEET_ID}/values/${encodeURIComponent(`'${SAVE_TAB}'!A1:Q50000`)}`,
+    // Read through col S (19 cols) so new wrong_event/collector_event columns are included.
+    // Rows written by v7.12.8 only have 17 columns; cols R/S will simply be undefined → ''.
+    `${BASE}/${SAMPLED_SHEET_ID}/values/${encodeURIComponent(`'${SAVE_TAB}'!A1:S50000`)}`,
     tok
   )
   const rows = (data.values || []).slice(1) // skip header row
@@ -241,20 +253,38 @@ export async function loadTrainerSheet(sheetId, matchId) {
   return out
 }
 
-// ── 4. Verify save-tab header before every write ──────────────────────────────
+// ── 4. Verify save-tab header before every write (with v7.12.8 migration) ─────
+// If the header is exactly the old 17-column v7.12.8 header, appends the two new
+// column names (wrong_event, collector_event) into R1:S1 and continues.
+// If the header is the current 19-column header, passes immediately.
+// Any other header → fails loudly.
 export async function verifySaveHeader() {
   const tok  = await saToken()
   const data = await sheetGet(
-    `${BASE}/${SAMPLED_SHEET_ID}/values/${encodeURIComponent(`'${SAVE_TAB}'!A1:Q1`)}`,
+    `${BASE}/${SAMPLED_SHEET_ID}/values/${encodeURIComponent(`'${SAVE_TAB}'!A1:S1`)}`,
     tok
   )
   const hdr = (data.values?.[0] || []).map(s => String(s || '').trim())
-  const match = JSON.stringify(hdr) === JSON.stringify(SAVE_HEADER)
-  if (!match) {
-    throw new Error(
-      `Save tab header mismatch. Expected: [${SAVE_HEADER.join(', ')}]. Found: [${hdr.join(', ')}]`
-    )
+
+  if (JSON.stringify(hdr) === JSON.stringify(SAVE_HEADER)) {
+    // Already up to date.
+    return
   }
+
+  if (JSON.stringify(hdr) === JSON.stringify(SAVE_HEADER_V788)) {
+    // Migrate: append the two new column headers into R1:S1.
+    await sheetPost(
+      `${BASE}/${SAMPLED_SHEET_ID}/values/${encodeURIComponent(`'${SAVE_TAB}'!R1:S1`)}?valueInputOption=RAW`,
+      tok,
+      { values: [['wrong_event', 'collector_event']] }
+    )
+    console.log('[MARK SelfReview] Migrated save-tab header from 17 → 19 columns.')
+    return
+  }
+
+  throw new Error(
+    `Save tab header mismatch. Expected 19-column or migratable 17-column header. Found: [${hdr.join(', ')}]`
+  )
 }
 
 // ── 5. Append result rows to the save tab ────────────────────────────────────
