@@ -9,7 +9,7 @@ import AdminPage from './AdminPage.jsx'
 import TagEditorPage from './TagEditorPage.jsx'
 import InsightsPage from './InsightsPage.jsx'
 import CollectorSelfReviewPage from './CollectorSelfReviewPage.jsx'
-import { CURRENT_VERSION } from '../hooks/useUpdateCheck'
+import { CURRENT_VERSION, getRuntimeVersion } from '../hooks/useUpdateCheck'
 import { HALVES, formatHalf } from '../utils/half.js'
 
 const MATCHES_SHEET_ID = '1zoh7CmoQKPMLGBEklHXznG1Y8xBS-iuu0phRWn8-wXc'
@@ -151,6 +151,14 @@ async function fetchMatchesFromSheet() {
 }
 
 export default function SessionSetupPage({ onSessionStart, lastResult, onShowHistory, onWatchSession, onSelfReviewDirty }) {
+  // Runtime version — read from Tauri's bundle at startup so the header always
+  // matches the OS window title.  Falls back to the build-time constant outside
+  // Tauri (dev server, tests).
+  const [runtimeVersion, setRuntimeVersion] = useState(CURRENT_VERSION)
+  useEffect(() => {
+    getRuntimeVersion().then(v => setRuntimeVersion(v)).catch(() => {})
+  }, [])
+
   const { profile, logout, role, caps, roleInfo } = useAuth()
   // caps.admin carries the overrides AND the Batch-Manager lock. The bootstrap
   // email check stays so a bad roster edit cannot remove the last way in.
@@ -488,7 +496,7 @@ export default function SessionSetupPage({ onSessionStart, lastResult, onShowHis
           </div>
           <div>
             <span style={{fontFamily:'Inter',fontWeight:900,fontSize:15,color:'var(--t-1)',letterSpacing:-0.3}}>MARK</span>
-            <span style={{fontSize:10,color:'var(--t-3)',fontWeight:500,marginLeft:6}}>v{CURRENT_VERSION}</span>
+            <span style={{fontSize:10,color:'var(--t-3)',fontWeight:500,marginLeft:6}}>v{runtimeVersion}</span>
           </div>
         </div>
         <div style={{display:'flex',alignItems:'center',gap:8}}>

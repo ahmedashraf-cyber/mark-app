@@ -2,7 +2,7 @@
 // Shows a banner if update is available
 
 const REPO = 'ahmedashraf-cyber/mark-app'
-export const CURRENT_VERSION = '7.12.16' // synced from package.json by scripts/sync-version.js
+export const CURRENT_VERSION = '7.12.17' // synced from package.json by scripts/sync-version.js
 
 // NOTE: this drifted to 7.8.89 while package.json reached 7.9.10, because the
 // version bump replaces the PREVIOUS number and this constant had fallen out of
@@ -41,5 +41,21 @@ export async function checkForUpdate() {
     return null
   } catch (e) {
     return null // silent fail — no internet or API error
+  }
+}
+
+/**
+ * Read the runtime application version from the Tauri bundle.
+ * This is the version baked into tauri.conf.json at build time — the same
+ * value that appears in the OS window title.  Resolves to CURRENT_VERSION as
+ * a fallback so the header never shows an empty string outside Tauri (e.g.
+ * during Vite dev-server runs or in tests).
+ */
+export async function getRuntimeVersion() {
+  try {
+    const { getVersion } = await import('@tauri-apps/api/app')
+    return await getVersion()
+  } catch {
+    return CURRENT_VERSION   // fallback: build-time constant
   }
 }
