@@ -273,46 +273,71 @@ export default function CollectorSelfReviewPage({ onBack, onDirtyChange }) {
   }, [selectedHalf?.matchId, selectedHalf?.half])
 
   // ── Open / change the video pop-out ──────────────────────────────────────
-  // forceChange=true: always show the picker, even if a path is remembered.
+  // ── Open / change the video pop-out ─────────────────────────────────────
+  // forceChange=true: ALWAYS open the OS file picker — skips the localStorage
+  // read entirely.  The original bug: the old code set `path = ''` for force
+  // but then immediately read localStorage back into `path`, so the picker was
+  // never shown when a remembered path existed.  The fix is to branch before
+  // the localStorage read, not after it.
   async function handleOpenVideo(forceChange = false) {
     const matchId = selectedHalf?.matchId
     if (!matchId) return
     const key = videoStorageKey()
 
-    let path = forceChange ? '' : videoPath
-    if (!path && key) {
-      try { path = localStorage.getItem(key) || '' } catch {}
-    }
+    let path = ''
 
-    // Check remembered file still exists on disk before using it
-    if (path && !forceChange) {
+    if (forceChange) {
+      // ── Forced change: skip remembered path, always show the picker ──────
+      let picked = ''
       try {
-        await invoke('get_file_size', { path })
-        setVideoMissing(false)
-      } catch {
-        console.warn('[SELF-REVIEW][video] remembered file gone:', path)
-        if (key) try { localStorage.removeItem(key) } catch {}
-        setVideoPath(''); setVideoMissing(true)
-        path = ''
-      }
-    } else {
-      setVideoMissing(false)
-    }
-
-    // No valid path: ask the user to pick a file
-    if (!path) {
-      try {
-        path = await invoke('pick_video_file') || ''
-        if (!path) return
-        if (key) try { localStorage.setItem(key, path) } catch {}
-        setVideoMissing(false)
+        picked = await invoke('pick_video_file') || ''
       } catch (e) {
         console.error('[SELF-REVIEW][video] pick failed:', e)
         return
       }
+      if (!picked) return   // user cancelled — nothing changes; keep current video
+      path = picked
+      if (key) try { localStorage.setItem(key, path) } catch {}
+      setVideoMissing(false)
+
+    } else {
+      // ── Normal open: use remembered path if valid, else ask ──────────────
+      path = videoPath
+      if (!path && key) {
+        try { path = localStorage.getItem(key) || '' } catch {}
+      }
+
+      if (path) {
+        // Verify the file still exists before trusting the remembered path
+        try {
+          await invoke('get_file_size', { path })
+          setVideoMissing(false)
+        } catch {
+          console.warn('[SELF-REVIEW][video] remembered file gone:', path)
+          if (key) try { localStorage.removeItem(key) } catch {}
+          setVideoPath(''); setVideoMissing(true)
+          path = ''
+        }
+      }
+
+      if (!path) {
+        // No valid remembered path — ask the user to pick
+        try {
+          path = await invoke('pick_video_file') || ''
+          if (!path) return
+          if (key) try { localStorage.setItem(key, path) } catch {}
+          setVideoMissing(false)
+        } catch (e) {
+          console.error('[SELF-REVIEW][video] pick failed:', e)
+          return
+        }
+      }
     }
 
-    // Obtain the local proxy URL and open (or reload) the pop-out window
+    // Obtain the local proxy URL and open (or reload) the pop-out window.
+    // If the window is already open, openVideoWindow emits mark:video-load so
+    // VideoWindow replaces the <video> src; the position resets to 0 for a
+    // different file.
     let url
     try { url = await invoke('get_video_url', { path }) } catch (e) {
       console.error('[SELF-REVIEW][video] get_video_url failed:', e)
@@ -321,6 +346,17 @@ export default function CollectorSelfReviewPage({ onBack, onDirtyChange }) {
     const name = String(path).split(/[/\\]/).pop()
     setVideoPath(path); setVideoUrl(url); setVideoName(name)
     await openVideoWindow(url, name)
+  }
+
+  // ── Remove video for this half ────────────────────────────────────────────
+  // Closes the pop-out, clears localStorage for this half only, and resets
+  // all video state.  Entries, results, and other halves' remembered paths
+  // are untouched.
+  async function handleRemoveVideo() {
+    await closeVideoWindow()
+    const key = videoStorageKey()
+    if (key) try { localStorage.removeItem(key) } catch {}
+    setVideoPath(''); setVideoUrl(''); setVideoName(''); setVideoMissing(false)
   }
 
   // ── Emit a seek to the pop-out ────────────────────────────────────────────
@@ -635,13 +671,20 @@ export default function CollectorSelfReviewPage({ onBack, onDirtyChange }) {
                 The video you used before can't be found. Choose the file again.
               </span>
             )}
-            {/* Change button — always visible when a path is known (open or closed) */}
-            {videoPath && !videoMissing && (
-              <button onClick={() => handleOpenVideo(true)}
-                style={{ background:'none', border:'none', color:'var(--t-3)',
-                  fontSize:10, cursor:'pointer', padding:'0 2px', textDecoration:'underline' }}>
-                Change
-              </button>
+            {/* Change / Remove — shown whenever a path is remembered (or missing) */}
+            {(videoPath || videoMissing) && (
+              <>
+                <button onClick={() => handleOpenVideo(true)}
+                  style={{ background:'none', border:'none', color:'var(--t-3)',
+                    fontSize:10, cursor:'pointer', padding:'0 2px', textDecoration:'underline' }}>
+                  Change video
+                </button>
+                <button onClick={handleRemoveVideo}
+                  style={{ background:'none', border:'none', color:'#FF453A',
+                    fontSize:10, cursor:'pointer', padding:'0 2px', textDecoration:'underline' }}>
+                  Remove
+                </button>
+              </>
             )}
             {/* Open / close / reopen */}
             <button
