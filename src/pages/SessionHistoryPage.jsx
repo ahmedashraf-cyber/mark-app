@@ -28,7 +28,7 @@ import { collection, query, where, getDocs, doc, writeBatch } from 'firebase/fir
 import { useAuth } from '../hooks/useAuth.jsx'
 import { useAdmin } from '../hooks/useAdmin.js'
 import { invoke } from '@tauri-apps/api/core'
-import { exportSessionToXlsx, exportSessionToUserDrive } from '../utils/exportSession'
+import { exportSessionToXlsx, exportSessionToUserDrive, shareAndVerify, explainDriveError } from '../utils/exportSession'
 import { showToast } from '../utils/toast'
 import { EXTRAS, GK_EXTRAS, GK_WRONG_EXTRAS } from '../components/TagPanel'
 import { SPEED_MIN, SPEED_MAX, SPEED_STEP } from '../data/shortcuts'
@@ -839,7 +839,7 @@ function SessionCard({ session, onReview, onExport, onExportSheets, loading, isA
               try {
                 await onExportSheets(session)
                 setSheetsState('done'); showToast('Exported to Google Sheets'); setTimeout(()=>setSheetsState('idle'), 5000)
-              } catch(e) { setSheetsState('error'); showToast(`Sheets export failed: ${e?.message||String(e)}`, 'error'); setTimeout(()=>setSheetsState('idle'), 5000) }
+              } catch(e) { setSheetsState('error'); if (!e?.handled) showToast(`Sheets export failed: ${e?.message||String(e)}`, 'error'); setTimeout(()=>setSheetsState('idle'), 5000) }
             }}
             disabled={sheetsState === 'saving'}
             title="Export to Google Sheet"
@@ -975,6 +975,9 @@ export default function SessionHistoryPage({ onBack, initialSession }) {
   const isAdmin = useAuth()?.caps?.admin || useAdmin(profile, useAuth()?.role)
   const [adminMode,     setAdminMode]     = useState(isAdmin)  // admin sees all sessions by default
   const [activeSession, setActiveSession] = useState(null)
+  // The Google Sheets export reports failure in a BLOCKING dialog (never an alert), because
+  // some failures mean the sheet exists but collectors cannot use it yet.
+  const [exportDialog, setExportDialog] = useState(null)   // null | { kind, message, session, fileId, url, busy, retryNote }
   const [activeTags,    setActiveTags]    = useState([])
   const [tagsLoading,   setTagsLoading]   = useState(false)
   const [search,        setSearch]        = useState('')
@@ -1094,25 +1097,56 @@ export default function SessionHistoryPage({ onBack, initialSession }) {
     return savedPath || null
   }
 
-  // STAGE 1 — Google Sheet in the reviewer's OWN Drive (OAuth sign-in, drive.file).
-  // First run opens the browser to sign in; after that it's silent (refresh token).
+  // Google Sheet created by the REVIEWER (their own OAuth token, so they own it and their
+  // storage is used). First run opens the browser to sign in; after that it's silent.
+  // The sheet is shared with mark-reporter and only reported as done once mark-reporter has
+  // read it. Failures open a blocking dialog with the real cause; the card is told it failed
+  // (e.handled) so it neither shows a tick nor a second toast.
   async function handleExportSheets(session) {
     try {
       const q    = query(collection(db, 'mark_error_tags'), where('sessionId', '==', session.sessionId))
       const snap = await getDocs(q)
       const tags = snap.docs.map(d => ({ id: d.id, ...d.data() }))
-      const { url } = await exportSessionToUserDrive({
+      const { url, path } = await exportSessionToUserDrive({
         session,
         tags,
         quality: session.qualityScore || 0,
         tagCount: session.totalTaggedErrors || 0,
         total: session.totalReviewedEvents || 0,
       })
+      if (path === 'own_drive') showToast("Saved in your own Google Drive — the shared folder wasn't available to this account.")
       const { invoke } = await import('@tauri-apps/api/core')
       if (url) await invoke('open_file', { path: url })
-    } catch(e) {
-      console.error('[MARK] Google Sheets export failed:', e)
-      alert('Google Sheets export failed:\n\n' + (e?.message || e))
+    } catch (raw) {
+      console.error('[MARK] Google Sheets export failed:', raw)
+      const e = raw && raw.name === 'DriveExportError' ? raw : explainDriveError(raw)
+      setExportDialog({ kind: e.kind, message: e.message, session, fileId: e.fileId, url: e.url, busy: false, retryNote: '' })
+      const handled = new Error(e.message); handled.handled = true
+      throw handled
+    }
+  }
+
+  // Retry from the dialog. "unreadable" → only re-share and re-check the SAME sheet.
+  // Anything else → run the whole export again (e.g. after the connection is back).
+  async function retryExportDialog() {
+    const d = exportDialog
+    if (!d || d.busy) return
+    setExportDialog({ ...d, busy: true, retryNote: '' })
+    try {
+      if (d.kind === 'unreadable' && d.fileId) {
+        await shareAndVerify({ fileId: d.fileId, url: d.url })
+        setExportDialog(null)
+        showToast('Exported to Google Sheets — collectors can now self-review this half')
+        if (d.url) { const { invoke } = await import('@tauri-apps/api/core'); await invoke('open_file', { path: d.url }) }
+      } else {
+        setExportDialog(null)
+        await handleExportSheets(d.session)
+        showToast('Exported to Google Sheets')
+      }
+    } catch (raw) {
+      if (raw && raw.handled) return                       // handleExportSheets already opened a fresh dialog
+      const e = raw && raw.name === 'DriveExportError' ? raw : explainDriveError(raw)
+      setExportDialog({ ...d, kind: e.kind, message: e.message, fileId: e.fileId || d.fileId, url: e.url || d.url, busy: false, retryNote: 'Still not readable — try again in a moment.' })
     }
   }
 
@@ -1330,6 +1364,29 @@ export default function SessionHistoryPage({ onBack, initialSession }) {
           </div>
         )}
       </div>
+
+      {/* ── Google Sheets export failed: blocking, with the real cause ── */}
+      {exportDialog && (
+        <div data-testid="export-dialog" style={{position:'fixed',inset:0,zIndex:2000,background:'rgba(0,0,0,0.85)',backdropFilter:'blur(4px)',display:'flex',alignItems:'center',justifyContent:'center'}}>
+          <div className="card slide-up" style={{width:460,padding:26}}>
+            <div style={{fontFamily:'Inter',fontWeight:800,fontSize:16,color:exportDialog.kind==='unreadable'?'#FFD60A':'#FF453A',marginBottom:10}}>
+              {exportDialog.kind==='unreadable' ? 'Saved, but collectors cannot use it yet' : 'Google Sheets export failed'}
+            </div>
+            <div data-testid="export-dialog-message" style={{fontSize:13,color:'var(--t-1)',lineHeight:1.55,marginBottom:exportDialog.retryNote?8:18,wordBreak:'break-word'}}>
+              {exportDialog.message}
+            </div>
+            {exportDialog.retryNote && <div style={{fontSize:11,color:'#FF9500',marginBottom:16}}>{exportDialog.retryNote}</div>}
+            <div style={{display:'flex',gap:10}}>
+              <button data-testid="export-dialog-close" disabled={exportDialog.busy} onClick={()=>setExportDialog(null)}
+                style={{flex:1,padding:'10px 0',fontSize:13,background:'var(--bg-3)',border:'1px solid var(--b-1)',borderRadius:8,color:'var(--t-1)',cursor:'pointer'}}>Close</button>
+              {(exportDialog.kind==='unreadable' || exportDialog.kind==='network' || exportDialog.kind==='other') && (
+                <button data-testid="export-dialog-retry" className="btn-orange" disabled={exportDialog.busy} onClick={retryExportDialog}
+                  style={{flex:1,padding:'10px 0',fontSize:13}}>{exportDialog.busy ? 'Retrying…' : 'Retry'}</button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

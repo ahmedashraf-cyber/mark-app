@@ -239,11 +239,112 @@ export async function exportSessionToXlsx({ session, tags, quality, tagCount, to
   return savedPath // null if the user cancelled the dialog
 }
 
-// Creates a "MARK Review" sheet inside the shared MARK Trainer Reviews folder using
-// the service-account token (full drive scope). No reviewer OAuth sign-in needed.
-// Returns { url }.
+// ─── Session History export → a Google Sheet the REVIEWER owns ──────────────────────
+// The reviewer's own OAuth token creates the sheet, so the reviewer owns it and THEIR
+// storage is used. (v7.12.10 had mark-reporter create it, which made mark-reporter the
+// owner and filled its Drive.) It goes into the shared MARK Trainer Reviews folder when
+// Google allows that, otherwise into the reviewer's own Drive — the Rust command reports
+// which. Either way it is shared with mark-reporter as a reader, and the export is only
+// reported as done after mark-reporter has actually READ it.
+
+/** A failure with a message that is safe to show as it stands, and a kind to act on. */
+export class DriveExportError extends Error {
+  constructor(kind, message, extra = {}) {
+    super(message)
+    this.name = 'DriveExportError'
+    this.kind = kind          // 'quota' | 'permission' | 'network' | 'other' | 'unreadable'
+    Object.assign(this, extra) // unreadable: { fileId, url, path }
+  }
+}
+
+/** Rust returns Drive failures as a JSON string; turn one into words that name the real cause. */
+export function explainDriveError(raw) {
+  const text = typeof raw === 'string' ? raw : (raw?.message || String(raw))
+  let d = null
+  try { const j = JSON.parse(text); if (j && typeof j === 'object' && j.kind) d = j } catch {}
+  if (!d) return new DriveExportError('other', `The export failed: ${text}. Your review is safe in MARK.`)
+  const short = String(d.reason || d.message || `HTTP ${d.status}`).replace(/\s+/g, ' ').slice(0, 140)
+  if (d.kind === 'quota')
+    return new DriveExportError('quota', `Google storage is full for ${d.account || 'your Google account'}, so the review couldn't be exported. Your review is safe in MARK — tell Fady.`)
+  // 'parent' only reaches here if the own-Drive attempt was refused too: that is a permission problem
+  if (d.kind === 'permission' || d.kind === 'parent')
+    return new DriveExportError('permission', `Google didn't allow this export (${short}). Tell Fady.`)
+  if (d.kind === 'network')
+    return new DriveExportError('network', `The export couldn't reach Google (${d.message || 'no connection'}). Your review is safe in MARK — check the connection and try again.`)
+  return new DriveExportError('other', `The export failed: ${d.message || short}. Your review is safe in MARK.`)
+}
+
+/** A valid reviewer access token: silent refresh if we have signed in before, else the browser sign-in. */
+async function getReviewerToken(invoke) {
+  let accessToken = ''
+  const stored = localStorage.getItem('mark_g_refresh')
+  if (stored) {
+    try {
+      const r = await invoke('google_oauth_refresh', { refreshToken: stored })
+      accessToken = r.access_token || ''
+    } catch (e) { /* refresh failed → fall through to interactive sign-in */ }
+  }
+  if (!accessToken) {
+    const t = await invoke('google_oauth_sign_in')
+    accessToken = t.access_token || ''
+    if (t.refresh_token) localStorage.setItem('mark_g_refresh', t.refresh_token)
+  }
+  if (!accessToken) throw new DriveExportError('other', 'The export failed: Google did not return an access token. Your review is safe in MARK.')
+  return accessToken
+}
+
+const sleep = ms => new Promise(r => setTimeout(r, ms))
+
+/**
+ * Can mark-reporter read the sheet? Reads A1:Z5 with the service account. A fresh share
+ * can take a moment to take effect, so a non-200 is retried a couple of times before it
+ * counts as a failure.
+ */
+export async function serviceAccountCanRead(fileId, { attempts = 3, delayMs = 1500, invoke: inv } = {}) {
+  const invoke = inv || (await import('@tauri-apps/api/core')).invoke
+  let status = 0, detail = ''
+  for (let i = 0; i < attempts; i++) {
+    try {
+      const token = await invoke('get_google_access_token_cmd')
+      const r = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${fileId}/values/A1:Z5`,
+        { headers: { Authorization: `Bearer ${token}` } })
+      status = r.status
+      if (r.status === 200) return { ok: true, status }
+      detail = (await r.text().catch(() => '')).slice(0, 200)
+    } catch (e) { status = 0; detail = e?.message || String(e) }
+    if (i < attempts - 1) await sleep(delayMs)
+  }
+  return { ok: false, status, detail }
+}
+
+const UNREADABLE_MSG = "Your review was saved in Google Sheets, but MARK can't read it yet, so collectors can't self-review this half."
+
+/**
+ * Share the sheet with mark-reporter (as the reviewer), then confirm mark-reporter can read
+ * it. Used for the first attempt AND for Retry, so Retry never creates a second sheet.
+ */
+export async function shareAndVerify({ fileId, url = '', path = '', invoke: inv, sleepMs } = {}) {
+  const invoke = inv || (await import('@tauri-apps/api/core')).invoke
+  let shareFailure = ''
+  try {
+    const accessToken = await getReviewerToken(invoke)
+    await invoke('drive_share_sheet', { accessToken, fileId })
+  } catch (e) {
+    shareFailure = e instanceof DriveExportError ? e.message : (explainDriveError(e).message)
+    console.warn('[MARK] share with mark-reporter failed:', shareFailure)
+  }
+  const check = await serviceAccountCanRead(fileId, { invoke, ...(sleepMs != null ? { delayMs: sleepMs } : {}) })
+  if (check.ok) return { ok: true }
+  console.warn('[MARK] mark-reporter cannot read', fileId, 'HTTP', check.status, check.detail, shareFailure)
+  throw new DriveExportError('unreadable', UNREADABLE_MSG, { fileId, url, path, httpStatus: check.status, detail: shareFailure || check.detail })
+}
+
+// Creates the "MARK Review" sheet with the reviewer's token. Returns { url, id, path }.
 export async function exportSessionToUserDrive({ session, tags, quality, tagCount, total }) {
   const { invoke } = await import('@tauri-apps/api/core')
+
+  // 0. The reviewer's own Google token (silent after the first sign-in).
+  const accessToken = await getReviewerToken(invoke)
 
   // 1. Cut a 10-second clip per error into Downloads/<matchId>_<half>/.
   const matchId   = (session.matchId || session.sessionId || 'Session').toString()
@@ -295,14 +396,24 @@ export async function exportSessionToUserDrive({ session, tags, quality, tagCoun
   XLSX.utils.book_append_sheet(wb, ws, tabName)
   const wbout = XLSX.write(wb, { bookType: 'xlsx', type: 'array' })
 
-  // 3. Upload to the shared MARK Trainer Reviews folder via SA (full drive scope).
+  // 4. Create it as the reviewer. The Rust command tries the shared folder and, only if Google
+  // refuses the PARENT, the reviewer's own Drive; it reports which path ran.
   const name = `MARK Review — ${session.matchName || session.matchId || 'Session'}`
-  const res  = await invoke('drive_create_sheet', {
-    accessToken: '',          // unused — SA token is used inside the Rust command
-    name,
-    data: Array.from(new Uint8Array(wbout)),
-    folderId: TRAINER_REVIEWS_FOLDER_ID,
-  })
+  let res
+  try {
+    res = await invoke('drive_create_sheet', {
+      accessToken,
+      name,
+      data: Array.from(new Uint8Array(wbout)),
+      folderId: TRAINER_REVIEWS_FOLDER_ID,
+    })
+  } catch (e) {
+    throw explainDriveError(e)
+  }
+  console.log('[MARK] Session History export path:', res.path, res.fallback_reason ? `(folder refused: ${res.fallback_reason})` : '')
   const url = res.webViewLink || (res.id ? `https://docs.google.com/spreadsheets/d/${res.id}` : '')
-  return { url }
+
+  // 5. Share with mark-reporter and confirm it can read A1:Z5 before calling this done.
+  await shareAndVerify({ fileId: res.id, url, path: res.path, invoke })
+  return { url, id: res.id, path: res.path }
 }
