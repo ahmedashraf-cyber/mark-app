@@ -49,7 +49,7 @@ import {
   DT_SEV       as DT_SEV_SHARED,
   normalizeEventId, classifyEventModule,
 } from '../utils/defectTypes'
-import { exportScoutSession } from '../utils/exportScoutSession'
+import { exportScoutSession, retryScoutExport } from '../utils/exportScoutSession'
 import { showToast } from '../utils/toast'
 import { formatHalf } from '../utils/half.js'
 
@@ -382,6 +382,30 @@ export default function ReviewPage({ session, onDone, onBack, bridgeSyncStatus, 
   const [copied, setCopied] = useState(false)
   // { phase, step, total, detail, driveLink, error }
 
+  const onScoutProgress = ({ phase, step, total: tot, detail }) =>
+    setExportState(s => ({ ...s, phase, step, total: tot, detail: detail || '' }))
+  const onScoutExportDone = ({ folderUrl, localFolder, warnings, path }) => {
+    setExportState(s => ({ ...s, phase:'done', driveLink: folderUrl, localFolder: localFolder || '', detail:'', error:'', errObj: null, warnings: warnings || [], drivePath: path || '' }))
+    if (localFolder) showToast(`Export saved to ${localFolder}`)
+    else if (folderUrl) showToast('Export uploaded to Google Drive')
+    // Save Drive link to Firestore for session history
+    updateDoc(doc(db, 'mark_sessions', session.sessionId), { driveLink: folderUrl })
+      .catch(e => console.warn('[MARK] driveLink save failed:', e))
+    // Do NOT auto-close — user must click Done after copying the Drive link
+  }
+  const onScoutExportFailed = err => {
+    console.error('[MARK] Scout export failed:', err)
+    setExportState(s => ({ ...s, phase:'error', error: err?.message || String(err), errObj: err, detail:'' }))
+  }
+  // Retry carries on from where the export stopped: same Drive folder, only the files that
+  // did not land, then the readability check again. It never starts over.
+  function retryScoutExportNow() {
+    const err = exportState?.errObj
+    if (!err || !err.resume) return
+    setExportState(s => ({ ...s, phase:'uploading', error:'', detail:'Retrying…', step:0, total:1 }))
+    retryScoutExport({ error: err, onProgress: onScoutProgress }).then(onScoutExportDone).catch(onScoutExportFailed)
+  }
+
   async function handleDoneSubmit(manualCount) {
     setSubmitting(true)
 
@@ -419,26 +443,15 @@ export default function ReviewPage({ session, onDone, onBack, bridgeSyncStatus, 
       // Open export progress modal immediately after session saved
       setExportState({ phase:'starting', step:0, total:1, detail:'Preparing export…', driveLink:'', error:'' })
 
-      // Run export pipeline
+      // Run export pipeline. The review is ALREADY saved in MARK above, so nothing that goes
+      // wrong in the export can lose it — a failure offers Retry or "Finish anyway".
       exportScoutSession({
         session, tags, quality, tagCount, total,
         dtScores, pressureScore, pressureReviewed, pressureErrors,
-        onProgress: ({ phase, step, total: tot, detail }) =>
-          setExportState(s => ({ ...s, phase, step, total: tot, detail: detail || '' })),
+        onProgress: onScoutProgress,
       })
-      .then(({ folderUrl, localFolder }) => {
-        setExportState(s => ({ ...s, phase:'done', driveLink: folderUrl, localFolder: localFolder || '', detail:'' }))
-        if (localFolder) showToast(`Export saved to ${localFolder}`)
-        else if (folderUrl) showToast('Export uploaded to Google Drive')
-        // Save Drive link to Firestore for session history
-        updateDoc(doc(db, 'mark_sessions', session.sessionId), { driveLink: folderUrl })
-          .catch(e => console.warn('[MARK] driveLink save failed:', e))
-        // Do NOT auto-close — user must click Done after copying the Drive link
-      })
-      .catch(err => {
-        console.error('[MARK] Scout export failed:', err)
-        setExportState(s => ({ ...s, phase:'error', error: err?.message || String(err) }))
-      })
+      .then(onScoutExportDone)
+      .catch(onScoutExportFailed)
 
     } catch(e) {
       console.error('[MARK] session save failed:', e)
@@ -861,13 +874,15 @@ export default function ReviewPage({ session, onDone, onBack, bridgeSyncStatus, 
 
             {/* Steps */}
             {(() => {
+              // Local files first, Google Drive last — a Drive problem can never cost the files.
               const steps = [
-                { key:'token',    icon:'🔑', label:'Google Drive auth'     },
-                { key:'folder',   icon:'📁', label:'Creating Drive folder'  },
                 { key:'video',    icon:'🎬', label:'Locating video file'    },
                 { key:'xlsx',     icon:'📊', label:'Building spreadsheet'   },
                 { key:'cutting',  icon:'✂️', label:'Cutting video clips'    },
+                { key:'token',    icon:'🔑', label:'Google Drive auth'      },
+                { key:'folder',   icon:'📁', label:'Creating Drive folder'  },
                 { key:'uploading',icon:'☁️', label:'Uploading to Drive'     },
+                { key:'verifying',icon:'🔎', label:'Checking mark-reporter can read it' },
                 { key:'done',     icon:'✅', label:'Done'                   },
               ]
               const ORDER = steps.map(s=>s.key)
@@ -922,7 +937,7 @@ export default function ReviewPage({ session, onDone, onBack, bridgeSyncStatus, 
 
             {/* Overall progress bar */}
             {exportState.phase !== 'done' && exportState.phase !== 'error' && (() => {
-              const ORDER = ['token','folder','video','xlsx','cutting','uploading']
+              const ORDER = ['video','xlsx','cutting','token','folder','uploading','verifying']
               const ci    = ORDER.indexOf(exportState.phase)
               const pct   = ci < 0 ? 0 : Math.round(((ci + (exportState.total > 0 ? exportState.step/exportState.total : 0)) / ORDER.length) * 100)
               return (
@@ -937,10 +952,26 @@ export default function ReviewPage({ session, onDone, onBack, bridgeSyncStatus, 
               )
             })()}
 
-            {/* Error state */}
+            {/* Error state — the real cause, and what is safe */}
             {exportState.phase === 'error' && (
-              <div style={{ background:'rgba(255,69,58,0.1)', border:'1px solid rgba(255,69,58,0.3)', borderRadius:8, padding:'10px 12px', marginBottom:16, fontSize:12, color:'#FF453A' }}>
+              <div data-testid="scout-export-error" style={{ background:'rgba(255,69,58,0.1)', border:'1px solid rgba(255,69,58,0.3)', borderRadius:8, padding:'10px 12px', marginBottom:16, fontSize:12, color:'#FF453A' }}>
                 {exportState.error}
+                {exportState.errObj?.localFolder && (
+                  <div style={{ marginTop:8, color:'rgba(255,255,255,0.6)' }}>
+                    Your review is saved in MARK, and your files are in {exportState.errObj.localFolder}.
+                  </div>
+                )}
+              </div>
+            )}
+            {/* Anything that worked but needs a word (e.g. the folder could not be shared) */}
+            {exportState.phase === 'done' && (exportState.warnings || []).length > 0 && (
+              <div style={{ background:'rgba(255,214,10,0.08)', border:'1px solid rgba(255,214,10,0.3)', borderRadius:8, padding:'10px 12px', marginBottom:16, fontSize:11, color:'#FFD60A' }}>
+                {(exportState.warnings || []).map((w, i) => <div key={i}>{w}</div>)}
+              </div>
+            )}
+            {exportState.phase === 'done' && exportState.drivePath === 'app_root' && (
+              <div style={{ fontSize:10, color:'rgba(255,255,255,0.45)', marginBottom:12 }}>
+                Saved in your own Google Drive, in the “MARK Reviews” folder (the shared folder wasn't available to this account).
               </div>
             )}
 
@@ -982,14 +1013,20 @@ export default function ReviewPage({ session, onDone, onBack, bridgeSyncStatus, 
             )}
 
             {/* Action button — only show when done or error */}
-            {(exportState.phase === 'done' || exportState.phase === 'error') && (
+            {exportState.phase === 'done' && (
               <button className="btn-orange" style={{ width:'100%', padding:'10px 0', fontSize:13 }}
-                onClick={() => {
-                  setExportState(null)
-                  if (exportState.phase === 'done') onDone({})
-                }}>
-                {exportState.phase === 'done' ? 'Done' : 'Dismiss'}
-              </button>
+                onClick={() => { setExportState(null); onDone({}) }}>Done</button>
+            )}
+            {/* Failed: Retry continues where it stopped; "Finish anyway" never blocks finishing the review */}
+            {exportState.phase === 'error' && (
+              <div style={{ display:'flex', gap:10 }}>
+                <button data-testid="scout-export-finish" style={{ flex:1, padding:'10px 0', fontSize:13, background:'rgba(255,255,255,0.06)', border:'1px solid rgba(255,255,255,0.12)', borderRadius:8, color:'rgba(255,255,255,0.85)', cursor:'pointer' }}
+                  onClick={() => { setExportState(null); onDone({}) }}>Finish anyway</button>
+                {exportState.errObj?.resume && (
+                  <button data-testid="scout-export-retry" className="btn-orange" style={{ flex:1, padding:'10px 0', fontSize:13 }}
+                    onClick={retryScoutExportNow}>Retry</button>
+                )}
+              </div>
             )}
           </div>
         </div>

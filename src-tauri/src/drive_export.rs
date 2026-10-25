@@ -4,11 +4,12 @@
 //! alone). main.rs does the requests; this file decides what a failure MEANS and
 //! whether the folder may be given up on.
 //!
-//! The rule it enforces (Session History export, v7.12.20):
-//!   • try to create the sheet INSIDE the shared MARK Trainer Reviews folder;
+//! The rule it enforces (Session History, Scout Done and Audit exports, v7.12.20):
+//!   • try to create the file/folder INSIDE the shared folder first;
 //!   • only if Google refuses because of that PARENT (drive.file cannot name a
 //!     folder the app did not create: 404 "File not found", or 403 on the parent)
-//!     create it in the reviewer's own Drive root instead — and say which path ran;
+//!     use the reviewer's own app-created "MARK Reviews" folder instead — and say
+//!     which path ran ("folder" | "app_root");
 //!   • any other failure (storage full, network, a genuine permission problem) is
 //!     NOT retried somewhere else and is reported with its real cause.
 
@@ -107,39 +108,43 @@ pub fn to_json_string(e: &DriveErr, account: Option<&str>) -> String {
     .to_string()
 }
 
-/// Create the sheet, preferring the shared folder.
-/// `upload(Some(folder))` is tried first; `upload(None)` (the reviewer's own Drive
-/// root) is tried ONLY when the first attempt failed with Kind::Parent.
-/// Returns the Drive file object with `path` ("folder" | "own_drive") added, and,
-/// for the fallback, `fallback_reason`.
-pub async fn create_with_fallback<F, Fut>(folder: Option<&str>, mut upload: F) -> Result<Value, DriveErr>
+/// Create something (a sheet, a folder), preferring the shared folder.
+/// `upload(Some(folder))` is tried first. ONLY if that fails with Kind::Parent is
+/// `fallback_parent()` asked for the app-owned fallback folder (created on first use)
+/// and `upload(Some(that))` tried instead. Whatever the second attempt returns is final.
+/// The result is the Drive object with `path` ("folder" | "app_root"), and for the
+/// fallback `root_id` and `fallback_reason`.
+pub async fn create_with_fallback<F, Fut, G, GFut>(
+    folder: Option<&str>,
+    mut upload: F,
+    fallback_parent: G,
+) -> Result<Value, DriveErr>
 where
     F: FnMut(Option<String>) -> Fut,
     Fut: Future<Output = Result<Value, DriveErr>>,
+    G: FnOnce() -> GFut,
+    GFut: Future<Output = Result<Option<String>, DriveErr>>,
 {
     let folder = folder.map(|f| f.trim()).filter(|f| !f.is_empty());
-    let Some(fid) = folder else {
-        let mut v = upload(None).await?;
-        v["path"] = json!("own_drive");
-        v["fallback_reason"] = json!("no folder id supplied");
-        return Ok(v);
+    let first_err = match folder {
+        Some(fid) => match upload(Some(fid.to_string())).await {
+            Ok(mut v) => {
+                v["path"] = json!("folder");
+                return Ok(v);
+            }
+            Err(e) if e.kind == Kind::Parent => e,
+            Err(e) => return Err(e),
+        },
+        None => DriveErr { kind: Kind::Parent, status: 0, reason: String::new(), message: "no folder id supplied".into() },
     };
-    match upload(Some(fid.to_string())).await {
-        Ok(mut v) => {
-            v["path"] = json!("folder");
-            Ok(v)
-        }
-        Err(e) if e.kind == Kind::Parent => {
-            let why = format!("HTTP {} {} {}", e.status, e.reason, e.message);
-            eprintln!("[MARK] drive_create_sheet: folder {} refused ({}); creating in the reviewer's own Drive instead", fid, why);
-            // No second fallback: whatever the own-Drive attempt returns is final.
-            let mut v = upload(None).await?;
-            v["path"] = json!("own_drive");
-            v["fallback_reason"] = json!(why);
-            Ok(v)
-        }
-        Err(e) => Err(e),
-    }
+    let why = format!("HTTP {} {} {}", first_err.status, first_err.reason, first_err.message);
+    eprintln!("[MARK] drive export: shared folder refused ({}); using the reviewer's own MARK Reviews folder", why);
+    let root = fallback_parent().await?;
+    let mut v = upload(root.clone()).await?;
+    v["path"] = json!("app_root");
+    v["root_id"] = json!(root);
+    v["fallback_reason"] = json!(why);
+    Ok(v)
 }
 
 #[cfg(test)]
@@ -190,65 +195,89 @@ mod tests {
 
     // ── the fallback, driven by a fake uploader that records every call ──
     type Calls = Arc<Mutex<Vec<Option<String>>>>;
-    fn run(first: Result<Value, DriveErr>, second: Result<Value, DriveErr>, folder: Option<&str>) -> (Result<Value, DriveErr>, Vec<Option<String>>) {
+    /// `root`: what the fallback resolver returns (and whether it was asked).
+    fn run(first: Result<Value, DriveErr>, second: Result<Value, DriveErr>, folder: Option<&str>, root: Result<Option<String>, DriveErr>)
+        -> (Result<Value, DriveErr>, Vec<Option<String>>, bool)
+    {
         let calls: Calls = Arc::new(Mutex::new(vec![]));
         let c2 = calls.clone();
+        let asked = Arc::new(Mutex::new(false));
+        let a2 = asked.clone();
         let results = Arc::new(Mutex::new(vec![second, first]));
         let rt = tokio::runtime::Builder::new_current_thread().build().unwrap();
-        let out = rt.block_on(create_with_fallback(folder, move |p| {
-            c2.lock().unwrap().push(p);
-            let next = results.lock().unwrap().pop().expect("uploader called more times than the test allows");
-            async move { next }
-        }));
+        let out = rt.block_on(create_with_fallback(
+            folder,
+            move |p| {
+                c2.lock().unwrap().push(p);
+                let next = results.lock().unwrap().pop().expect("uploader called more times than the test allows");
+                async move { next }
+            },
+            move || { *a2.lock().unwrap() = true; async move { root } },
+        ));
         let log = calls.lock().unwrap().clone();
-        (out, log)
+        let was_asked = *asked.lock().unwrap();
+        (out, log, was_asked)
     }
     const F: &str = "18lGrKFiZwgg3IRJUA59ryBh3TJVWWyn8";
+    fn root_ok() -> Result<Option<String>, DriveErr> { Ok(Some("ROOT123".to_string())) }
 
     #[test]
-    fn folder_works_first_time_so_there_is_one_call_and_no_fallback() {
-        let (out, calls) = run(Ok(json!({"id":"a"})), Err(DriveErr::network("must not be called".into())), Some(F));
+    fn folder_works_first_time_so_there_is_one_call_and_no_root_is_created() {
+        let (out, calls, asked) = run(Ok(json!({"id":"a"})), Err(DriveErr::network("must not be called".into())), Some(F), root_ok());
         let v = out.unwrap();
         assert_eq!(v["path"], "folder");
         assert_eq!(calls, vec![Some(F.to_string())]);
+        assert!(!asked, "the MARK Reviews folder must not be touched when the shared folder works");
     }
     #[test]
-    fn parent_404_falls_back_to_own_drive_and_says_so() {
-        let (out, calls) = run(Err(classify(404, &gerr(404, "notFound", "File not found: x"))), Ok(json!({"id":"b"})), Some(F));
+    fn parent_404_falls_back_to_the_app_root_and_says_so() {
+        let (out, calls, asked) = run(Err(classify(404, &gerr(404, "notFound", "File not found: x"))), Ok(json!({"id":"b"})), Some(F), root_ok());
         let v = out.unwrap();
-        assert_eq!(v["path"], "own_drive");
+        assert_eq!(v["path"], "app_root");
+        assert_eq!(v["root_id"], "ROOT123");
         assert!(v["fallback_reason"].as_str().unwrap().contains("404"));
-        assert_eq!(calls, vec![Some(F.to_string()), None]);
+        assert_eq!(calls, vec![Some(F.to_string()), Some("ROOT123".to_string())]);
+        assert!(asked);
     }
     #[test]
     fn parent_403_also_falls_back() {
-        let (out, calls) = run(Err(classify(403, &gerr(403, "insufficientParentPermissions", "no"))), Ok(json!({"id":"c"})), Some(F));
-        assert_eq!(out.unwrap()["path"], "own_drive");
+        let (out, calls, _) = run(Err(classify(403, &gerr(403, "insufficientParentPermissions", "no"))), Ok(json!({"id":"c"})), Some(F), root_ok());
+        assert_eq!(out.unwrap()["path"], "app_root");
         assert_eq!(calls.len(), 2);
     }
     #[test]
-    fn quota_never_falls_back() {
-        let (out, calls) = run(Err(classify(403, &gerr(403, "storageQuotaExceeded", "full"))), Ok(json!({"id":"x"})), Some(F));
+    fn quota_never_falls_back_and_never_creates_the_root() {
+        let (out, calls, asked) = run(Err(classify(403, &gerr(403, "storageQuotaExceeded", "full"))), Ok(json!({"id":"x"})), Some(F), root_ok());
         assert_eq!(out.unwrap_err().kind, Kind::Quota);
-        assert_eq!(calls, vec![Some(F.to_string())], "a full Drive must not be retried in the Drive root");
+        assert_eq!(calls, vec![Some(F.to_string())], "a full Drive must not be retried elsewhere");
+        assert!(!asked);
     }
     #[test]
     fn network_and_real_permission_errors_never_fall_back() {
-        let (o1, c1) = run(Err(DriveErr::network("dns".into())), Ok(json!({})), Some(F));
-        assert_eq!(o1.unwrap_err().kind, Kind::Network); assert_eq!(c1.len(), 1);
-        let (o2, c2) = run(Err(classify(403, &gerr(403, "domainPolicy", "admin"))), Ok(json!({})), Some(F));
-        assert_eq!(o2.unwrap_err().kind, Kind::Permission); assert_eq!(c2.len(), 1);
+        let (o1, c1, a1) = run(Err(DriveErr::network("dns".into())), Ok(json!({})), Some(F), root_ok());
+        assert_eq!(o1.unwrap_err().kind, Kind::Network); assert_eq!(c1.len(), 1); assert!(!a1);
+        let (o2, c2, a2) = run(Err(classify(403, &gerr(403, "domainPolicy", "admin"))), Ok(json!({})), Some(F), root_ok());
+        assert_eq!(o2.unwrap_err().kind, Kind::Permission); assert_eq!(c2.len(), 1); assert!(!a2);
     }
     #[test]
-    fn if_the_own_drive_attempt_also_fails_that_error_is_final() {
-        let (out, calls) = run(Err(classify(404, &gerr(404, "notFound", "File not found"))), Err(classify(403, &gerr(403, "storageQuotaExceeded", "full"))), Some(F));
+    fn if_the_fallback_attempt_also_fails_that_error_is_final() {
+        let (out, calls, _) = run(Err(classify(404, &gerr(404, "notFound", "File not found"))), Err(classify(403, &gerr(403, "storageQuotaExceeded", "full"))), Some(F), root_ok());
         assert_eq!(out.unwrap_err().kind, Kind::Quota);
         assert_eq!(calls.len(), 2);
     }
     #[test]
-    fn no_folder_id_goes_straight_to_own_drive() {
-        let (out, calls) = run(Ok(json!({"id":"d"})), Ok(json!({})), None);
-        assert_eq!(out.unwrap()["path"], "own_drive");
-        assert_eq!(calls, vec![None]);
+    fn if_the_root_cannot_be_made_that_error_is_reported_and_nothing_is_uploaded() {
+        let (out, calls, asked) = run(Err(classify(404, &gerr(404, "notFound", "File not found"))), Ok(json!({"id":"never"})),
+            Some(F), Err(classify(403, &gerr(403, "storageQuotaExceeded", "full"))));
+        assert_eq!(out.unwrap_err().kind, Kind::Quota);
+        assert_eq!(calls, vec![Some(F.to_string())], "no second upload when the fallback folder could not be resolved");
+        assert!(asked);
+    }
+    #[test]
+    fn no_folder_id_goes_straight_to_the_app_root() {
+        let (out, calls, asked) = run(Ok(json!({"id":"d"})), Ok(json!({})), None, root_ok());
+        assert_eq!(out.unwrap()["path"], "app_root");
+        assert_eq!(calls, vec![Some("ROOT123".to_string())]);
+        assert!(asked);
     }
 }

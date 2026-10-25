@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { invoke } from '@tauri-apps/api/core'
+import { uploadExportToDrive, retryDriveExport, explainDriveError } from '../utils/driveExport'
 import { showToast } from '../utils/toast'
 import { CURRENT_VERSION } from '../hooks/useUpdateCheck'
 import { db } from '../firebase/config'
@@ -2096,6 +2097,8 @@ export default function AuditPage({ session, onBack, onFullReport, initialResult
   const [reauditConfirm, setReauditConfirm] = useState(false)  // true when confirm dialog is shown
   const [resolvingIds,   setResolvingIds]   = useState(false)
   const [exportState,    setExportState]    = useState(null)   // null | { phase, step, total, done, driveLink }
+  // A failed Drive export: the real cause plus the record Retry continues from.
+  const [exportError,    setExportError]    = useState(null)
   const [emailToast,     setEmailToast]     = useState(null)   // null | { status: 'sending'|'sent'|'failed'|'skipped', msg: string }
 
   // Master Drive folder ID — all sessions go inside sub-folders here
@@ -2427,11 +2430,11 @@ export default function AuditPage({ session, onBack, onFullReport, initialResult
   }
 
     // ── Export CSV + cut error clips + upload all to Drive ───────────────────
-  async function handleExportAndUpload() {
+  async function handleExportAndUpload(resumeErr = null) {
     if (!results) return
-
-    // 1. Require master folder ID
-    const masterFolderId = '1TeuEJqnKiGrCmZZfpfOKFMzwa3KBxO0A'
+    // Retry: continue the SAME export (same Drive folder, only what did not land)
+    const resume = resumeErr && resumeErr.resume ? resumeErr : null
+    setExportError(null)
 
     // 2. Require video path
     const videoPath = localStorage.getItem(`mark_video_path_${session.matchId}`) || ''
@@ -2440,7 +2443,7 @@ export default function AuditPage({ session, onBack, onFullReport, initialResult
       return
     }
 
-    setExportState({ phase: 'starting', step: 0, total: 0, done: false, driveLink: '' })
+    setExportState({ phase: resume ? 'uploading' : 'starting', step: 0, total: 0, done: false, driveLink: '' })
     setError('')
 
     try {
@@ -2683,66 +2686,62 @@ export default function AuditPage({ session, onBack, onFullReport, initialResult
       const total = 2 + clipDefs.length // CSV upload + folder create + N clips
       setExportState({ phase: 'cutting', step: 0, total, done: false, driveLink: '' })
 
-      // ── 1. Get Drive token ───────────────────────────────────────────────
-      let token
-      try {
-        token = await invoke('get_google_access_token_cmd')
-      } catch(e) { throw new Error('Token failed: ' + (e?.message || JSON.stringify(e))) }
+      // ── Local files FIRST (clips + CSV in Downloads), Google Drive LAST ──────
+      // The audit result itself is already saved in MARK (saveToFirebase ran when the
+      // results loaded), and the files are on disk before Drive is touched, so a Drive
+      // problem can never cost the reviewer anything. Drive is done AS THE REVIEWER
+      // (driveExport.js): the reviewer owns what is created and their storage is used.
+      let spec, localFolder, cutFiles = []
+      if (resume) {
+        spec = resume.spec; localFolder = resume.localFolder; cutFiles = resume.cutFiles || []
+      } else {
+        // ── 1. Cut all clips locally ─────────────────────────────────────────
+        setExportState(s => ({ ...s, phase: 'cutting', step: 0, total: clipDefs.length + 1 }))
+        if (clipDefs.length > 0) {
+          try {
+            cutFiles = await invoke('cut_clips', {
+              videoPath, subfolder: folderName, clips: clipDefs,
+            })
+          } catch(e) { throw new Error('Clip cutting failed: ' + (e?.message || JSON.stringify(e))) }
+        }
+        setExportState(s => ({ ...s, step: cutFiles.length }))
 
-      // ── 2. Create match sub-folder inside master folder ──────────────────
-      setExportState(s => ({ ...s, phase: 'folder', step: 0 }))
-      let subFolderId
-      try {
-        subFolderId = await invoke('drive_create_folder', {
-          token, name: folderName, parentId: masterFolderId,
-        })
-      } catch(e) { throw new Error('Folder create failed: ' + (e?.message || JSON.stringify(e))) }
-
-      // ── 3. Cut all clips locally ─────────────────────────────────────────
-      setExportState(s => ({ ...s, phase: 'cutting', step: 0, total: clipDefs.length + 1 }))
-      let cutFiles = []
-      if (clipDefs.length > 0) {
+        // ── 2. Save the CSV locally ──────────────────────────────────────────
+        let userprofile
         try {
-          cutFiles = await invoke('cut_clips', {
-            videoPath, subfolder: folderName, clips: clipDefs,
-          })
-        } catch(e) { throw new Error('Clip cutting failed: ' + (e?.message || JSON.stringify(e))) }
+          userprofile = await invoke('get_userprofile')
+        } catch(e) { throw new Error('get_userprofile failed: ' + (e?.message || JSON.stringify(e))) }
+        localFolder = `${userprofile}\\Downloads\\${folderName}`
+        const csvLocalPath = `${localFolder}\\${csvFileName}`
+        try {
+          await invoke('save_text_file', { path: csvLocalPath, content: csvContent })
+        } catch(e) { throw new Error('save_text_file failed: ' + (e?.message || JSON.stringify(e))) }
+        spec = {
+          folderName,
+          sheet: { filePath: csvLocalPath, fileName: csvFileName, command: 'upload_csv_as_sheet' },
+          clips: cutFiles.map(f => ({ fileName: f, localPath: `${localFolder}\\${f}` })),
+        }
       }
-      setExportState(s => ({ ...s, step: cutFiles.length }))
 
-      // ── 4. Save CSV locally then upload ─────────────────────────────────
-      let userprofile
+      // ── 3. Google Drive, as the reviewer: folder → CSV → clips → mark-reporter can read it ──
+      const onProgress = ({ phase, step, total: tot, detail }) =>
+        setExportState(s => ({ ...s, phase, step, total: tot || s.total, detail: detail || '' }))
+      let up
       try {
-        userprofile = await invoke('get_userprofile')
-      } catch(e) { throw new Error('get_userprofile failed: ' + (e?.message || JSON.stringify(e))) }
-      const csvLocalPath = `${userprofile}\\Downloads\\${folderName}\\${csvFileName}`
-      try {
-        await invoke('save_text_file', { path: csvLocalPath, content: csvContent })
-      } catch(e) { throw new Error('save_text_file failed: ' + (e?.message || JSON.stringify(e))) }
-      setExportState(s => ({ ...s, phase: 'uploading', step: 0, total: cutFiles.length + 1 }))
-
-      let driveLink = ''
-      try {
-        const csvLink = await invoke('upload_csv_as_sheet', {
-          token, filePath: csvLocalPath, fileName: csvFileName, parentFolderId: subFolderId,
-        })
-        driveLink = csvLink
-      } catch(e) { throw new Error('CSV upload failed: ' + (e?.message || JSON.stringify(e))) }
-      setExportState(s => ({ ...s, step: 1 }))
-
-      // ── 5. Upload each clip ──────────────────────────────────────────────
-      for (let i = 0; i < cutFiles.length; i++) {
-        const clipName = cutFiles[i]
-        const localPath = `${userprofile}\\Downloads\\${folderName}\\${clipName}`
-        await invoke('drive_upload_file', {
-          token, filePath: localPath, fileName: clipName, parentFolderId: subFolderId,
-        })
-        setExportState(s => ({ ...s, step: i + 2 }))
+        up = resume
+          ? await retryDriveExport({ error: resume, spec, invoke, onProgress })
+          : await uploadExportToDrive({ spec, invoke, onProgress })
+      } catch (driveErr) {
+        // keep what Retry needs next to the real cause
+        const x = explainDriveError(driveErr)
+        Object.assign(x, { spec, localFolder, cutFiles })
+        throw x
       }
+      if (up.path === 'app_root') showToast("Saved in your own Google Drive (MARK Reviews folder) — the shared folder wasn't available to this account.")
+      for (const w of (up.warnings || [])) showToast(w, 'error')
 
       // ── Done — driveLink points to the folder ────────────────────────────
-      const folderUrl = `https://drive.google.com/drive/folders/${subFolderId}`
-      const localFolder = `${userprofile}\\Downloads\\${folderName}`
+      const folderUrl = up.folderUrl
       setExportState({ phase: 'done', step: total, total, done: true, driveLink: folderUrl, localFolder })
 
         // ── Send report email via Gmail API — self-healing via Firestore token ──
@@ -2846,8 +2845,11 @@ export default function AuditPage({ session, onBack, onFullReport, initialResult
         })()
 
     } catch(e) {
+      // The real cause, with Retry. Nothing is lost: the audit is saved in MARK and the
+      // files are on disk.
+      console.error('[MARK] Audit export failed:', e)
       setExportState(null)
-      setError('Export failed: ' + e.message)
+      setExportError(explainDriveError(e))
     }
   }
 
@@ -3388,6 +3390,25 @@ export default function AuditPage({ session, onBack, onFullReport, initialResult
               )}
               <AmendmentsTable results={results} session={session} identityMap={results.identityMap} reviewerIds={results.reviewerIds || (results.reviewerId != null ? [results.reviewerId] : [])} onSeek={seekToSeconds} />
 
+              {/* ── A failed Drive export: the real cause, Retry continues where it stopped ── */}
+              {exportError && !exportState && (
+                <div data-testid="audit-export-error" className="fade-in" style={{ marginTop: 16, background: 'rgba(255,69,58,0.08)', border: '0.5px solid rgba(255,69,58,0.3)', borderRadius: 16, padding: '12px 18px' }}>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: '#FF453A', marginBottom: 4 }}>
+                    {exportError.kind === 'unreadable' ? 'Saved, but collectors cannot use it yet' : 'Drive export failed'}
+                  </div>
+                  <div style={{ fontSize: 12, color: 'var(--t-1)', lineHeight: 1.5, wordBreak: 'break-word' }}>{exportError.message}</div>
+                  <div style={{ fontSize: 11, color: 'var(--t-3)', marginTop: 6 }}>
+                    Your audit is saved in MARK{exportError.localFolder ? `, and your files are in ${exportError.localFolder}` : ''}.
+                  </div>
+                  <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+                    <button data-testid="audit-export-retry" className="btn-orange" style={{ padding: '6px 16px', fontSize: 12 }}
+                      onClick={() => handleExportAndUpload(exportError)}>Retry</button>
+                    <button data-testid="audit-export-close" className="btn-ghost" style={{ padding: '6px 14px', fontSize: 12 }}
+                      onClick={() => setExportError(null)}>Close</button>
+                  </div>
+                </div>
+              )}
+
               {/* ── Export & Upload to Drive ── */}
               {!exportState && (
                 <div className="fade-in" style={{ marginTop: 16, display: 'flex', justifyContent: 'center' }}>
@@ -3414,7 +3435,9 @@ export default function AuditPage({ session, onBack, onFullReport, initialResult
                 }}>
                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
                     <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--t-2)' }}>
+                      {exportState.phase === 'token'     && '🔑 Connecting to Google Drive…'}
                       {exportState.phase === 'folder'    && '📁 Creating Drive folder…'}
+                      {exportState.phase === 'verifying' && '🔎 Checking mark-reporter can read the sheet…'}
                       {exportState.phase === 'cutting'   && `✂️  Cutting clip ${exportState.step} of ${exportState.total - 1}…`}
                       {exportState.phase === 'uploading' && `☁️  Uploading ${exportState.step} of ${exportState.total}…`}
                       {exportState.phase === 'starting'  && 'Starting export…'}

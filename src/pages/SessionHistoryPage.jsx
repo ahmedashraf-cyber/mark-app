@@ -1107,14 +1107,15 @@ export default function SessionHistoryPage({ onBack, initialSession }) {
       const q    = query(collection(db, 'mark_error_tags'), where('sessionId', '==', session.sessionId))
       const snap = await getDocs(q)
       const tags = snap.docs.map(d => ({ id: d.id, ...d.data() }))
-      const { url, path } = await exportSessionToUserDrive({
+      const { url, path, warnings } = await exportSessionToUserDrive({
         session,
         tags,
         quality: session.qualityScore || 0,
         tagCount: session.totalTaggedErrors || 0,
         total: session.totalReviewedEvents || 0,
       })
-      if (path === 'own_drive') showToast("Saved in your own Google Drive — the shared folder wasn't available to this account.")
+      if (path === 'app_root') showToast("Saved in your own Google Drive (MARK Reviews folder) — the shared folder wasn't available to this account.")
+      for (const w of (warnings || [])) showToast(w, 'error')
       const { invoke } = await import('@tauri-apps/api/core')
       if (url) await invoke('open_file', { path: url })
     } catch (raw) {

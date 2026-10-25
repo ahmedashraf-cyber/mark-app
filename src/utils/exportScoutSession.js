@@ -12,6 +12,7 @@
 
 import * as XLSX from 'xlsx'
 import { pressureShapeLabel } from './exportSession'
+import { uploadExportToDrive, retryDriveExport, explainDriveError } from './driveExport'
 
 // ── Name helpers ───────────────────────────────────────────────────────────
 const HALF_LABEL = { 1:'1st Half', 2:'2nd Half', '1':'1st Half', '2':'2nd Half', 'H1':'1st Half', 'H2':'2nd Half', 'EX1':'ET1', 'EX2':'ET2', 'ET1':'ET1', 'ET2':'ET2' }
@@ -298,6 +299,26 @@ export function buildScoutWorkbook({ session, tags, quality, tagCount, total,
 }
 
 // ── Main export function ──────────────────────────────────────────────────
+//
+// ORDER matters. The review itself is already saved in MARK (ReviewPage writes
+// status:'completed' to Firestore BEFORE calling this). Here the LOCAL files come first —
+// spreadsheet and clips in Downloads\<folder> — and Google Drive last, so a Drive problem
+// can never cost the reviewer their files.
+//
+// Drive is done as the REVIEWER (see driveExport.js): the reviewer owns what is created and
+// their storage is used. Failures come back as a DriveExportError carrying `resume` and
+// `spec`; hand that to retryScoutExport() and it carries on from where it stopped.
+function resultFrom(up, cutFiles, localFolder, warnings) {
+  return {
+    driveLink: up.sheetLink || up.folderUrl,
+    folderUrl: up.folderUrl,
+    clipsCount: cutFiles.length,
+    localFolder,
+    path: up.path,
+    warnings: [...(up.warnings || []), ...warnings],
+  }
+}
+
 export async function exportScoutSession({
   session, tags, quality, tagCount, total,
   dtScores, pressureScore, pressureReviewed, pressureErrors,
@@ -305,32 +326,14 @@ export async function exportScoutSession({
 }) {
   const { invoke } = await import('@tauri-apps/api/core')
 
-  const MASTER_FOLDER_ID = '1TeuEJqnKiGrCmZZfpfOKFMzwa3KBxO0A'
   const folderBase  = baseName(session)
   const xlsxName    = `${folderBase}.xlsx`
+  const warnings = []
 
   const report = (phase, step, total, detail) =>
     onProgress && onProgress({ phase, step, total, detail })
 
-  // ── Step 0: Get Drive token ───────────────────────────────────────────────
-  report('token', 0, 1, 'Connecting to Google Drive…')
-  let token
-  try {
-    token = await invoke('get_google_access_token_cmd')
-  } catch(e) { throw new Error('Google Drive auth failed: ' + (e?.message || String(e))) }
-  report('token', 1, 1, 'Connected ✅')
-
-  // ── Step 1: Create Drive subfolder ───────────────────────────────────────
-  report('folder', 0, 1, `Creating folder "${folderBase}"…`)
-  let subFolderId
-  try {
-    subFolderId = await invoke('drive_create_folder', {
-      token, name: folderBase, parentId: MASTER_FOLDER_ID,
-    })
-  } catch(e) { throw new Error('Drive folder creation failed: ' + (e?.message || String(e))) }
-  report('folder', 1, 1, 'Folder created ✅')
-
-  // ── Step 2: Get local video path ──────────────────────────────────────────
+  // ── Step 1: Get local video path ──────────────────────────────────────────
   report('video', 0, 1, 'Locating video file…')
   const matchId = String(session.matchId || session.sessionId || '')
   let videoPath = ''
@@ -340,7 +343,7 @@ export async function exportScoutSession({
   }
   report('video', 1, 1, videoPath ? `Video found ✅` : 'No video — skipping clips')
 
-  // ── Step 3: Build XLSX ────────────────────────────────────────────────────
+  // ── Step 2: Build XLSX ────────────────────────────────────────────────────
   report('xlsx', 0, 1, 'Building spreadsheet…')
   const { wb } = buildScoutWorkbook({
     session, tags, quality, tagCount, total,
@@ -349,7 +352,7 @@ export async function exportScoutSession({
   })
   const wbout = XLSX.write(wb, { bookType:'xlsx', type:'array', cellStyles:true })
 
-  // ── Step 4: Save XLSX locally (binary — no dialog) ───────────────────────
+  // ── Step 3: Save XLSX locally (binary — no dialog) ───────────────────────
   report('xlsx', 1, 1, 'Saving spreadsheet locally…')
   let userprofile
   try { userprofile = await invoke('get_userprofile') } catch(e) { userprofile = '' }
@@ -365,7 +368,7 @@ export async function exportScoutSession({
     } catch(e2) { console.warn('[MARK] XLSX local save failed:', e2) }
   }
 
-  // ── Step 5: Cut clips ─────────────────────────────────────────────────────
+  // ── Step 4: Cut clips ─────────────────────────────────────────────────────
   let cutFiles = []
   if (videoPath && tags.length > 0) {
     report('cutting', 0, tags.length, 'Cutting video clips…')
@@ -385,51 +388,44 @@ export async function exportScoutSession({
       report('cutting', cutFiles.length, tags.length, `${cutFiles.length} clips cut ✅`)
     } catch(e) {
       console.warn('[MARK] clip cutting failed:', e)
+      warnings.push(`Clip cutting failed (${e?.message || String(e)}), so no clips were uploaded.`)
       report('cutting', 0, tags.length, `⚠️ Clip cutting failed: ${e?.message || String(e)}`)
     }
   } else {
     report('cutting', 0, 0, videoPath ? 'No errors to clip' : 'No video — skipping clips')
   }
 
-  // ── Step 6: Upload XLSX to Drive as Google Sheet ─────────────────────────
-  report('uploading', 0, cutFiles.length + 1, 'Uploading spreadsheet to Drive…')
-  let driveLink = ''
+  // ── Step 5: Google Drive, as the reviewer ─────────────────────────────────
+  const spec = {
+    folderName: folderBase,
+    sheet: { filePath: xlsxPath, fileName: xlsxName, command: 'upload_xlsx_as_sheet' },
+    clips: cutFiles.map(f => ({ fileName: f, localPath: `${localFolder}\\${f}` })),
+  }
+  report('token', 0, 1, 'Connecting to Google Drive…')
   try {
-    // upload_xlsx_as_sheet: correct XLSX MIME type → Drive converts to native Sheet
-    // Places directly in our subfolder
-    const sheetLink = await invoke('upload_xlsx_as_sheet', {
-      token,
-      filePath: xlsxPath,
-      fileName: xlsxName,
-      parentFolderId: subFolderId,
-    })
-    driveLink = sheetLink || `https://drive.google.com/drive/folders/${subFolderId}`
-    report('uploading', 1, cutFiles.length + 1, 'Sheet uploaded ✅')
-  } catch(e) {
-    console.warn('[MARK] sheet upload failed:', e)
-    report('uploading', 1, cutFiles.length + 1, `⚠️ Sheet upload failed: ${e?.message||String(e)}`)
-    driveLink = `https://drive.google.com/drive/folders/${subFolderId}`
+    const up = await uploadExportToDrive({ spec, invoke, onProgress: ({ phase, step, total, detail }) => report(phase, step, total, detail) })
+    report('done', cutFiles.length + 1, cutFiles.length + 1, up.folderUrl)
+    return resultFrom(up, cutFiles, localFolder, warnings)
+  } catch (e) {
+    // Hand Retry everything it needs: what already landed (resume), what to upload (spec),
+    // and where the local copies are.
+    const x = explainDriveError(e)
+    Object.assign(x, { spec, localFolder, cutFiles, warnings })
+    throw x
   }
+}
 
-  // ── Step 7: Upload clips ──────────────────────────────────────────────────
-  for (let i = 0; i < cutFiles.length; i++) {
-    const clipFileName = cutFiles[i]
-    const localPath    = `${userprofile}\\Downloads\\${folderBase}\\${clipFileName}`
-    report('uploading', i + 2, cutFiles.length + 1, `Uploading clip ${i+1}/${cutFiles.length}…`)
-    try {
-      await invoke('drive_upload_file', {
-        token,
-        filePath:       localPath,
-        fileName:       clipFileName,
-        parentFolderId: subFolderId,
-      })
-    } catch(e) {
-      console.warn('[MARK] clip upload failed:', clipFileName, e)
-    }
+/** Continue a Scout Done export that stopped: same folder, only what did not land. */
+export async function retryScoutExport({ error, onProgress }) {
+  const { invoke } = await import('@tauri-apps/api/core')
+  const report = (phase, step, total, detail) => onProgress && onProgress({ phase, step, total, detail })
+  try {
+    const up = await retryDriveExport({ error, spec: error.spec, invoke, onProgress: ({ phase, step, total, detail }) => report(phase, step, total, detail) })
+    report('done', 1, 1, up.folderUrl)
+    return resultFrom(up, error.cutFiles || [], error.localFolder, error.warnings || [])
+  } catch (e) {
+    const x = explainDriveError(e)
+    Object.assign(x, { spec: error.spec, localFolder: error.localFolder, cutFiles: error.cutFiles, warnings: error.warnings })
+    throw x
   }
-
-  // ── Done ──────────────────────────────────────────────────────────────────
-  const folderUrl = `https://drive.google.com/drive/folders/${subFolderId}`
-  report('done', cutFiles.length + 1, cutFiles.length + 1, folderUrl)
-  return { driveLink, folderUrl, clipsCount: cutFiles.length, localFolder }
 }
