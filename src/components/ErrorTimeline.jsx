@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react'
+import { useState, useRef, useMemo } from 'react'
 
 const TYPE_COLORS = {
   wrong_event:   '#FF453A',
@@ -41,7 +41,8 @@ function markerName(err) {
 
 export default function ErrorTimeline({
   errors, videoDuration, videoRef, currentTime, playing, muted,
-  onSeek, onSyncSeek, onTogglePlay, onToggleMute, onDragStart }) {
+  onSeek, onSyncSeek, onTogglePlay, onToggleMute, onDragStart,
+  onDragEnd }) {   // onDragEnd: optional, FIELD only — fires on release AND on cancel
   const trackRef = useRef(null)
 
   const [dragPct,   setDragPct]   = useState(null)
@@ -53,9 +54,11 @@ export default function ErrorTimeline({
   // Refs for callbacks — always live, never stale closures
   const onSeekRef     = useRef(onSeek)
   const onSyncSeekRef = useRef(onSyncSeek)
+  const onDragEndRef  = useRef(onDragEnd)
   const videoRefRef   = useRef(videoRef)  // ref to the videoRef passed from parent
   onSeekRef.current     = onSeek
   onSyncSeekRef.current = onSyncSeek
+  onDragEndRef.current  = onDragEnd
   videoRefRef.current   = videoRef
 
   // For DISPLAY: use videoDuration prop (ball position, fill, markers)
@@ -87,7 +90,6 @@ export default function ErrorTimeline({
       const vr  = videoRefRef.current        // should be the videoRef object
       const el  = vr?.current                // should be the <video> DOM element
       const d   = el?.duration
-      console.log('[MARK getLiveDuration] vr=', !!vr, 'el=', !!el, 'el.duration=', d, 'el.readyState=', el?.readyState)
       return isFinite(d) && d > 0 ? d : 0
     }
 
@@ -103,16 +105,17 @@ export default function ErrorTimeline({
       const pct = pctFromClientX(ev.clientX)
       const dur = getLiveDuration()
       const t   = pct * dur
-      console.log('[MARK onUp] t=', t, 'dur=', dur, 'onSeek=', typeof onSeekRef.current)
-      if (dur === 0) return  // video not ready — don't seek to 0
+      if (dur === 0) { onDragEndRef.current?.(); return }  // video not ready — don't seek to 0
       onSeekRef.current?.(t)
       onSyncSeekRef.current?.(t)
       setDragPct(null)
+      onDragEndRef.current?.()
     }
 
     function onCancel() {
       cleanup()
       setDragPct(null)
+      onDragEndRef.current?.()
     }
 
     function cleanup() {
@@ -133,6 +136,30 @@ export default function ErrorTimeline({
     const d = videoRefRef.current?.current?.duration
     setHoverTime(pct * (isFinite(d) && d > 0 ? d : 0))
   }
+
+  // The markers do not depend on the playhead, so they are built once per events /
+  // duration change instead of on every tick (N DOM nodes). Handlers read the
+  // always-live refs, so a memoised marker can never call a stale onSeek.
+  const markerNodes = useMemo(() => errors.map((err, i) => {
+    const pct   = duration > 0 ? Math.min(100, ((err.videoTimeSec || 0) / duration) * 100) : 0
+    const color = TYPE_COLORS[err.errorType] || 'var(--p2)'
+    return (
+      <div key={i}
+        title={`${markerName(err)} @ ${fmt(err.videoTimeSec || 0)}`}
+        onMouseEnter={e => { e.stopPropagation(); setTooltip({ x: pct, label: `${markerName(err)} · ${fmt(err.videoTimeSec || 0)}` }) }}
+        onMouseLeave={() => setTooltip(null)}
+        onClick={e => { e.stopPropagation(); onSeekRef.current?.(err.videoTimeSec || 0); onSyncSeekRef.current?.(err.videoTimeSec || 0) }}
+        onPointerDown={e => e.stopPropagation()}
+        style={{
+          position: 'absolute', left: `${pct}%`, top: '50%',
+          transform: 'translate(-50%, -50%)',
+          width: 8, height: 8, borderRadius: '50%',
+          background: color, border: '1.5px solid rgba(0,0,0,0.6)',
+          zIndex: 3, cursor: 'pointer', boxShadow: `0 0 5px ${color}99`,
+        }}
+      />
+    )
+  }), [errors, duration])
 
   const thumbSize = isDragging ? 16 : hovering ? 14 : 10
   const trackH    = isDragging || hovering ? 5 : 3
@@ -214,26 +241,7 @@ export default function ErrorTimeline({
           )}
 
           {/* Error markers */}
-          {errors.map((err, i) => {
-            const pct   = duration > 0 ? Math.min(100, ((err.videoTimeSec || 0) / duration) * 100) : 0
-            const color = TYPE_COLORS[err.errorType] || 'var(--p2)'
-            return (
-              <div key={i}
-                title={`${markerName(err)} @ ${fmt(err.videoTimeSec || 0)}`}
-                onMouseEnter={e => { e.stopPropagation(); setTooltip({ x: pct, label: `${markerName(err)} · ${fmt(err.videoTimeSec || 0)}` }) }}
-                onMouseLeave={() => setTooltip(null)}
-                onClick={e => { e.stopPropagation(); onSeek?.(err.videoTimeSec || 0); onSyncSeek?.(err.videoTimeSec || 0) }}
-                onPointerDown={e => e.stopPropagation()}
-                style={{
-                  position: 'absolute', left: `${pct}%`, top: '50%',
-                  transform: 'translate(-50%, -50%)',
-                  width: 8, height: 8, borderRadius: '50%',
-                  background: color, border: '1.5px solid rgba(0,0,0,0.6)',
-                  zIndex: 3, cursor: 'pointer', boxShadow: `0 0 5px ${color}99`,
-                }}
-              />
-            )
-          })}
+          {markerNodes}
 
           {/* Playhead thumb */}
           {duration > 0 && (

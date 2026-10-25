@@ -87,4 +87,51 @@ ok(pr[1].phaseAfter === pr[1].phaseBefore, 'pressure is transparent in the main 
 console.log('   pressure start (mine): pressure', pr[1].pressureBefore, '→', pr[1].pressureAfter,
   '| main chain unchanged:', pr[1].phaseBefore, '→', pr[1].phaseAfter)
 
+// ── 7. type questions (item E): what the phase allows ──
+console.log('\n7. validTypes — pass and shot types per phase')
+const PASS_CODES = ['TYPE_KICK_OFF','TYPE_THROW_IN','TYPE_FREE_KICK','TYPE_CORNER','TYPE_GOAL_KICK','TYPE_GK_DIST','TYPE_OPEN_PLAY']
+const SHOT_CODES = ['OUTCOME_OPEN_PLAY','OUTCOME_FIRST_TIME','SHOT_TYPE_CORNER','SHOT_TYPE_FREE_KICK','SHOT_TYPE_GOAL_KICK','SHOT_TYPE_KICK_OFF','SHOT_TYPE_PENALTY','SHOT_TYPE_REDIRECT']
+const vt = (ph, ev, team, part, codes) => P.validTypes(ph, ev, team, part, codes)
+const same = (a, b) => JSON.stringify(a) === JSON.stringify(b)
+const T = (name, got, want) => { ok(same(got, want), `${name}: got ${JSON.stringify(got)} want ${JSON.stringify(want)}`); console.log('   ' + (same(got, want) ? '✓ ' : '✗ ') + name + ' → ' + JSON.stringify(got)) }
+T('pass newHalf (Half start)',        vt('newHalf','pass','mine',1,PASS_CODES).codes, ['TYPE_KICK_OFF'])
+T('pass restartThrow (Out sideline)',  vt('restartThrow','pass','mine',1,PASS_CODES).codes, ['TYPE_THROW_IN'])
+T('pass restartGkCorner (Out endline)',vt('restartGkCorner','pass','mine',1,PASS_CODES).codes, ['TYPE_CORNER','TYPE_GOAL_KICK'])
+T('pass restartEightSeconds mine',     vt('restartEightSeconds','pass','mine',1,PASS_CODES).codes, ['TYPE_CORNER'])
+T('pass restartEightSeconds opponent', vt('restartEightSeconds','pass','opponent',1,PASS_CODES).codes, [])
+T('pass restartFoul (regular foul)',   vt('restartFoul','pass','mine',1,PASS_CODES).codes, ['TYPE_FREE_KICK'])
+T('pass restartFoulOut',               vt('restartFoulOut','pass','mine',1,PASS_CODES).codes, ['TYPE_THROW_IN'])
+T('pass restartKickoff (after goal)',  vt('restartKickoff','pass','mine',1,PASS_CODES).codes, ['TYPE_KICK_OFF'])
+T('pass restart (after stoppage) = 6, no open play', vt('restart','pass','mine',1,PASS_CODES).codes, ['TYPE_KICK_OFF','TYPE_THROW_IN','TYPE_FREE_KICK','TYPE_CORNER','TYPE_GOAL_KICK','TYPE_GK_DIST'])
+T('pass carry',                        vt('carry','pass','mine',1,PASS_CODES).codes, ['TYPE_OPEN_PLAY'])
+ok(vt('idle','pass','opponent',1,PASS_CODES).restricted === false, 'idle is unrestricted')
+console.log('   ' + (vt('idle','pass','opponent',1,PASS_CODES).restricted === false ? '✓ ' : '✗ ') + 'pass idle → unrestricted (ask all, as before)')
+ok(vt('newHalf','pass',null,1,PASS_CODES).restricted === false, 'unknown team never restricts')
+console.log('   ✓ unknown team ("mine" not known yet) → never restricts')
+T('pass flightO (not a plain pass here)', vt('flightO','pass','mine',1,PASS_CODES).codes, [])
+T('shot newHalf',                      vt('newHalf','shot','mine',1,SHOT_CODES).codes, ['SHOT_TYPE_KICK_OFF'])
+T('shot flightO',                      vt('flightO','shot','mine',1,SHOT_CODES).codes, ['OUTCOME_FIRST_TIME'])
+T('shot shotFlightO',                  vt('shotFlightO','shot','mine',1,SHOT_CODES).codes, ['SHOT_TYPE_REDIRECT'])
+T('shot carry = 2, so ask',            vt('carry','shot','mine',1,SHOT_CODES).codes, ['OUTCOME_OPEN_PLAY','OUTCOME_FIRST_TIME'])
+T('shot restartFoul = 2, so ask',      vt('restartFoul','shot','mine',1,SHOT_CODES).codes, ['SHOT_TYPE_FREE_KICK','SHOT_TYPE_PENALTY'])
+T('shot restartKickoff',               vt('restartKickoff','shot','mine',1,SHOT_CODES).codes, ['SHOT_TYPE_KICK_OFF'])
+T('shot shooterPenalty, part 5',       vt('shooterPenalty','shot','mine',5,SHOT_CODES).codes, ['SHOT_TYPE_PENALTY'])
+T('shot shooterPenalty, part 1',       vt('shooterPenalty','shot','mine',1,SHOT_CODES).codes, [])
+
+// ── 8. reception fallback (item B) ──
+console.log('\n8. inheritedReceptionTeam — strict fallback')
+const SE = (eventId, team, passEnd='') => ({ eventId, team, passEnd })
+const RC = (name, evs, want) => { const got = P.inheritedReceptionTeam(evs); ok(got === want, `${name}: got ${got} want ${want}`); console.log('   ' + (got === want ? '✓ ' : '✗ ') + name.padEnd(52) + '→ ' + got) }
+RC('pass (home) immediately before',                      [SE('pass','home')], 'home')
+RC('pass_first_time (away) immediately before',           [SE('pass_first_time','away')], 'away')
+RC('pass_recovery (away), stored passEnd empty',          [SE('pass_recovery','away')], 'away')
+RC('camera off between pass and reception',               [SE('pass','home'), SE('camera_off',null)], null)
+RC('pressure start between pass and reception',           [SE('pass','home'), SE('pressure_start','away')], null)
+RC('card between pass and reception',                     [SE('pass','home'), SE('card','away')], null)
+RC('pass flagged incomplete (an interception pass)',      [SE('pass_interception','away','incomplete')], null)
+RC('pass that ended the other team\'s pass (incomplete)', [SE('pass','home','incomplete')], null)
+RC('pass with no team',                                   [SE('pass',null)], null)
+RC('previous event is not a pass',                        [SE('tackle','home')], null)
+RC('no events at all',                                    [], null)
+
 console.log('\n' + (fails === 0 ? 'ALL CHECKS PASS' : fails + ' FAILURE(S)'))

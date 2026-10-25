@@ -828,6 +828,33 @@ export const FIELD_EVENTS = [
             { ...SIDE_DUEL, label: 'Direction', conditionalOn: { groupId: 'action', minSelections: 1 } },
           ],
         },
+        {
+          // Save attempt. Its TYPE option is allEventsOnly, so this variant cannot
+          // be reached in Not all events.
+          //
+          // It used to have NO variant, and quietly fell back to variants[0] —
+          // Collected — whose Outcome list is Success / Fail / Second effort with
+          // no Won. The Mark Chain needs one: "goal-keeper type is one of save
+          // save-attempt, outcome is one of won second-effort" is how the ball is
+          // kept (carry / defense). Everything below is exactly what the fallback
+          // offered, plus Won.
+          //
+          // Won is OUTCOME_WON at toggle '1' — the same code and the same key it
+          // has in Save (Won) and Save (Success / SE). Nothing is renumbered, and
+          // the variant is appended LAST so Drill's groupsFor (the first
+          // occurrence of a group id wins) still reads Collected's Outcome.
+          when: ['GK_TYPE_SAVE_ATTEMPT'],
+          label: 'Save attempt',
+          groups: [
+            grp('outcome', 'Outcome', 'single', true, [
+              opt(O.OUTCOME_WON,           '1'),
+              opt(O.OUTCOME_SUCCESS,       '3'),
+              opt(O.OUTCOME_FAIL,          '4'),
+              opt(O.OUTCOME_SECOND_EFFORT, '5'),
+            ]),
+            MISCOMMUNICATION,
+          ],
+        },
       ],
     },
     // Type discriminator group (shown first)

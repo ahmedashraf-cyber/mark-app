@@ -489,3 +489,73 @@ export function receptionAllowed(eventIds) {
   }
   return false   // nothing before it at all
 }
+
+// ════════════════════════════════════════════════════════════════════════════
+// 8. TYPE QUESTIONS — which pass / shot types does the phase allow? (E)
+// ════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Which of `candidateCodes` (MARK option codes for a pass TYPE or a shot TYPE)
+ * does the Mark Chain allow for this event, right now?
+ *
+ * It evaluates the SAME compiled postRules runChain uses, so it cannot drift
+ * from the chain, and it was checked against the rules rather than a hand-typed
+ * table. `optionAllowed` is mentioned in a comment above but never existed;
+ * this is the real thing.
+ *
+ *   restricted: false  — the phase says nothing (idle has no postRules), or the
+ *                        team is unknown, so the caller must ask exactly as it
+ *                        always did
+ *   restricted: true   — `codes` are the allowed ones. Length 1 = nothing to
+ *                        ask. Length 0 = the chain does not expect this event
+ *                        here at all, so the caller also asks exactly as before
+ *
+ * relTeam is 'mine' | 'opponent' — rules such as "pass type is corner and team
+ * is mine" depend on it, which is why the team has to be known first.
+ */
+export function validTypes(phase, markId, relTeam, part, candidateCodes) {
+  const machine = MAIN[phase]
+  if (!machine || !relTeam) return { restricted: false, codes: [] }
+  const post = machine.postRules
+  if (post.length === 0) return { restricted: false, codes: [] }
+  const event = docEventName(markId)
+  const codes = candidateCodes.filter(code => {
+    const ev = { event, markId, team: relTeam, part, fields: { type: new Set([docValue(code)]) } }
+    return post.some(r => r.test(ev))
+  })
+  return { restricted: true, codes }
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// 9. RECEPTION — team fallback when the phase gives none (B)
+// ════════════════════════════════════════════════════════════════════════════
+
+/**
+ * The team a Reception may INHERIT from the pass before it. This is only ever
+ * the FALLBACK: teamDecision() is consulted first, and the phase wins whenever
+ * it names a team. It is used when the phase gives none — in practice, when no
+ * Half start has been tagged yet, so "mine" is unknown and nothing can be
+ * inferred from the phase at all.
+ *
+ * Deliberately strict, because a wrong team stored as "inherited" is worse than
+ * one extra question. It returns a team only when ALL of these hold:
+ *   - the pass is the IMMEDIATELY preceding event. Anything between it and the
+ *     reception — a card, a camera event, even a pressure event — returns null
+ *   - that event is in the pass family and has a team
+ *   - it is not flagged incomplete. The data model has no per-pass "incomplete"
+ *     flag: pass-end is derived and stored on the event AFTER a pass. So the
+ *     signal that exists is the pass event's own stored passEnd, which is
+ *     'incomplete' when that pass ended the OTHER team's pass — an interception
+ *     or a recovery, i.e. the ball has just changed hands
+ *
+ * `events` are FIELD's stored events, newest last (the same convention
+ * receptionAllowed uses; neither looks at video time). Returns 'home' | 'away'
+ * | null. null means ask.
+ */
+export function inheritedReceptionTeam(events) {
+  const prev = events && events.length ? events[events.length - 1] : null
+  if (!prev || !PASS_FAMILY.has(prev.eventId)) return null
+  if (!prev.team) return null
+  if (prev.passEnd === 'incomplete') return null
+  return prev.team
+}

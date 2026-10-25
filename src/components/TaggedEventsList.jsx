@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo } from 'react'
+import { useState, useEffect, useRef, useMemo, useCallback, memo } from 'react'
 import { EXTRAS, GK_EXTRAS, GK_WRONG_EXTRAS } from './TagPanel'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -43,7 +43,7 @@ function tagName(tag) {
   return tag?.eventLabel || tag?.triggeredEventLabel || tag?.errorType || ''
 }
 
-function DetailPanel({ tag, onEdit, onDelete, onClose, readOnly = false }) {
+function DetailPanel({ tag, onEdit, onDelete, onClose, readOnly = false, onRetry = null }) {
   const extras = tag.extras || []
 
   useEffect(() => {
@@ -93,6 +93,13 @@ function DetailPanel({ tag, onEdit, onDelete, onClose, readOnly = false }) {
 
       {/* Actions */}
       <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
+        {onRetry && (tag._status === 'failed' || tag._status === 'unconfirmed') && (
+          <button onClick={() => onRetry(tag)} style={{
+            padding: '4px 12px', borderRadius: 6, cursor: 'pointer',
+            border: '1px solid rgba(255,214,10,0.5)', background: 'rgba(255,214,10,0.1)',
+            color: '#FFD60A', fontSize: 11, fontWeight: 600,
+          }}>Retry save</button>
+        )}
         {!readOnly && (
           <>
             <button onClick={() => onEdit(tag)} style={{
@@ -183,19 +190,116 @@ function CommentBox({ tag, onSave, onClose }) {
 }
 
 // ── Timeline Row ──────────────────────────────────────────────────────────────
-function TimelineRow({ label, tags, allTags, videoDuration, currentTime, selectedId, onCardClick, onCommentClick, homeTeam }) {
-  const rowRef = useRef(null)
+const CARD_W = 100
+const GAP = 10
 
-  // Auto-scroll based on all tags combined timeline
+/** How a not-yet-confirmed event looks in the bar. Scout tags never carry _status. */
+const STATUS_LOOK = {
+  pending:     { border: '1.5px dashed var(--p2)', bg: null,                       label: 'saving…',       color: 'var(--p2)', opacity: 0.75 },
+  failed:      { border: '1.5px solid #FF453A',    bg: 'rgba(255,69,58,0.14)',     label: '⚠ not saved',   color: '#FF453A',   opacity: 1 },
+  unconfirmed: { border: '1.5px dashed #FFD60A',   bg: 'rgba(255,214,10,0.10)',    label: 'not confirmed', color: '#FFD60A',   opacity: 1 },
+}
+
+/**
+ * One card in the bar. Memoised so a highlight or "past" change re-renders only the
+ * handful of cards whose own props changed, not all N of them.
+ */
+const EventSlot = memo(function EventSlot({ tag, fieldMode, isSelected, isPast, isHot, onCardClick, onCommentClick }) {
+  const extras = tag.extras || []
+  const look = tag._status ? STATUS_LOOK[tag._status] : null
+  return (
+    <div
+      data-event-id={fieldMode ? tag.id : undefined}
+      data-highlight={isHot ? '1' : undefined}
+      data-status={tag._status || undefined}
+      onClick={() => onCardClick(tag)}
+      onContextMenu={(e) => { e.preventDefault(); onCommentClick(tag) }}
+      style={{
+        display: 'flex', flexDirection: 'column', alignItems: 'center',
+        gap: 3, cursor: 'pointer', flexShrink: 0,
+        width: CARD_W,
+        opacity: look ? look.opacity : (isPast ? 1 : 0.4),
+        transition: 'opacity .2s',
+      }}
+    >
+      <div style={{ display: 'flex', gap: 2, minHeight: 7 }}>
+        {extras.map((eid, i) => (
+          <div key={eid} style={{
+            width: 5, height: 5, borderRadius: '50%',
+            background: getDotColor(i),
+          }}/>
+        ))}
+      </div>
+      <div
+        title={tagName(tag) + (tag.comment ? ' — ' + tag.comment : '')}
+        style={{
+          padding: '4px 8px',
+          borderRadius: 5,
+          border: isSelected
+            ? '1.5px solid var(--p2)'
+            : isHot
+              ? '1.5px solid #FFD60A'
+              : look
+                ? look.border
+                : tag.comment
+                  ? '1.5px solid #30D158'
+                  : '1.5px solid var(--b-2)',
+          background: isSelected ? 'var(--p2)' : isHot ? 'rgba(255,214,10,0.14)' : (look && look.bg) || 'var(--bg-2)',
+          color: isSelected ? '#fff' : 'var(--t-1)',
+          fontSize: 11, fontWeight: isSelected || isHot ? 700 : 500,
+          fontFamily: 'DM Sans, sans-serif',
+          whiteSpace: 'nowrap',
+          width: '100%',
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          textAlign: 'center',
+          boxShadow: isSelected ? '0 0 8px rgba(232,89,12,0.5)' : isHot ? '0 0 8px rgba(255,214,10,0.55)' : 'none',
+          transition: 'all .12s',
+        }}
+        // full name on hover, for when the bar is too narrow to show
+        // it — the bar already truncates with an ellipsis
+        title={tagName(tag)}>
+        {tagName(tag)}
+      </div>
+      <div style={{ fontSize: 9, color: look ? look.color : 'var(--t-3)', fontFamily: 'JetBrains Mono, monospace' }}>
+        {fmt(tag.videoTimeSec)}{look ? ' · ' + look.label : ''}
+      </div>
+    </div>
+  )
+})
+
+function TimelineRow({ label, tags, allTags, videoDuration, currentTime, selectedId, onCardClick, onCommentClick, homeTeam,
+                       dotColor = null, fieldMode = false, highlightSet = null, scrollTargetId = null, pastCount = null, slotIndex = null }) {
+  const rowRef = useRef(null)
+  // One lookup per slot instead of tags.find() per slot: the old shape was
+  // O(events²) on every render — 15 ms a tick at 1000 events.
+  const tagById = useMemo(() => new Map(tags.map(t => [t.id, t])), [tags])
+
+  // LEGACY (Scout): re-centre on the playhead on every render. Unchanged.
+  // FIELD opts out (fieldMode) and uses the highlight-driven scroll below.
   useEffect(() => {
+    if (fieldMode) return
     if (!rowRef.current || allTags.length === 0) return
-    const CARD_W = 100
-    const GAP = 10
     const idx = allTags.findIndex(t => t.videoTimeSec > currentTime)
     const targetIdx = idx === -1 ? allTags.length - 1 : Math.max(0, idx - 1)
     const targetX = targetIdx * (CARD_W + GAP) - rowRef.current.clientWidth / 2 + CARD_W / 2
     rowRef.current.scrollTo({ left: Math.max(0, targetX), behavior: 'smooth' })
   }, [currentTime, allTags])
+
+  // FIELD: scroll only when the highlighted event changes, and only if it is
+  // not already in view.
+  useEffect(() => {
+    if (!fieldMode || !scrollTargetId || !rowRef.current || !slotIndex) return
+    const idx = slotIndex.get(scrollTargetId)
+    if (idx == null) return
+    const el = rowRef.current
+    const left = 12 + idx * (CARD_W + GAP)           // the slot strip has 12px padding
+    if (left >= el.scrollLeft && left + CARD_W <= el.scrollLeft + el.clientWidth) return
+    el.scrollTo({ left: Math.max(0, left - el.clientWidth / 2 + CARD_W / 2), behavior: 'smooth' })
+  }, [scrollTargetId, fieldMode, slotIndex])
+
+  const dot = dotColor || (label === homeTeam ? '#0A84FF' : '#FF453A')
+  const dotGlow = dotColor ? 'rgba(142,142,147,0.6)' : (label === homeTeam ? 'rgba(10,132,255,0.6)' : 'rgba(255,69,58,0.6)')
 
   return (
     <div style={{
@@ -221,8 +325,8 @@ function TimelineRow({ label, tags, allTags, videoDuration, currentTime, selecte
         }}>
           <div style={{
             width: 6, height: 6, borderRadius: '50%', flexShrink: 0,
-            background: label === homeTeam ? '#0A84FF' : '#FF453A',
-            boxShadow: `0 0 5px ${label === homeTeam ? 'rgba(10,132,255,0.6)' : 'rgba(255,69,58,0.6)'}`,
+            background: dot,
+            boxShadow: `0 0 5px ${dotGlow}`,
           }}/>
           <span style={{
             fontSize: 11, fontWeight: 800, color: 'var(--t-1)',
@@ -249,73 +353,22 @@ function TimelineRow({ label, tags, allTags, videoDuration, currentTime, selecte
         {/* Shared timeline slots — one slot per event in allTags, empty if not this team */}
         <div style={{
           display: 'flex', alignItems: 'center',
-          gap: 10, padding: '0 12px',
+          gap: GAP, padding: '0 12px',
           minWidth: 'max-content', height: '100%',
         }}>
-          {allTags.map(slot => {
-            const tag = tags.find(t => t.id === slot.id)
-            const isSelected = slot.id === selectedId
-            const isPast = slot.videoTimeSec <= currentTime
-
+          {allTags.map((slot, slotI) => {
+            const tag = tagById.get(slot.id)
             if (!tag) {
               return (
-                <div key={slot.id} style={{ width: 100, flexShrink: 0 }} />
+                <div key={slot.id} style={{ width: CARD_W, flexShrink: 0 }} />
               )
             }
-
-            const extras = tag.extras || []
             return (
-              <div
-                key={tag.id}
-                onClick={() => onCardClick(tag)}
-                onContextMenu={(e) => { e.preventDefault(); onCommentClick(tag) }}
-                style={{
-                  display: 'flex', flexDirection: 'column', alignItems: 'center',
-                  gap: 3, cursor: 'pointer', flexShrink: 0,
-                  width: 100,
-                  opacity: isPast ? 1 : 0.4,
-                  transition: 'opacity .2s',
-                }}
-              >
-                <div style={{ display: 'flex', gap: 2, minHeight: 7 }}>
-                  {extras.map((eid, i) => (
-                    <div key={eid} style={{
-                      width: 5, height: 5, borderRadius: '50%',
-                      background: getDotColor(i),
-                    }}/>
-                  ))}
-                </div>
-                <div
-                  title={tagName(tag) + (tag.comment ? ' — ' + tag.comment : '')}
-                  style={{
-                    padding: '4px 8px',
-                    borderRadius: 5,
-                    border: isSelected
-                      ? '1.5px solid var(--p2)'
-                      : tag.comment
-                        ? '1.5px solid #30D158'
-                        : '1.5px solid var(--b-2)',
-                    background: isSelected ? 'var(--p2)' : 'var(--bg-2)',
-                    color: isSelected ? '#fff' : 'var(--t-1)',
-                    fontSize: 11, fontWeight: isSelected ? 700 : 500,
-                    fontFamily: 'DM Sans, sans-serif',
-                    whiteSpace: 'nowrap',
-                    width: '100%',
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis',
-                    textAlign: 'center',
-                    boxShadow: isSelected ? '0 0 8px rgba(232,89,12,0.5)' : 'none',
-                    transition: 'all .12s',
-                  }}
-                  // full name on hover, for when the bar is too narrow to show
-                  // it — the bar already truncates with an ellipsis
-                  title={tagName(tag)}>
-                  {tagName(tag)}
-                </div>
-                <div style={{ fontSize: 9, color: 'var(--t-3)', fontFamily: 'JetBrains Mono, monospace' }}>
-                  {fmt(tag.videoTimeSec)}
-                </div>
-              </div>
+              <EventSlot key={tag.id} tag={tag} fieldMode={fieldMode}
+                isSelected={slot.id === selectedId}
+                isPast={pastCount != null ? slotI < pastCount : slot.videoTimeSec <= currentTime}
+                isHot={!!(highlightSet && highlightSet.has(tag.id))}
+                onCardClick={onCardClick} onCommentClick={onCommentClick} />
             )
           })}
         </div>
@@ -325,13 +378,23 @@ function TimelineRow({ label, tags, allTags, videoDuration, currentTime, selecte
 }
 
 // ── Main Component ────────────────────────────────────────────────────────────
-export default function TaggedEventsList({
+// FIELD-only opt-in props. Scout passes none of them and renders exactly as before.
+//   highlightIds / highlightNearestId — events at the playhead (also switches this
+//                      list to the highlight-driven scroll instead of re-centring
+//                      on every render)
+//   pastCount        — how many events are at or before the playhead, instead of
+//                      re-rendering on every tick with a raw currentTime
+//   neutralLane      — a third "Match" row for events that belong to no team
+//   onRetry          — retry an event that is failed / not confirmed
+function TaggedEventsList({
   tags, videoDuration, currentTime, matchName,
   onEdit, onDelete, onSeek, readOnly = false,
+  highlightIds, highlightNearestId = null, pastCount = null, neutralLane = false, onRetry = null,
 }) {
   const [selectedTag, setSelectedTag] = useState(null)
   const [commentTag, setCommentTag] = useState(null)
   const [comments, setComments] = useState({}) // tagId -> comment string
+  const fieldMode = highlightIds !== undefined
 
   // Parse team names from matchName — split on ' vs '
   const [homeTeam, awayTeam] = useMemo(() => {
@@ -340,16 +403,32 @@ export default function TaggedEventsList({
     return [parts[0]?.trim() || 'Home', parts[1]?.trim() || 'Away']
   }, [matchName])
 
-  const tagsWithComments = (tags || []).map(t => ({ ...t, comment: comments[t.id] || t.comment || '' }))
-  const homeTags = tagsWithComments.filter(t => t.team === 'home')
-  const awayTags = tagsWithComments.filter(t => t.team === 'away')
-  const allTagsSorted = [...tagsWithComments].sort((a, b) => (a.videoTimeSec || 0) - (b.videoTimeSec || 0))
+  const tagsWithComments = useMemo(
+    () => (tags || []).map(t => ({ ...t, comment: comments[t.id] || t.comment || '' })),
+    [tags, comments])
+  const homeTags = useMemo(() => tagsWithComments.filter(t => t.team === 'home'), [tagsWithComments])
+  const awayTags = useMemo(() => tagsWithComments.filter(t => t.team === 'away'), [tagsWithComments])
+  // Events with no team (Camera on/off, Stoppage, Half end, …). Only FIELD asks for
+  // the lane; everywhere else they keep leaving a blank slot as they always did.
+  const matchTags = useMemo(
+    () => neutralLane ? tagsWithComments.filter(t => t.team !== 'home' && t.team !== 'away') : [],
+    [tagsWithComments, neutralLane])
+  const allTagsSorted = useMemo(
+    () => [...tagsWithComments].sort((a, b) => (a.videoTimeSec || 0) - (b.videoTimeSec || 0)),
+    [tagsWithComments])
+  const highlightSet = useMemo(() => fieldMode ? new Set(highlightIds) : null, [fieldMode, highlightIds])
+  const slotIndex = useMemo(() => new Map(allTagsSorted.map((t, i) => [t.id, i])), [allTagsSorted])
 
   function handleCardClick(tag) {
     setSelectedTag(prev => prev?.id === tag.id ? null : tag)
     // In readOnly mode, seek to the timestamp on click
     if (onSeek) onSeek(tag.videoTimeSec || 0)
   }
+  // Stable identities (they read the latest handler through a ref), so a memoised
+  // card is not re-rendered just because this component rendered.
+  const clickRef = useRef(handleCardClick); clickRef.current = handleCardClick
+  const stableCardClick = useCallback(t => clickRef.current(t), [])
+  const stableCommentClick = useCallback(tag => { setSelectedTag(null); setCommentTag(tag) }, [])
 
   function handleSaveComment(tagId, text) {
     setComments(prev => ({ ...prev, [tagId]: text }))
@@ -365,6 +444,13 @@ export default function TaggedEventsList({
     if (readOnly) return
     setSelectedTag(null)
     onDelete(tag)
+  }
+
+  const rowProps = {
+    allTags: allTagsSorted, videoDuration, currentTime, selectedId: selectedTag?.id,
+    onCardClick: stableCardClick,
+    onCommentClick: stableCommentClick,
+    homeTeam, fieldMode, highlightSet, scrollTargetId: highlightNearestId, pastCount, slotIndex,
   }
 
   return (
@@ -391,34 +477,20 @@ export default function TaggedEventsList({
           onDelete={handleDelete}
           onClose={() => setSelectedTag(null)}
           readOnly={readOnly}
+          onRetry={onRetry}
         />
       )}
 
       {/* Home row */}
-      <TimelineRow
-        label={homeTeam}
-        tags={homeTags}
-        allTags={allTagsSorted}
-        videoDuration={videoDuration}
-        currentTime={currentTime}
-        selectedId={selectedTag?.id}
-        onCardClick={handleCardClick}
-        onCommentClick={(tag) => { setSelectedTag(null); setCommentTag(tag) }}
-        homeTeam={homeTeam}
-      />
+      <TimelineRow label={homeTeam} tags={homeTags} {...rowProps} />
+
+      {/* Match row — events with no team. Shown only when there is at least one. */}
+      {neutralLane && matchTags.length > 0 && (
+        <TimelineRow label="Match" tags={matchTags} dotColor="#8E8E93" {...rowProps} />
+      )}
 
       {/* Away row */}
-      <TimelineRow
-        label={awayTeam}
-        tags={awayTags}
-        allTags={allTagsSorted}
-        videoDuration={videoDuration}
-        currentTime={currentTime}
-        selectedId={selectedTag?.id}
-        onCardClick={handleCardClick}
-        onCommentClick={(tag) => { setSelectedTag(null); setCommentTag(tag) }}
-        homeTeam={homeTeam}
-      />
+      <TimelineRow label={awayTeam} tags={awayTags} {...rowProps} />
 
       {/* Empty state */}
       {tags.length === 0 && (
@@ -435,3 +507,5 @@ export default function TaggedEventsList({
     </div>
   )
 }
+
+export default memo(TaggedEventsList)

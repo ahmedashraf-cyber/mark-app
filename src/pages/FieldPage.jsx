@@ -17,10 +17,12 @@
 import { useState, useMemo, useEffect, useRef, useCallback } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { db } from '../firebase/config'
-import { collection, addDoc, updateDoc, doc, setDoc,
-         getDocs, query, where, serverTimestamp, deleteDoc } from 'firebase/firestore'
+import { collection, updateDoc, doc, setDoc,
+         getDocs, getDocsFromServer, query, where, serverTimestamp, deleteDoc, writeBatch } from 'firebase/firestore'
 import { useAuth } from '../hooks/useAuth.jsx'
-import { runChain, teamDecision, receptionAllowed } from '../utils/phaseChain'
+import { runChain, teamDecision, receptionAllowed, validTypes, inheritedReceptionTeam } from '../utils/phaseChain'
+import { findAtTime, pastCountAt, EVENT_HIGHLIGHT_TOLERANCE_S } from '../utils/eventHighlight'
+import PerfOverlay, { perfEnabled } from '../components/PerfOverlay'
 import { createSource } from '../utils/comparisonSource'
 import ErrorTimeline from '../components/ErrorTimeline'
 import EventsSidebar from '../components/EventsSidebar'
@@ -102,13 +104,26 @@ function wouldOpenConflict(openStates, eventDef) {
 }
 
 // ─── Team prompt ──────────────────────────────────────────────────────────────
-// H and A as the primary keys; 1 and 2 still work for collectors used to them.
-// These letters collide with Hold Up Duel (H) and Tackle (A) in the idle step,
-// but the team prompt is a separate step so the two can never be live at once.
+// 1 = Home, 2 = Away — the only keys, in BOTH collection methods. H and A used to
+// work as well, but they are event hotkeys too (H = Hold up duel, A = Tackle): a
+// letter meant as the NEXT event, pressed while a prompt was still open, was
+// silently taken as a team for the PREVIOUS one. Digits cannot be mistaken for an
+// event, so a stray letter now simply does nothing.
 const TEAM_OPTIONS = [
-  { code:'home', label:'Home', key:'H', color:'#0A84FF', bg:'rgba(10,132,255,0.15)' },
-  { code:'away', label:'Away', key:'A', color:'#E8590C', bg:'rgba(232,89,12,0.15)'  },
+  { code:'home', label:'Home', key:'1', color:'#0A84FF', bg:'rgba(10,132,255,0.15)' },
+  { code:'away', label:'Away', key:'2', color:'#E8590C', bg:'rgba(232,89,12,0.15)'  },
 ]
+
+// How long a write may take before the collector is told, and before the lock is
+// let go so a dead network cannot freeze collection. The write itself is not
+// cancelled: it stays queued and, because the id is client-side, can only ever
+// land once.
+const WRITE_WAIT_MS = 2000
+const LOCK_CAP_MS   = 10000
+const EVENTS_COL    = 'mark_collected_events'
+const byTime = (a, b) => (a.videoTimeSec || 0) - (b.videoTimeSec || 0)
+/** Local-only fields (_status, _error, _docId) never go to Firestore. */
+const stripLocal = e => Object.fromEntries(Object.entries(e).filter(([k]) => !k.startsWith('_')))
 
 /** The start screen's Part → the Half stored on the session and matched on. */
 const PART_TO_HALF = { 1:'1H', 2:'2H', 3:'ET1', 4:'ET2', 5:'PEN' }
@@ -201,6 +216,47 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
     || (modelCheck.state === 'none' && !!caps.modelAnswer)
   const modelExists = modelCheck.state === 'found'
   const [events,       setEvents]       = useState([])  // committed events
+
+  // ── Saving, and the lock that stops duplicates ───────────────────────────
+  // A SYNCHRONOUS ref, not state: two keydowns inside one frame both run the
+  // same stale handler closure, so state would not have changed between them.
+  const commitLockRef   = useRef(false)
+  const lockOwnerRef    = useRef(0)         // which commit holds the lock; a late ack must not release a newer one
+  const lockTokenRef    = useRef(0)
+  const pendingWritesRef = useRef(new Map())   // event id -> Promise of its Firestore write
+  const deletedWhilePendingRef = useRef(new Set())
+  const busyTimerRef    = useRef(0)
+  const [saveUi, setSaveUi] = useState(null)    // null | { kind:'saving' | 'waiting' }
+  const eventsRef       = useRef([])
+  eventsRef.current = events
+  const sessionRef      = useRef(null)
+  sessionRef.current = session
+  const renderCountRef  = useRef(0)
+  renderCountRef.current++
+
+  // ── Edit, Clear all, Done verification ───────────────────────────────────
+  const editOriginalRef = useRef(null)      // the saved event being re-tagged; stays in Firestore until its replacement is saved
+  const editingRef      = useRef(null)
+  const autoShotRef     = useRef(false)     // the shot type was filled in by the chain, not asked
+  const [allowedPassTypes, setAllowedPassTypes] = useState(null)   // codes the phase allows, or null = all
+  const [showClearModal, setShowClearModal] = useState(false)
+  const [clearing, setClearing] = useState(false)
+  const [clearError, setClearError] = useState('')
+  const [verifyState, setVerifyState] = useState(null)   // null | {status:'checking'|'ok'|'repaired'|'blocked'|'offline', missing, total}
+
+  // ── The video clock ──────────────────────────────────────────────────────
+  // The video element is the clock. Its time lives in refs; React state is only
+  // the DISPLAY, refreshed at most 10 times a second and only when it changed.
+  // Re-rendering the page on every raw timeupdate (and on every seek of a held
+  // arrow key) is what made playback stutter.
+  const seekTargetRef  = useRef(null)       // latest requested position, applied once per animation frame
+  const seekRafRef     = useRef(0)
+  const lastSyncRef    = useRef({ at: 0, shown: -1 })
+  const [highlightIds, setHighlightIds] = useState([])
+  const [highlightNearest, setHighlightNearest] = useState(null)
+  const [pastCount, setPastCount] = useState(0)
+  const hlKeyRef = useRef(''), hlNearestRef = useRef(null), pastRef = useRef(0)
+  const wasPlayingRef = useRef(false), resumeAfterSeekRef = useRef(false)
 
   // ── The phase chain (All events only) ────────────────────────────────────
   // "Mine" is the team that kicked off: the team on the latest half start.
@@ -372,20 +428,202 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
     const n=typeof u==='function'?u(v.playbackRate):u
     v.playbackRate=n; setSpeed(n)
   }
-  function seekBy(s) {
-    const v=videoRef.current; if(!v) return
-    v.currentTime=Math.max(0,Math.min(v.duration||0,v.currentTime+s)); setCurrentTime(v.currentTime)
+  // Where the video IS for tagging: a seek that has been requested but not yet
+  // applied (it lands on the next frame) counts as already there.
+  function getVideoTime() {
+    const v=videoRef.current; if(!v) return 0
+    return seekTargetRef.current != null ? seekTargetRef.current : v.currentTime
   }
-  function seekTo(s) {
+  /**
+   * One seek per animation frame, using the LATEST target. A held arrow key
+   * auto-repeats ~30 times a second, and every `currentTime =` on a playing video
+   * flushes the decoder — thirty restarts a second never let one finish. Relative
+   * steps add to the pending target, not to v.currentTime, so no step is lost.
+   */
+  function requestSeek(sec, relative) {
     const v=videoRef.current; if(!v) return
-    if(!isFinite(s)||!isFinite(v.duration)) return
-    v.currentTime=Math.max(0,Math.min(v.duration,s)); setCurrentTime(v.currentTime)
+    const dur = v.duration
+    if (!relative && (!isFinite(sec) || !isFinite(dur))) return
+    const base = seekTargetRef.current != null ? seekTargetRef.current : v.currentTime
+    const t = Math.max(0, Math.min(isFinite(dur) ? dur : 0, relative ? base + sec : sec))
+    seekTargetRef.current = t
+    if (!seekRafRef.current) {
+      seekRafRef.current = requestAnimationFrame(() => { seekRafRef.current = 0; flushSeek() })
+    }
+  }
+  /**
+   * Apply the latest requested position — unless the decoder is still landing the
+   * previous one. A seek issued while another is in flight throws that work away
+   * and restarts, which is the stutter; so the newest target waits for `seeked`
+   * (onSeeked calls this again) and everything requested meanwhile collapses
+   * into that one seek.
+   */
+  function flushSeek() {
+    const vv = videoRef.current
+    const target = seekTargetRef.current
+    if (!vv || target == null) return
+    if (vv.seeking) return
+    seekTargetRef.current = null
+    vv.currentTime = target
+    syncDisplay(true)
+  }
+  function seekBy(s) { requestSeek(s, true) }
+  function seekTo(s) { requestSeek(s, false) }
+
+  /**
+   * Bring the on-screen clock, the dimming and the highlight in line with the
+   * video. Cheap when nothing changed: at most one pass per 100 ms, a binary
+   * search, and a state update ONLY when the value actually differs. (A drag in
+   * progress owns the playhead, so it is left alone.)
+   */
+  function syncDisplay(force) {
+    if (isDraggingRef.current) return
+    const v=videoRef.current; if(!v) return
+    const t = seekTargetRef.current != null ? seekTargetRef.current : v.currentTime
+    const L = lastSyncRef.current, now = performance.now()
+    if (!force && now - L.at < 100) return
+    L.at = now
+    const shown = Math.floor(t * 10) / 10
+    if (shown !== L.shown) { L.shown = shown; setCurrentTime(shown) }
+    const evs = eventsRef.current
+    const pc = pastCountAt(evs, t)
+    if (pc !== pastRef.current) { pastRef.current = pc; setPastCount(pc) }
+    const hit = findAtTime(evs, t, EVENT_HIGHLIGHT_TOLERANCE_S)
+    const key = hit.ids.join(',')
+    if (key !== hlKeyRef.current) { hlKeyRef.current = key; setHighlightIds(hit.ids) }
+    if (hit.nearestId !== hlNearestRef.current) { hlNearestRef.current = hit.nearestId; setHighlightNearest(hit.nearestId) }
   }
   function toggleMute() { const v=videoRef.current;if(!v)return;v.muted=!v.muted;setMuted(v.muted) }
 
+  // ── Small helpers for saving ───────────────────────────────────────────────
+  function flashBusy() {
+    setFlashError('Still saving — that key was ignored')
+    clearTimeout(busyTimerRef.current)
+    busyTimerRef.current = setTimeout(() => setFlashError(null), 1400)
+  }
+  function releaseLock(token) {
+    if (!token || lockOwnerRef.current !== token) return
+    lockOwnerRef.current = 0; commitLockRef.current = false; setSaveUi(null)
+  }
+  function markStatus(id, status, err) {
+    setEvents(prev => prev.map(e => {
+      if (e.id !== id) return e
+      if (status === 'saved') { const { _status, _error, ...rest } = e; return rest }
+      return { ...e, _status: status, _error: err ? String(err.message || err) : undefined }
+    }))
+  }
+  async function deleteEventDocs(id) {
+    const snap = await getDocs(query(collection(db, EVENTS_COL), where('id', '==', id)))
+    await Promise.all(snap.docs.map(d => deleteDoc(d.ref)))
+  }
+
+  /**
+   * The Firestore write for one event. The document id IS the event's id, which
+   * is made on this machine — so writing it twice (a retry, or a queued write that
+   * finally lands) is the same document, never a second one.
+   *
+   * Never rejects: every outcome is recorded on the event itself —
+   *   pending → saved | failed | unconfirmed
+   * so an event cannot sit in the bar looking saved when it is not.
+   */
+  function writeEvent(ev, { token = 0, replacing = null } = {}) {
+    const p = setDoc(doc(db, EVENTS_COL, ev.id), { ...stripLocal(ev), createdAt: serverTimestamp() })
+    pendingWritesRef.current.set(ev.id, p)
+    let t2 = 0, t10 = 0
+    if (token) {
+      t2  = setTimeout(() => { if (lockOwnerRef.current === token) setSaveUi({ kind: 'waiting' }) }, WRITE_WAIT_MS)
+      // No answer yet: stop blocking the collector, but say so. The write stays
+      // queued; if it lands later the event flips to saved on its own.
+      t10 = setTimeout(() => { markStatus(ev.id, 'unconfirmed'); releaseLock(token) }, LOCK_CAP_MS)
+    }
+    return p.then(async () => {
+      clearTimeout(t2); clearTimeout(t10)
+      markStatus(ev.id, 'saved'); releaseLock(token)
+      try {
+        if (deletedWhilePendingRef.current.delete(ev.id)) { await deleteEventDocs(ev.id); return }
+        setFlashEvent(ev.eventLabel); setTimeout(() => setFlashEvent(null), 700)
+        if (replacing) await deleteEventDocs(replacing.id)       // the edit is saved: only now does the original go
+      } catch (e) { console.warn('[MARK Field] post-save cleanup:', e) }
+    }, err => {
+      clearTimeout(t2); clearTimeout(t10)
+      console.error('[MARK Field] commit failed:', err)
+      markStatus(ev.id, 'failed', err); releaseLock(token)
+      showToast(`Could not save ${ev.eventLabel}: ${err?.message || err}`, 'error')
+    }).finally(() => { if (pendingWritesRef.current.get(ev.id) === p) pendingWritesRef.current.delete(ev.id) })
+  }
+  function retryUnsaved() {
+    eventsRef.current.filter(e => e._status === 'failed' || e._status === 'unconfirmed')
+      .forEach(e => { markStatus(e.id, 'pending'); writeEvent(e) })
+  }
+  const retryOne = tag => {
+    const e = eventsRef.current.find(x => x.id === tag.id)
+    if (e) { markStatus(e.id, 'pending'); writeEvent(e) }
+  }
+
+  // The team of the event that OPENED a pair (Shot → End shot, Pressure start →
+  // Pressure end). The link is the pair_id, stamped on both when they commit.
+  function pairedOpenerTeam(openId) {
+    const pr = openPairsRef.current[openId]
+    let t = null
+    if (pr?.pairId) t = events.find(e => e.pair_id === pr.pairId && e.eventId === openId)?.team || null
+    if (!t) t = openStates[openId]?.team || null
+    return t
+  }
+
+  /**
+   * The team is known; now the pass type. The chain decides how it is asked:
+   *   exactly one type allowed in this phase → set it ('inferred'), no question
+   *   several allowed                        → ask, offering ONLY those
+   *   none / the phase says nothing          → ask exactly as before
+   * Edit never skips: the saved type is shown pre-selected so it can be corrected.
+   */
+  function routePassType(def, teamAbs, vt, teamSource) {
+    const editing = editingRef.current
+    let allowed = null
+    if (allEvents && !editing && mineTeam && teamAbs) {
+      const v = validTypes(currentPhase, 'pass', toRel(teamAbs), chainPart, PASS_TYPE_OPTIONS.map(o => o.code))
+      if (v.restricted && v.codes.length === 1) {
+        const type = PASS_TYPE_OPTIONS.find(o => o.code === v.codes[0])
+        const vs = def.variants.variants
+        const chain = (vs.find(x => x.when.includes(type.code)) || vs[0]).groups
+        setPendingType(type); setPendingTypeSource('inferred'); setAllowedPassTypes(null)
+        setGroupChain(chain); setGroupIndex(0); setCurrentSelections([])
+        if (chain.length > 0) setCaptureStep('group')
+        else commitEvent(def, vt, type, [], 'inferred', null, teamAbs, teamSource)
+        return
+      }
+      if (v.restricted && v.codes.length > 1) allowed = v.codes
+    }
+    setAllowedPassTypes(allowed)
+    if (allowed) {
+      const inf = inferPassType(events, possessionRef.current).type
+      if (!allowed.includes(inf?.code)) {
+        setPendingType(PASS_TYPE_OPTIONS.find(o => o.code === allowed[0])); setPendingTypeSource('inferred')
+      }
+    }
+    setCaptureStep('type_confirm')
+  }
+
+  /** Shot "type" is the last group (Outcome). Returns its option when the chain allows exactly one. */
+  function autoShotOption(group) {
+    if (!allEvents || editingRef.current || pendingEvent?.id !== 'shot' || group?.id !== 'outcome') return null
+    if (!mineTeam || !pendingTeam) return null
+    const opts = getGroupOptions(group, [], [], { allEvents: true })
+    const v = validTypes(currentPhase, 'shot', toRel(pendingTeam), chainPart, opts.map(o => o.code))
+    return v.restricted && v.codes.length === 1 ? opts.find(o => o.code === v.codes[0]) : null
+  }
+
   // ── Start capture ──────────────────────────────────────────────────────────
-  function startCapture(eventDef, vt, overrideAsClose) {
+  // opts.editing is the saved event being re-tagged (Edit).
+  function startCapture(eventDef, vt, overrideAsClose, opts = {}) {
     if (!session) return
+    // One commit at a time. A key pressed while the previous event is still being
+    // saved is refused — visibly — rather than queued or doubled.
+    if (commitLockRef.current) { flashBusy(); return }
+    const editing = opts.editing || null
+    editingRef.current = editing
+    autoShotRef.current = false
+    seededRef.current = ''
 
     // All events never blocks a key. Both teams are collected, so an event that
     // looks out of place in the current phase is simply the OTHER team's — a
@@ -399,7 +637,8 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
     // off/on and pressure start/end may sit between them, nothing else). With
     // no pass before it there is nothing for it to be the reception of, so the
     // key does nothing — confirmed. Not all events never reaches this check.
-    if (allEvents && eventDef.id === 'reception' &&
+    // (Edit is exempt: the reception being re-tagged was allowed when it was made.)
+    if (allEvents && !editing && eventDef.id === 'reception' &&
         !receptionAllowed(events.map(e => e.eventId))) return
     if (collStartRef.current===null) collStartRef.current=Date.now()
 
@@ -416,16 +655,11 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
       setOpenStates({})
     }
 
-    // For close events: inherit team from open state if teamInherited
-    let inheritedTeam = null
-    if (eventDef.closesEventId && eventDef.teamInherited) {
-      inheritedTeam = openStates[eventDef.closesEventId]?.team || null
-    }
-
     setPendingEvent(eventDef)
     setPendingVideoTime(vt)
     setPendingType(null)
     setPendingTypeSource(null)
+    setAllowedPassTypes(null)
     setResolvedVariant(null)
     setGroupIndex(0)
     setCollectedGroups([])
@@ -435,17 +669,10 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
     setPendingTeam(null)
     setPendingTeamSource(null)
 
-    // ── EVERY event asks Home/Away FIRST ──────────────────────────────────
-    // Pass, Goal keeper and the variant events each used to jump straight to
-    // their own first step and so never saw a team prompt. They now set up
-    // whatever comes next, record it, and go to the team step; chooseTeam()
-    // resumes from there once a side is chosen.
-    //
-    // Pressure end previously inherited its team from the paired Pressure start
-    // and skipped the prompt entirely. It no longer does — pair_id still links
-    // them for the duration calculation, but team is entered per event.
-    //
-    // There is no branch left that saves an event without a chosen side.
+    // ── EVERY event asks Home/Away FIRST (unless All events can decide) ──────
+    // Pass, Goal keeper and the variant events each set up whatever comes next,
+    // record it, and go to the team step; chooseTeam() resumes from there once a
+    // side is chosen.
     let next = { step: 'group', chain: eventDef.groups || [] }
     // Set only when the pass type is decided without asking; passed straight to
     // commitEvent below, because setPendingType is not applied until after this
@@ -454,7 +681,7 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
 
     // carry = MY team has the ball at its feet; defense = the OPPONENT does. A
     // pass from either is open play — the same rule, for both teams.
-    if (eventDef.id === 'pass' && allEvents && (currentPhase === 'carry' || currentPhase === 'defense')) {
+    if (eventDef.id === 'pass' && allEvents && !editing && (currentPhase === 'carry' || currentPhase === 'defense')) {
       // All events: after a reception the chain is in carry, and the Mark Chain
       // allows only an OPEN PLAY pass there ('pass field type is open-play').
       // So the type is not asked. The follow-up questions are the open-play
@@ -468,11 +695,14 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
         : (eventDef.groups || [])
       next = { step: 'group', chain }
     } else if (eventDef.id === 'pass') {
-      // The pass TYPE is still inferred — that is unchanged and does not use
-      // team. Only the team prompt is inserted ahead of it.
-      const { type, defaulted } = inferPassType(events, possessionRef.current)
-      setPendingType(type)
-      setPendingTypeSource(defaulted ? 'inferred_default' : 'inferred')
+      // Edit shows the SAVED type pre-selected; otherwise the type is inferred as before.
+      const saved = editing?.type?.code ? PASS_TYPE_OPTIONS.find(o => o.code === editing.type.code) : null
+      if (saved) { setPendingType(saved); setPendingTypeSource(editing.typeSource || 'manual') }
+      else {
+        const { type, defaulted } = inferPassType(events, possessionRef.current)
+        setPendingType(type)
+        setPendingTypeSource(defaulted ? 'inferred_default' : 'inferred')
+      }
       next = { step: 'type_confirm', chain: eventDef.groups || [] }
     } else if (eventDef.id === 'goal_keeper' && eventDef.typeGroup) {
       next = { step: 'group', chain: [eventDef.typeGroup] }
@@ -483,25 +713,42 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
     setGroupChain(next.chain)
     afterTeamRef.current = next
 
+    // Team known: carry on. Shared by every way a team can be settled without asking.
+    const proceed = (team, source) => {
+      setPendingTeam(team)
+      setPendingTeamSource(source)
+      afterTeamRef.current = null
+      if (next.step === 'type_confirm') { routePassType(eventDef, team, vt, source); return }
+      if ((next.chain || []).length > 0) {
+        setGroupIndex(0); setCurrentSelections([]); setCaptureStep('group'); return
+      }
+      commitEvent(eventDef, vt, autoPassType, [], autoPassType ? 'inferred' : null, null, team, source)
+    }
+
     // All events: the phase decides whether the team is inferred or asked.
     // Not all events skips this and always asks, exactly as before.
     if (allEvents && eventDef.id !== 'half_start') {
+      // End shot and Pressure end belong to the event that opened them: the
+      // pair_id is a hard link, so the team is inherited, never guessed or asked.
+      // No open shot / pressure to inherit from → fall through and ask.
+      if (eventDef.closesEventId === 'shot' || eventDef.closesEventId === 'pressure_start') {
+        const t = pairedOpenerTeam(eventDef.closesEventId)
+        if (t) { proceed(t, 'inherited'); return }
+      }
       const decision = teamDecision(currentPhase, eventDef.id)
       // Inferring needs "mine" to turn mine/opponent into a real team. If it is
       // ever missing, ask instead — never save a blank or guessed team.
       const canInfer = decision === 'none' || !!mineTeam
       if (canInfer && (decision === 'mine' || decision === 'opponent' || decision === 'none')) {
-        const team = decision === 'none' ? null : toAbs(decision)
-        setPendingTeam(team)
-        setPendingTeamSource(decision === 'none' ? null : 'inferred')
-        afterTeamRef.current = null
-        if (next.step === 'type_confirm') { setCaptureStep('type_confirm'); return }
-        if ((next.chain || []).length > 0) {
-          setGroupIndex(0); setCurrentSelections([]); setCaptureStep('group'); return
-        }
-        commitEvent(eventDef, vt, autoPassType, [], autoPassType ? 'inferred' : null,
-          null, team, decision === 'none' ? null : 'inferred')
+        proceed(decision === 'none' ? null : toAbs(decision), decision === 'none' ? null : 'inferred')
         return
+      }
+      // Reception: the PHASE speaks first (above). Only when it gave no team —
+      // in practice, before any Half start — may it inherit from the pass right
+      // before it, and only under the strict rules in inheritedReceptionTeam.
+      if (eventDef.id === 'reception') {
+        const t = inheritedReceptionTeam(events)
+        if (t) { proceed(t, 'inherited'); return }
       }
     }
     // half_start always asks: its answer IS the kickoff team, i.e. "mine"
@@ -511,13 +758,12 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
   /**
    * The collector has chosen Home or Away.
    *
-   * Team is now asked FIRST — immediately after the event key, before any
-   * attribute group — so this stores the side and then opens the group chain.
-   * It used to be the last step, after every group, which is why the order is
-   * inverted here rather than at the group stage.
+   * Team is asked FIRST — immediately after the event key, before any attribute
+   * group — so this stores the side and then opens the group chain.
    *
-   * teamSource is always 'manual'. 'inferred' and 'inherited' are no longer
-   * produced anywhere.
+   * teamSource is 'manual' here: it was asked. 'inferred' (the phase decided) and
+   * 'inherited' (End shot, Pressure end, and a Reception with no phase) are set in
+   * startCapture, where the team is settled without a question.
    */
   function chooseTeam(side) {
     setPendingTeam(side)
@@ -526,7 +772,7 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
     afterTeamRef.current = null
 
     if (next.step === 'type_confirm') {
-      setCaptureStep('type_confirm')
+      routePassType(pendingEvent, side, pendingVideoTime, 'manual')
       return
     }
     if ((next.chain || []).length > 0) {
@@ -563,7 +809,7 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
         setCaptureStep('group')
       } else {
         // Team already chosen before the groups.
-        commitEvent(null, undefined, null, saved, null, null, pendingTeam, pendingTeamSource || 'manual')
+        commitEvent(null, undefined, null, saved, autoShotRef.current ? 'inferred' : null, null, pendingTeam, pendingTeamSource || 'manual')
       }
     }
 
@@ -600,6 +846,15 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
         idx++
       }
 
+      // Shot type: when the chain allows exactly ONE, it is filled in, not asked.
+      while (idx < chain.length) {
+        const auto = autoShotOption(chain[idx])
+        if (!auto) break
+        acc.push({ groupId: chain[idx].id, groupLabel: chain[idx].label, selections: [auto] })
+        autoShotRef.current = true
+        idx++
+      }
+
       setGroupChain(chain)
       setCurrentSelections([])
       setCollectedGroups(acc)
@@ -613,7 +868,7 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
       // Team was chosen before the groups, so commit straight away.
       // The explicit / not-meaningful / inferred branching that used to
       // be here is gone — every event has a manually chosen team.
-      commitEvent(null, undefined, null, acc, null, null,
+      commitEvent(null, undefined, null, acc, autoShotRef.current ? 'inferred' : null, null,
         pendingTeam, pendingTeamSource || 'manual')
     }
 
@@ -655,6 +910,14 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
       saved.push({ groupId: nextGroup.id, groupLabel: nextGroup.label, selections: [] })
       skipTo++
     }
+    // Shot type: when the chain allows exactly ONE, it is filled in, not asked.
+    while (skipTo < groupChain.length) {
+      const auto = autoShotOption(groupChain[skipTo])
+      if (!auto) break
+      saved.push({ groupId: groupChain[skipTo].id, groupLabel: groupChain[skipTo].label, selections: [auto] })
+      autoShotRef.current = true
+      skipTo++
+    }
     setCollectedGroups(saved)
 
     if (skipTo < groupChain.length) {
@@ -665,151 +928,197 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
       // Team was chosen before the groups, so commit straight away.
       // The explicit / not-meaningful / inferred branching that used to
       // be here is gone — every event has a manually chosen team.
-      commitEvent(null, undefined, null, saved, null, null,
+      commitEvent(null, undefined, null, saved, autoShotRef.current ? 'inferred' : null, null,
         pendingTeam, pendingTeamSource || 'manual')
     }
   }
 
   // ── Commit the full event ──────────────────────────────────────────────────
+  /**
+   * Everything the NEXT keypress depends on happens here, synchronously: the
+   * lock, the event appearing in the bar (marked pending), the capture state
+   * resetting. Only the network write is asynchronous.
+   *
+   * It used to be the other way round — the event was added and the capture
+   * reset AFTER `await addDoc`. For the length of a slow write the answer key
+   * was still live, so pressing it again committed the same event again (each
+   * with a fresh random id), and nothing showed in the bar, so the collector
+   * kept pressing. That is the seven identical Passes.
+   */
   async function commitEvent(eventDef, vt, type, groups, typeSource, variant, team, teamSrc, forceClose=false) {
-    const realDef  = eventDef || pendingEvent
-    const realVt   = vt   !== undefined ? vt   : pendingVideoTime
-    const realTeam = team !== undefined ? team : pendingTeam
-    const realTeamSrc = teamSrc !== undefined ? teamSrc : pendingTeamSource
-
-    // If this closes an open state, remove it
-    if (realDef.closesEventId) {
-      setOpenStates(prev => { const n={...prev}; delete n[realDef.closesEventId]; return n })
-    }
-    // If this opens a state, register it
-    if (realDef.openState) {
-      setOpenStates(prev => ({ ...prev, [realDef.id]: { team:realTeam, videoTimeSec:realVt } }))
-    }
-
-    const finalGroups = groups || collectedGroups
-
-    // Increment event_seq — monotonic per session
-    eventSeqRef.current += 1
-    const eventSeq = eventSeqRef.current
-
-    // video_time_ms as integer — used for pair duration arithmetic (no float rounding)
-    const videoTimeMs = Math.round(realVt * 1000)
-
-    // Pair tracking
-    let pairId     = null
-    let pairStatus = null
-    let durationMs = null
-
-    if (realDef.openState) {
-      // Opening event: generate pair_id using session slice + event_seq
-      pairId = `${session.sessionId.slice(0,8)}_${eventSeq}`
-      pairStatus = 'incomplete'  // marked complete when close event is committed
-      openPairsRef.current[realDef.id] = { pairId, openVideoTimeMs: videoTimeMs, eventSeq }
-    }
-
-    if (realDef.closesEventId) {
-      // Closing event: inherit pair_id from the open event
-      const openPair = openPairsRef.current[realDef.closesEventId]
-      if (openPair) {
-        pairId = openPair.pairId
-        durationMs = videoTimeMs - openPair.openVideoTimeMs  // integer arithmetic
-        pairStatus = forceClose ? 'incomplete' : 'complete'
-        // Mark open event's pair as complete in Firestore (best-effort)
-        if (!forceClose && openPair.pairId) {
-          getDocs(query(collection(db,'mark_collected_events'),
-            where('pair_id','==',openPair.pairId),
-            where('sessionId','==',session.sessionId)))
-          .then(snap => snap.forEach(d => updateDoc(d.ref, { pair_status:'complete' })))
-          .catch(()=>{})
-        }
-        delete openPairsRef.current[realDef.closesEventId]
-      }
-    }
-
-    const id = `field_${Date.now()}_${Math.random().toString(36).slice(2,7)}`
-    const ev = {
-      id, sessionId:session.sessionId,
-      videoPath: videoPath||session.videoPath||'',
-      videoTimeSec:   realVt,
-      video_time_ms:  videoTimeMs,      // integer ms — use this for arithmetic
-      event_seq:      eventSeq,
-      eventId:        realDef.id,
-      eventLabel:     realDef.label,
-      groups:         finalGroups,
-      extras: finalGroups.flatMap(g => g.selections?.map(s=>s.label)||[]),
-      team: realTeam||null,
-      teamSource: realTeamSrc||null,
-      possessionCertain: possession.certain,
-      miscommunicationTeam: getMiscommunicationTeam(realDef.id) || null,
-      type: type||pendingType||null,
-      typeSource: typeSource||pendingTypeSource||null,
-      pair_id:     pairId     || null,
-      pair_status: pairStatus || null,
-      duration_ms: durationMs !== null ? durationMs : null,
-      // close event marker (used by serialiser)
-      closesEventId: realDef.closesEventId || null,
-      source:'field', mode:'field',
-      collectorId:profile.uid, collectorEmail:profile.email,
-      timestamp:Date.now(),
-    }
-
-    // ── Derived fields (All events only) ────────────────────────────────
-    // pass end, foul phase and block side are worked out by the chain, never
-    // asked. Not all events leaves them blank, except block side, which that
-    // method asks for as an ordinary question.
-    if (allEvents) {
-      const run = runChain([...events, ev].map(toChainEvent), { part: chainPart })
-      const f = run.length ? run[run.length - 1].docEvent.fields : {}
-      const one = k => (f[k] && f[k].size) ? [...f[k]][0] : ''
-      ev.passEnd   = one('pass-end')
-      ev.playPhase = realDef.id === 'foul_committed' ? one('phase') : ''
-      ev.playSide  = realDef.id === 'block' ? one('side') : ''
-    }
-
-    // Apply possession flip AFTER building the event (uses the committed groups)
-    const newPossession = applyFlip(realDef.id, ev, possessionRef.current)
-
-    // For Half start: set possession from Team Side explicit prompt result
-    if (realDef.id === 'half_start' && realTeam) {
-      // possession tracking removed — nothing reads this any more
-      possessionRef.current = { team: null, certain: false }
-    } else {
-      // Inferred flips (successful tackle, interception won, and the rest) must
-      // update the ref as well, not just state. Otherwise the very next event
-      // tagged in the same tick would still resolve against the pre-flip team —
-      // the same fault as the manual 0 toggle, arriving by a different route.
-      possessionRef.current = newPossession
-      setPossession(newPossession)
-    }
-
-    try {
-      const ref = await addDoc(collection(db,'mark_collected_events'),{...ev,createdAt:serverTimestamp()})
-      const withDoc = {...ev,_docId:ref.id}
-      setEvents(prev=>[...prev,withDoc].sort((a,b)=>a.videoTimeSec-b.videoTimeSec))
-      setFlashEvent(realDef.label)
-      setTimeout(()=>setFlashEvent(null),700)
-      const newTotal=(session.totalEvents||0)+1
-      const updated={...session,totalEvents:newTotal,collectionStartWallMs:session.collectionStartWallMs||collStartRef.current}
-      setSession(updated); saveLocalSession(updated)
-      updateDoc(doc(db,'mark_field_sessions',session.sessionId),{totalEvents:newTotal,collectionStartWallMs:updated.collectionStartWallMs}).catch(()=>{})
-    } catch(e) { console.error('[MARK Field] commit:',e) }
-
+    // Forced closes (Half end) are part of one user action and run in sequence;
+    // everything else takes the lock, and a second attempt is refused.
+    let token = 0
     if (!forceClose) {
-      setPendingEvent(null); setCaptureStep('idle')
-      setCollectedGroups([]); setCurrentSelections([]); setGroupChain([])
-      setPendingType(null); setPendingTypeSource(null); setResolvedVariant(null); setGroupIndex(0)
-      setPendingTeam(null); setPendingTeamSource(null)
+      if (commitLockRef.current) { flashBusy(); return }
+      commitLockRef.current = true
+      token = ++lockTokenRef.current; lockOwnerRef.current = token
+      setSaveUi({ kind: 'saving' })
     }
+
+    let ev, replacing = null
+    try {
+      const realDef  = eventDef || pendingEvent
+      const realVt   = vt   !== undefined ? vt   : pendingVideoTime
+      const realTeam = team !== undefined ? team : pendingTeam
+      const realTeamSrc = teamSrc !== undefined ? teamSrc : pendingTeamSource
+
+      // If this closes an open state, remove it
+      if (realDef.closesEventId) {
+        setOpenStates(prev => { const n={...prev}; delete n[realDef.closesEventId]; return n })
+      }
+      // If this opens a state, register it
+      if (realDef.openState) {
+        setOpenStates(prev => ({ ...prev, [realDef.id]: { team:realTeam, videoTimeSec:realVt } }))
+      }
+
+      const finalGroups = groups || collectedGroups
+
+      // Increment event_seq — monotonic per session
+      eventSeqRef.current += 1
+      const eventSeq = eventSeqRef.current
+
+      // video_time_ms as integer — used for pair duration arithmetic (no float rounding)
+      const videoTimeMs = Math.round(realVt * 1000)
+
+      // Pair tracking
+      let pairId     = null
+      let pairStatus = null
+      let durationMs = null
+      const id = `field_${Date.now()}_${Math.random().toString(36).slice(2,7)}`
+
+      if (realDef.openState) {
+        // Opening event: generate pair_id using session slice + event_seq
+        pairId = `${session.sessionId.slice(0,8)}_${eventSeq}`
+        pairStatus = 'incomplete'  // marked complete when close event is committed
+        openPairsRef.current[realDef.id] = { pairId, openVideoTimeMs: videoTimeMs, eventSeq, docId: id }
+      }
+
+      if (realDef.closesEventId) {
+        // Closing event: inherit pair_id from the open event
+        const openPair = openPairsRef.current[realDef.closesEventId]
+        if (openPair) {
+          pairId = openPair.pairId
+          durationMs = videoTimeMs - openPair.openVideoTimeMs  // integer arithmetic
+          pairStatus = forceClose ? 'incomplete' : 'complete'
+          // Mark the open event's pair as complete in Firestore (best-effort). The
+          // opener may itself still be in flight, so wait for its write first.
+          if (!forceClose && openPair.docId) {
+            const opener = openPair.docId
+            Promise.resolve(pendingWritesRef.current.get(opener)).catch(() => {})
+              .then(() => updateDoc(doc(db, EVENTS_COL, opener), { pair_status: 'complete' }))
+              .catch(() => {})
+          }
+          delete openPairsRef.current[realDef.closesEventId]
+        }
+      }
+
+      ev = {
+        id, sessionId:session.sessionId,
+        videoPath: videoPath||session.videoPath||'',
+        videoTimeSec:   realVt,
+        video_time_ms:  videoTimeMs,      // integer ms — use this for arithmetic
+        event_seq:      eventSeq,
+        eventId:        realDef.id,
+        eventLabel:     realDef.label,
+        groups:         finalGroups,
+        extras: finalGroups.flatMap(g => g.selections?.map(s=>s.label)||[]),
+        team: realTeam||null,
+        teamSource: realTeamSrc||null,
+        possessionCertain: possession.certain,
+        miscommunicationTeam: getMiscommunicationTeam(realDef.id) || null,
+        type: type||pendingType||null,
+        typeSource: typeSource||pendingTypeSource||null,
+        pair_id:     pairId     || null,
+        pair_status: pairStatus || null,
+        duration_ms: durationMs !== null ? durationMs : null,
+        // close event marker (used by serialiser)
+        closesEventId: realDef.closesEventId || null,
+        source:'field', mode:'field',
+        collectorId:profile.uid, collectorEmail:profile.email,
+        timestamp:Date.now(),
+      }
+
+      // ── Derived fields (All events only) ────────────────────────────────
+      // pass end, foul phase and block side are worked out by the chain, never
+      // asked. Not all events leaves them blank, except block side, which that
+      // method asks for as an ordinary question.
+      if (allEvents) {
+        const run = runChain([...eventsRef.current, ev].map(toChainEvent), { part: chainPart })
+        const f = run.length ? run[run.length - 1].docEvent.fields : {}
+        const one = k => (f[k] && f[k].size) ? [...f[k]][0] : ''
+        ev.passEnd   = one('pass-end')
+        ev.playPhase = realDef.id === 'foul_committed' ? one('phase') : ''
+        ev.playSide  = realDef.id === 'block' ? one('side') : ''
+      }
+
+      // Apply possession flip AFTER building the event (uses the committed groups)
+      const newPossession = applyFlip(realDef.id, ev, possessionRef.current)
+
+      // For Half start: set possession from Team Side explicit prompt result
+      if (realDef.id === 'half_start' && realTeam) {
+        // possession tracking removed — nothing reads this any more
+        possessionRef.current = { team: null, certain: false }
+      } else {
+        // Inferred flips (successful tackle, interception won, and the rest) must
+        // update the ref as well, not just state. Otherwise the very next event
+        // tagged in the same tick would still resolve against the pre-flip team —
+        // the same fault as the manual 0 toggle, arriving by a different route.
+        possessionRef.current = newPossession
+        setPossession(newPossession)
+      }
+
+      // ── The event appears NOW, marked pending ───────────────────────────
+      setEvents(prev => [...prev, { ...ev, _status: 'pending' }].sort(byTime))
+      eventsRef.current = [...eventsRef.current, { ...ev, _status: 'pending' }].sort(byTime)
+
+      // An Edit replaces its original: the original stays in Firestore until the
+      // replacement is confirmed saved (writeEvent deletes it then), so nothing
+      // is lost if the app closes, the write fails, or the collector gives up.
+      if (!forceClose) { replacing = editOriginalRef.current; editOriginalRef.current = null }
+
+      const cur = sessionRef.current || session
+      const upd = { ...cur, totalEvents: (cur.totalEvents||0) + (replacing ? 0 : 1),
+        collectionStartWallMs: cur.collectionStartWallMs || collStartRef.current }
+      sessionRef.current = upd
+      setSession(upd); saveLocalSession(upd)
+      if (!replacing) {
+        updateDoc(doc(db,'mark_field_sessions',session.sessionId),
+          { totalEvents: upd.totalEvents, collectionStartWallMs: upd.collectionStartWallMs }).catch(()=>{})
+      }
+
+      if (!forceClose) {
+        editingRef.current = null; autoShotRef.current = false
+        setPendingEvent(null); setCaptureStep('idle')
+        setCollectedGroups([]); setCurrentSelections([]); setGroupChain([])
+        setPendingType(null); setPendingTypeSource(null); setResolvedVariant(null); setGroupIndex(0)
+        setPendingTeam(null); setPendingTeamSource(null); setAllowedPassTypes(null)
+      }
+    } catch (e) {
+      console.error('[MARK Field] commit (local part):', e)
+      releaseLock(token)
+      showToast(`Could not record the event: ${e?.message || e}`, 'error')
+      return
+    }
+
+    return writeEvent(ev, { token, replacing })
   }
 
   function abandonCapture() {
+    // Esc during an Edit puts the ORIGINAL back — it was only hidden, never deleted.
+    const orig = editOriginalRef.current
+    if (orig) {
+      editOriginalRef.current = null
+      setEvents(prev => prev.some(e => e.id === orig.id) ? prev : [...prev, orig].sort(byTime))
+    }
+    editingRef.current = null; autoShotRef.current = false
     setPendingEvent(null); setCaptureStep('idle')
     setCollectedGroups([]); setCurrentSelections([]); setGroupChain([])
     setPendingType(null); setPendingTypeSource(null); setResolvedVariant(null); setGroupIndex(0)
-    setPendingTeam(null); setPendingTeamSource(null)
+    setPendingTeam(null); setPendingTeamSource(null); setAllowedPassTypes(null)
   }
 
-  // ── Delete event ───────────────────────────────────────────────────────────
+  // ── Edit / delete event ────────────────────────────────────────────────────
   /**
    * Re-tag an existing event.
    *
@@ -817,12 +1126,17 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
    * onEdit={null}, so clicking it called null(tag) and died silently.
    *
    * Rather than build a second attribute editor that would drift from the
-   * capture state machine, this removes the event and replays capture for the
-   * same event type at the same video time. Every rule — variants, conditional
-   * groups, possession, open-state pairing — is the live one by construction.
+   * capture state machine, this replays capture for the same event type at the
+   * same video time. Every rule — variants, conditional groups, possession,
+   * open-state pairing — is the live one by construction.
+   *
+   * The original is only HIDDEN while the replay runs; it is deleted from
+   * Firestore after its replacement has been saved. Esc therefore costs nothing
+   * (the original reappears) where it used to lose a saved event.
    */
   async function editEvent(ev) {
     if (!ev) return
+    if (commitLockRef.current) { flashBusy(); return }
     if (captureStep !== 'idle') {
       console.warn('[MARK Field] edit ignored — capture in progress:', captureStep)
       setFlashEvent('Finish the current event first')
@@ -838,38 +1152,139 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
     const vt = ev.videoTimeSec != null ? Number(ev.videoTimeSec)
              : ev.video_time_ms != null ? Number(ev.video_time_ms) / 1000
              : 0
-    console.log('[MARK Field] edit:', {
-      eventId: ev.eventId, eventLabel: ev.eventLabel,
-      videoTimeSec: ev.videoTimeSec, video_time_ms: ev.video_time_ms,
-      resolvedVt: vt, defFound: !!def, captureStep,
-    })
-    await deleteEvent(ev)
+    // An event whose first write has not landed yet must land first, or the replay
+    // would be racing its own original.
+    const inflight = pendingWritesRef.current.get(ev.id)
+    if (inflight) { try { await Promise.race([inflight, new Promise(r => setTimeout(r, 3000))]) } catch {} }
+
+    editOriginalRef.current = ev
+    setEvents(prev => prev.filter(e => e.id !== ev.id))
+    eventsRef.current = eventsRef.current.filter(e => e.id !== ev.id)
 
     // park the video on the event so the collector sees what they are re-tagging
     const v = videoRef.current
-    if (v) { v.pause(); v.currentTime = vt }
+    if (v) { v.pause(); requestSeek(vt, false) }
 
     setFlashEvent(`Re-tagging ${def.label}`)
     setTimeout(() => setFlashEvent(null), 1400)
-    startCapture(def, vt)
+    startCapture(def, vt, undefined, { editing: ev })
   }
 
   async function deleteEvent(ev) {
     try {
-      const q=query(collection(db,'mark_collected_events'),where('id','==',ev.id))
-      const snap=await getDocs(q); snap.forEach(d=>deleteDoc(d.ref))
+      // A write that has not been confirmed would land AFTER the delete and bring
+      // the event back. Wait for it — but not forever when offline: then it is
+      // remembered, and removed the moment it does land.
+      const inflight = pendingWritesRef.current.get(ev.id)
+      if (inflight) {
+        const settled = await Promise.race([inflight.then(() => true, () => true), new Promise(r => setTimeout(() => r(false), 3000))])
+        if (!settled) deletedWhilePendingRef.current.add(ev.id)
+      }
+      await deleteEventDocs(ev.id)
       setEvents(prev=>prev.filter(e=>e.id!==ev.id))
-      const t=Math.max(0,(session?.totalEvents||1)-1)
-      const u={...session,totalEvents:t}; setSession(u); saveLocalSession(u)
+      const cur = sessionRef.current || session
+      const t=Math.max(0,(cur?.totalEvents||1)-1)
+      const u={...cur,totalEvents:t}; sessionRef.current=u; setSession(u); saveLocalSession(u)
       updateDoc(doc(db,'mark_field_sessions',session?.sessionId),{totalEvents:t}).catch(()=>{})
     } catch(e) { console.warn('[MARK Field] delete:',e) }
   }
+
+  // ── Clear all events ───────────────────────────────────────────────────────
+  // Deletes THIS session's events from Firestore and resets collection to a clean
+  // start. It keeps the video, match ID, part and method, and never touches
+  // anything already written to the Sheet (no Sheet call exists here).
+  async function clearAllEvents() {
+    if (clearing || commitLockRef.current) return
+    setClearing(true); setClearError('')
+    const token = ++lockTokenRef.current
+    commitLockRef.current = true; lockOwnerRef.current = token
+    try {
+      // Let in-flight writes settle first, or they would land after the delete.
+      await Promise.race([Promise.allSettled([...pendingWritesRef.current.values()]), new Promise(r => setTimeout(r, 8000))])
+      if (pendingWritesRef.current.size > 0)
+        throw new Error(`${pendingWritesRef.current.size} event(s) are still being saved — check the connection and try again.`)
+      const snap = await getDocs(query(collection(db, EVENTS_COL), where('sessionId', '==', session.sessionId)))
+      for (let i = 0; i < snap.docs.length; i += 400) {
+        const batch = writeBatch(db)
+        snap.docs.slice(i, i + 400).forEach(d => batch.delete(d.ref))
+        await batch.commit()
+      }
+      // Firestore is clear — now, and only now, local state.
+      abandonCapture()
+      setEvents([]); eventsRef.current = []
+      setOpenStates({}); openPairsRef.current = {}; eventSeqRef.current = 0
+      possessionRef.current = { team: null, certain: false }; setPossession({ team: null, certain: false })
+      hlKeyRef.current = ''; hlNearestRef.current = null; pastRef.current = 0
+      setHighlightIds([]); setHighlightNearest(null); setPastCount(0)
+      const cur = sessionRef.current || session
+      const upd = { ...cur, totalEvents: 0 }
+      sessionRef.current = upd; setSession(upd); saveLocalSession(upd)
+      updateDoc(doc(db, 'mark_field_sessions', session.sessionId), { totalEvents: 0 }).catch(() => {})
+      setShowClearModal(false)
+      setFlashEvent('All events cleared'); setTimeout(() => setFlashEvent(null), 1500)
+    } catch (e) {
+      console.error('[MARK Field] clear all:', e)
+      setClearError(e?.message || String(e))
+      // Some documents may have gone: show what Firestore really holds.
+      try {
+        const snap = await getDocs(query(collection(db, EVENTS_COL), where('sessionId', '==', session.sessionId)))
+        setEvents(snap.docs.map(d => ({ ...d.data() })).sort(byTime))
+      } catch {}
+    } finally {
+      releaseLock(token); setClearing(false)
+    }
+  }
+
+  // ── Done: confirm every event in the bar is really in Firestore ───────────
+  // The Sheet is written from the LOCAL list, and the bar now shows events before
+  // Firestore has confirmed them. This closes that gap: anything missing is
+  // re-saved (same id, so it cannot duplicate) and the Sheet save stays blocked
+  // until all of them are confirmed.
+  async function verifyEventsInFirestore() {
+    const total = eventsRef.current.length
+    setVerifyState({ status: 'checking', missing: 0, total })
+    try {
+      await Promise.race([Promise.allSettled([...pendingWritesRef.current.values()]), new Promise(r => setTimeout(r, 5000))])
+      let missing = [], repaired = false
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const snap = await getDocsFromServer(query(collection(db, EVENTS_COL), where('sessionId', '==', session.sessionId)))
+        const have = new Set(snap.docs.map(d => d.data().id))
+        missing = eventsRef.current.filter(e => !have.has(e.id))
+        if (!missing.length) break
+        repaired = true
+        await Promise.race([
+          Promise.allSettled(missing.map(e => { markStatus(e.id, 'pending'); return writeEvent(e) })),
+          new Promise(r => setTimeout(r, 10000)),
+        ])
+      }
+      if (missing.length) { setVerifyState({ status: 'blocked', missing: missing.length, total }); return false }
+      updateDoc(doc(db, 'mark_field_sessions', session.sessionId), { totalEvents: eventsRef.current.length }).catch(() => {})
+      setVerifyState({ status: repaired ? 'repaired' : 'ok', missing: 0, total: eventsRef.current.length })
+      return true
+    } catch (e) {
+      console.warn('[MARK Field] verify:', e)
+      setVerifyState({ status: 'offline', missing: 0, total, message: e?.message || String(e) })
+      return false
+    }
+  }
+  useEffect(() => {
+    if (!showDoneModal) { setVerifyState(null); return }
+    verifyEventsInFirestore()
+  }, [showDoneModal])
 
   // ── Keyboard handler ───────────────────────────────────────────────────────
   const SPEED_MIN=0.25, SPEED_MAX=2, SPEED_STEP=0.25
   useEffect(()=>{
     function onKey(e) {
       const key=e.key, shift=e.shiftKey, upper=key.toUpperCase()
+
+      // A held key never repeats an event, an answer or a confirm. Only seeking
+      // and speed may auto-repeat (a held arrow is how you scrub).
+      if (e.repeat && !(key==='ArrowLeft'||key==='ArrowRight'||key==='+'||key==='='||key==='-'||key==='_')) return
+
+      // Clear-all dialog open: nothing but Esc does anything. Enter is the key
+      // used constantly during collection and must NEVER confirm a wipe.
+      if (showClearModal) { if (key==='Escape') setShowClearModal(false); return }
 
       // ── Type confirm step ────────────────────────────────────────────────
       if (captureStep==='type_confirm') {
@@ -879,7 +1294,8 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
           const chain = pendingEvent.variants.variants.find(v=>v.when.includes(pendingType?.code))?.groups
             || pendingEvent.variants.variants.find(v=>v.when.includes('TYPE_OPEN_PLAY'))?.groups
             || pendingEvent.variants.variants[0].groups
-          setPendingTypeSource(pendingTypeSource==='inferred_default'?'inferred_default':'inferred')
+          // An Edit confirmed unchanged keeps the source it was saved with.
+          if (!editingRef.current) setPendingTypeSource(pendingTypeSource==='inferred_default'?'inferred_default':'inferred')
           setGroupChain(chain); setGroupIndex(0); setCurrentSelections([])
           if (chain.length>0) setCaptureStep('group')
           // team already chosen; nothing left to ask
@@ -887,7 +1303,7 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
           return
         }
         // Number/letter override
-        const opt = PASS_TYPE_OPTIONS.find(o=>o.toggleKey===upper||o.toggleKey===key)
+        const opt = PASS_TYPE_OPTIONS.find(o=>(o.toggleKey===upper||o.toggleKey===key) && (!allowedPassTypes || allowedPassTypes.includes(o.code)))
         if (opt) {
           setPendingType(opt); setPendingTypeSource('manual')
           const chain = pendingEvent.variants.variants.find(v=>v.when.includes(opt.code))?.groups
@@ -936,11 +1352,11 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
       // ── Team step ────────────────────────────────────────────────────────
       if (captureStep==='team') {
         if (key==='Escape') { abandonCapture(); return }
-        // H/A as specified; 1/2 kept as aliases for collectors used to them.
-        // No Enter-to-skip any more: team is REQUIRED on every event, so there
-        // is deliberately no path out of this step without choosing a side.
-        const side = (key==='h'||key==='H'||key==='1') ? 'home'
-                   : (key==='a'||key==='A'||key==='2') ? 'away' : null
+        // 1 = Home, 2 = Away, in both methods. Letters are NOT accepted: H and A
+        // are event hotkeys, and one meant for the next event must not become a
+        // team for this one. No Enter-to-skip: team is REQUIRED on every event, so
+        // there is deliberately no path out of this step without choosing a side.
+        const side = key==='1' ? 'home' : key==='2' ? 'away' : null
         if (!side) return
         chooseTeam(side)
         return
@@ -967,7 +1383,7 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
         e.preventDefault()
         const closeEventDef = EVENT_BY_ID[closePair.closeId]
         setActiveKey(upper); setTimeout(()=>setActiveKey(null),600)
-        startCapture(closeEventDef, videoRef.current?.currentTime||0)
+        startCapture(closeEventDef, getVideoTime())
         return
       }
 
@@ -982,11 +1398,11 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
         if (openStates['pressure_start']) {
           const closeEv = EVENT_BY_ID['pressure_end']
           setActiveKey(upper); setTimeout(()=>setActiveKey(null),600)
-          startCapture(closeEv, videoRef.current?.currentTime||0)
+          startCapture(closeEv, getVideoTime())
         } else {
           const openEv = EVENT_BY_ID['pressure_start']
           setActiveKey(upper); setTimeout(()=>setActiveKey(null),600)
-          startCapture(openEv, videoRef.current?.currentTime||0)
+          startCapture(openEv, getVideoTime())
         }
         return
       }
@@ -994,19 +1410,77 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
       // Normal event
       const eventDef = candidates[0]
       setActiveKey(upper); setTimeout(()=>setActiveKey(null),600)
-      startCapture(eventDef, videoRef.current?.currentTime||0)
+      startCapture(eventDef, getVideoTime())
     }
     window.addEventListener('keydown',onKey)
     return ()=>window.removeEventListener('keydown',onKey)
   }, [videoLoaded,showDoneModal,captureStep,groupIndex,groupChain,currentSelections,
-      collectedGroups,pendingEvent,pendingType,pendingTypeSource,openStates,session,videoPath,events])
+      collectedGroups,pendingEvent,pendingType,pendingTypeSource,openStates,session,videoPath,events,
+      pendingTeam,pendingTeamSource,allowedPassTypes,showClearModal])
+
+  // Playback clock: while playing, keep the display, the dimming and the highlight in
+  // step with the video — at most 10 times a second, and committing state only when
+  // something actually changed.
+  useEffect(() => {
+    if (!videoLoaded || !playing) return
+    let raf = 0
+    const loop = () => { syncDisplay(false); raf = requestAnimationFrame(loop) }
+    raf = requestAnimationFrame(loop)
+    return () => cancelAnimationFrame(raf)
+  }, [videoLoaded, playing])
+  // New, removed or re-tagged events change what sits under the playhead.
+  useEffect(() => { syncDisplay(true) }, [events])
+
+  // Edit: the shot-type question opens with the SAVED answer already selected.
+  const seededRef = useRef('')
+  useEffect(() => {
+    const ed = editingRef.current
+    if (captureStep !== 'group' || !ed || pendingEvent?.id !== 'shot') return
+    const g = groupChain[groupIndex]
+    if (!g || g.id !== 'outcome') return
+    const key = `${ed.id}:${groupIndex}`
+    if (seededRef.current === key) return
+    seededRef.current = key
+    const saved = ed.groups?.find(x => x.groupId === 'outcome')?.selections || []
+    const pre = getGroupOptions(g, [], [], { allEvents }).filter(o => saved.some(sv => sv.code === o.code))
+    if (pre.length) setCurrentSelections(pre)
+  }, [captureStep, groupIndex, groupChain, pendingEvent])
+
+  // Scrubbing: pause while the playhead is dragged, resume on release (only if it was
+  // playing), and ALWAYS clear the drag flag — on release and on cancel.
+  // The flag used to be set here and never cleared, so after the first scrub
+  // onTimeUpdate was ignored for the rest of the session.
+  function onScrubStart() {
+    isDraggingRef.current = true
+    const v = videoRef.current
+    wasPlayingRef.current = !!v && !v.paused
+    if (v && wasPlayingRef.current) v.pause()
+  }
+  function onScrubEnd() {
+    isDraggingRef.current = false
+    const v = videoRef.current
+    if (wasPlayingRef.current && v) {
+      if (seekTargetRef.current != null || v.seeking) resumeAfterSeekRef.current = true   // resume once it has landed
+      else { const pr = v.play(); pr && pr.catch && pr.catch(() => {}) }
+    }
+    wasPlayingRef.current = false
+    syncDisplay(true)
+  }
+
+  // Stable identities for the events bar, so it only re-renders when its own data changes.
+  const handlersRef = useRef({})
+  handlersRef.current = { edit: editEvent, del: deleteEvent, seek: seekTo, retry: retryOne }
+  const onEditStable   = useCallback(ev => handlersRef.current.edit(ev), [])
+  const onDeleteStable = useCallback(ev => handlersRef.current.del(ev), [])
+  const onSeekStable   = useCallback(t  => handlersRef.current.seek(t), [])
+  const onRetryStable  = useCallback(ev => handlersRef.current.retry(ev), [])
 
   // Mouse events from sidebar
   const mouseRef=useRef(null)
   mouseRef.current=(ev)=>{
     if (!videoLoaded||captureStep!=='idle') return
     const def=FIELD_EVENTS.find(e=>e.id===ev.id)
-    if (def) startCapture(def, videoRef.current?.currentTime||0)
+    if (def) startCapture(def, getVideoTime())
   }
   const onMouseEvent=useCallback((ev)=>mouseRef.current(ev),[])
 
@@ -1029,6 +1503,15 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
     setSaveMatchError('')
     setSubmitting(true)
     setSaveResult(null)
+
+    // The Sheet is written from the local list, so first make sure every event in
+    // it is really in Firestore (anything missing is re-saved).
+    if (!(await verifyEventsInFirestore())) {
+      setSaveResult({ status: 'failed',
+        message: 'Not every event is confirmed in Firestore yet, so nothing was written to the Sheet. Check the connection and retry — your events are safe locally.' })
+      setSubmitting(false)
+      return
+    }
 
     const endWall   = Date.now()
     const startWall = collStartRef.current
@@ -1163,8 +1646,18 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
     eventSeqRef.current = 0
     openPairsRef.current = {}
     collStartRef.current = null
+    commitLockRef.current = false; lockOwnerRef.current = 0; setSaveUi(null)
+    pendingWritesRef.current.clear(); editOriginalRef.current = null; editingRef.current = null
+    eventsRef.current = []; seekTargetRef.current = null
+    hlKeyRef.current = ''; hlNearestRef.current = null; pastRef.current = 0
+    setHighlightIds([]); setHighlightNearest(null); setPastCount(0); setVerifyState(null)
     if (videoRef.current) { videoRef.current.src = ''; videoRef.current.load() }
   }
+
+  // Not-yet-saved events, for the top-bar chip; and whether Done may write the Sheet.
+  const unsaved = events.filter(e => e._status === 'failed' || e._status === 'unconfirmed')
+  const anyFailed = unsaved.some(e => e._status === 'failed')
+  const verifyBlocks = !!verifyState && ['checking', 'blocked', 'offline'].includes(verifyState.status)
 
   // ── Current group for display ──────────────────────────────────────────────
   const currentGroup = captureStep==='group' ? groupChain[groupIndex] : null
@@ -1330,6 +1823,15 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
         <div style={{fontSize:11,color:'var(--t-3)'}}><span style={{color:'#30D158',fontWeight:700}}>{events.length}</span> collected</div>
         {flashEvent&&<div style={{fontSize:11,fontWeight:700,color:'#30D158',background:'rgba(48,209,88,0.15)',padding:'3px 10px',borderRadius:6}}>✓ {flashEvent}</div>}
         {flashError&&<div style={{fontSize:11,fontWeight:700,color:'#FF453A',background:'rgba(255,69,58,0.1)',padding:'3px 10px',borderRadius:6}}>{flashError}</div>}
+        {/* Saving: shown the moment a key is accepted, and honest when the network is slow */}
+        {saveUi&&<div data-testid="save-chip" style={{fontSize:11,fontWeight:700,color:saveUi.kind==='waiting'?'#FFD60A':'var(--p2)',background:saveUi.kind==='waiting'?'rgba(255,214,10,0.12)':'rgba(232,89,12,0.12)',padding:'3px 10px',borderRadius:6}}>{saveUi.kind==='waiting'?'Waiting for network…':'Saving…'}</div>}
+        {unsaved.length>0&&(
+          <button data-testid="unsaved-chip" onClick={retryUnsaved}
+            style={{fontSize:11,fontWeight:700,color:anyFailed?'#FF453A':'#FFD60A',background:anyFailed?'rgba(255,69,58,0.12)':'rgba(255,214,10,0.12)',
+              border:`1px solid ${anyFailed?'rgba(255,69,58,0.4)':'rgba(255,214,10,0.4)'}`,padding:'3px 10px',borderRadius:6,cursor:'pointer'}}>
+            {anyFailed?`⚠ ${unsaved.length} not saved — click to retry`:`Not confirmed - will retry (${unsaved.length})`}
+          </button>
+        )}
         {/* Model import — hidden once done, internal users only */}
         {isInternal && !isModelImportDone() && modelImportStatus !== 'done' && (
           <button
@@ -1350,7 +1852,12 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
             {modelImportStatus==='running'?modelImportMsg:modelImportStatus==='error'?`⚠ ${modelImportMsg}`:modelImportStatus==='done'?modelImportMsg:'Import Model Answers'}
           </button>
         )}
-        <button className="btn-orange" style={{padding:'6px 16px',fontSize:12}} onClick={()=>setShowDoneModal(true)}>Done</button>
+        <button data-testid="clear-all" disabled={events.length===0||!!saveUi||clearing}
+          onClick={()=>{ setClearError(''); setShowClearModal(true) }}
+          title="Delete every event in this session (the video, match and part are kept)"
+          style={{padding:'6px 12px',fontSize:12,background:'transparent',border:'1px solid rgba(255,69,58,0.4)',borderRadius:8,
+            color:'#FF453A',cursor:(events.length===0||saveUi||clearing)?'not-allowed':'pointer',opacity:(events.length===0||saveUi||clearing)?0.4:1}}>Clear all</button>
+        <button className="btn-orange" style={{padding:'6px 16px',fontSize:12}} onClick={()=>{ if(editOriginalRef.current) abandonCapture(); setShowDoneModal(true) }}>Done</button>
       </div>
 
       {/* ── Main ── */}
@@ -1361,10 +1868,19 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
         <div style={{flex:1,position:'relative',background:'#000',display:'flex',alignItems:'center',justifyContent:'center'}}>
           <video ref={videoRef}
             style={{width:'100%',height:'100%',objectFit:'contain',display:videoLoaded?'block':'none'}}
-            onTimeUpdate={e=>{if(!isDraggingRef.current)setCurrentTime(e.target.currentTime)}}
+            onTimeUpdate={()=>syncDisplay(false)}
+            onSeeked={()=>{
+              flushSeek()                       // a newer position was waiting for this one to land
+              syncDisplay(true)
+              const v=videoRef.current
+              if (resumeAfterSeekRef.current && seekTargetRef.current==null && v && !v.seeking) {
+                resumeAfterSeekRef.current=false
+                const pr=v.play(); pr && pr.catch && pr.catch(()=>{})
+              }
+            }}
             onLoadedMetadata={()=>{
             const dur = videoRef.current?.duration || 0
-            setDuration(dur)
+            setDuration(dur); syncDisplay(true)
             // Store video_duration_ms on session for video identity
             if (dur > 0 && session) {
               const durMs = Math.round(dur * 1000)
@@ -1408,7 +1924,7 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
               onClick={() => {
                 if (!videoLoaded || captureStep !== 'idle') return
                 const def = EVENT_BY_ID['unknown_pass_end']
-                if (def) startCapture(def, videoRef.current?.currentTime || 0)
+                if (def) startCapture(def, getVideoTime())
               }}
               style={{
                 display:'flex', alignItems:'center', justifyContent:'space-between',
@@ -1460,7 +1976,7 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
                   Pass type — Enter to confirm, letter to change
                 </div>
                 <div style={{display:'flex',flexWrap:'wrap',gap:6}}>
-                  {PASS_TYPE_OPTIONS.map(opt=>{
+                  {PASS_TYPE_OPTIONS.filter(o=>!allowedPassTypes||allowedPassTypes.includes(o.code)).map(opt=>{
                     const active=pendingType?.code===opt.code
                     return (
                       <div key={opt.code}
@@ -1542,7 +2058,7 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
             {captureStep==='team'&&(
               <>
                 <div style={{fontSize:9,fontWeight:800,color:'var(--t-3)',letterSpacing:1,marginBottom:8,textTransform:'uppercase'}}>
-                  Team — H Home · A Away · required
+                  Team — 1 Home · 2 Away · required
                 </div>
                 {/* No Skip. Team is required on every event, so there is no
                     button that saves without a side. ESC still cancels the
@@ -1570,12 +2086,42 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
         <ErrorTimeline errors={events} videoDuration={duration} videoRef={videoRef}
           currentTime={currentTime} playing={playing} muted={muted}
           onSeek={seekTo} onSyncSeek={seekTo} onTogglePlay={togglePlay} onToggleMute={toggleMute}
-          onDragStart={()=>{isDraggingRef.current=true}}/>
+          onDragStart={onScrubStart} onDragEnd={onScrubEnd}/>
       </div>
 
       {/* ── Events list ── */}
-      <TaggedEventsList tags={events} videoDuration={duration} currentTime={currentTime}
-        matchName="Home vs Away" onEdit={editEvent} onDelete={deleteEvent}/>
+      <TaggedEventsList tags={events} videoDuration={duration}
+        matchName="Home vs Away" onEdit={onEditStable} onDelete={onDeleteStable} onSeek={onSeekStable} onRetry={onRetryStable}
+        highlightIds={highlightIds} highlightNearestId={highlightNearest} pastCount={pastCount} neutralLane/>
+
+      {perfEnabled() && <PerfOverlay videoRef={videoRef} renderCountRef={renderCountRef} eventCount={events.length}/>}
+
+      {/* ── Clear all events — confirm with the MOUSE only ── */}
+      {showClearModal && (
+        <div data-testid="clear-modal" style={{position:'fixed',inset:0,zIndex:1100,background:'rgba(0,0,0,0.85)',backdropFilter:'blur(4px)',display:'flex',alignItems:'center',justifyContent:'center'}}>
+          <div className="card slide-up" style={{width:420,padding:26}}>
+            <div style={{fontFamily:'Inter',fontWeight:800,fontSize:17,color:'var(--t-1)',marginBottom:8}}>
+              Delete all {events.length} events from this session? This cannot be undone.
+            </div>
+            <div style={{fontSize:12,color:'var(--t-3)',marginBottom:18,lineHeight:1.5}}>
+              The video, match, part and method are kept. Anything already saved to the Sheet is not touched.
+            </div>
+            {clearError&&<div style={{fontSize:11,color:'#FF453A',background:'rgba(255,69,58,0.08)',padding:'8px 10px',borderRadius:8,marginBottom:12,wordBreak:'break-word'}}>{clearError}</div>}
+            <div style={{display:'flex',gap:10}}>
+              {/* Cancel has the focus, so an accidental Enter or Space lands on Cancel */}
+              <button autoFocus data-testid="clear-cancel" onClick={()=>setShowClearModal(false)}
+                style={{flex:1,padding:'10px 0',fontSize:13,background:'var(--bg-3)',border:'1px solid var(--b-1)',borderRadius:8,color:'var(--t-1)',cursor:'pointer'}}>Cancel</button>
+              {/* detail === 0 is a click synthesised by Enter/Space; a real mouse click has detail >= 1 */}
+              <button data-testid="clear-confirm" disabled={clearing}
+                onKeyDown={e=>{ if(e.key==='Enter'||e.key===' ') e.preventDefault() }}
+                onClick={e=>{ if(e.detail===0) return; clearAllEvents() }}
+                style={{flex:1,padding:'10px 0',fontSize:13,fontWeight:700,background:'rgba(255,69,58,0.15)',border:'1px solid rgba(255,69,58,0.5)',borderRadius:8,color:'#FF453A',cursor:clearing?'wait':'pointer'}}>
+                {clearing?'Deleting…':`Delete all ${events.length} events`}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ── Pending upload notification (shown on launch if previous save failed) ── */}
       {pendingUpload && !showDoneModal && (
@@ -1656,6 +2202,20 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
           backdropFilter:'blur(4px)',display:'flex',alignItems:'center',justifyContent:'center'}}>
           <div className="card slide-up" style={{width:460,padding:28,maxHeight:'90vh',overflowY:'auto'}}>
 
+            {/* Every event in the bar must be in Firestore before the Sheet is written */}
+            {verifyState && saveResult?.status !== 'success' && (
+              <div data-testid="verify-banner" data-status={verifyState.status} style={{
+                fontSize:11,lineHeight:1.5,padding:'8px 12px',borderRadius:8,marginBottom:14,
+                color: verifyState.status==='checking' ? 'var(--t-2)' : (verifyState.status==='ok'||verifyState.status==='repaired') ? '#30D158' : '#FF453A',
+                background: verifyState.status==='checking' ? 'var(--bg-3)' : (verifyState.status==='ok'||verifyState.status==='repaired') ? 'rgba(48,209,88,0.08)' : 'rgba(255,69,58,0.08)'}}>
+                {verifyState.status==='checking' && `Verifying that all ${verifyState.total} events are saved in Firestore…`}
+                {verifyState.status==='ok' && `✓ All ${verifyState.total} events confirmed in Firestore.`}
+                {verifyState.status==='repaired' && `✓ Some events were missing from Firestore and have been re-saved. All ${verifyState.total} are now confirmed.`}
+                {verifyState.status==='blocked' && <>✗ {verifyState.missing} of {verifyState.total} events are NOT in Firestore. Saving to the Sheet is blocked. <button onClick={verifyEventsInFirestore} style={{background:'none',border:'none',color:'var(--p2)',cursor:'pointer',textDecoration:'underline',fontSize:11}}>Retry</button></>}
+                {verifyState.status==='offline' && <>Can't reach Firestore, so {verifyState.total} events are not confirmed. The CSV export below still works. <button onClick={verifyEventsInFirestore} style={{background:'none',border:'none',color:'var(--p2)',cursor:'pointer',textDecoration:'underline',fontSize:11}}>Retry</button></>}
+              </div>
+            )}
+
             {/* ── Success state ── */}
             {saveResult?.status === 'success' ? (
               <>
@@ -1716,7 +2276,7 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
                 </div>
                 <div style={{display:'flex',flexDirection:'column',gap:8}}>
                   <button className="btn-orange" style={{padding:'10px 0',fontSize:13}}
-                    disabled={submitting} onClick={handleSaveToSheet}>
+                    disabled={submitting||verifyBlocks} onClick={handleSaveToSheet}>
                     {submitting ? 'Retrying…' : 'Retry Upload'}
                   </button>
                   <div style={{display:'flex',flexDirection:'column',gap:4}}>
@@ -1878,7 +2438,7 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
                     {csvDlState === 'error' && <div style={{fontSize:10,color:'#FF453A'}}>{csvDlError}</div>}
                   </div>
                   <button className="btn-orange" style={{flex:2,padding:'10px 0',fontSize:13}}
-                    disabled={submitting} onClick={handleSaveToSheet}>
+                    disabled={submitting||verifyBlocks} onClick={handleSaveToSheet}>
                     {submitting ? 'Saving…' : 'Save to Sheet'}
                   </button>
                 </div>
