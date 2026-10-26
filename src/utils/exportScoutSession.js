@@ -15,7 +15,7 @@ import { pressureShapeLabel } from './exportSession'
 import { uploadExportToDrive, retryDriveExport, explainDriveError } from './driveExport'
 
 // ── Name helpers ───────────────────────────────────────────────────────────
-const HALF_LABEL = { 1:'1st Half', 2:'2nd Half', '1':'1st Half', '2':'2nd Half', 'H1':'1st Half', 'H2':'2nd Half', 'EX1':'ET1', 'EX2':'ET2', 'ET1':'ET1', 'ET2':'ET2' }
+const HALF_LABEL = { '1':'1st Half', '2':'2nd Half', 'H1':'1st Half', 'H2':'2nd Half', 'EX1':'ET1', 'EX2':'ET2', 'ET1':'ET1', 'ET2':'ET2' }
 const halfLabel  = h => HALF_LABEL[h] || String(h || '1st Half')
 
 // Safe filename: keep spaces and hyphens, remove only truly invalid chars

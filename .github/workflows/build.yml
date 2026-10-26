@@ -13,21 +13,24 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 20
           cache: npm
 
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
+          # The action used to infer this from the ref name (@stable); a pinned SHA has no
+          # such name, so it has to be said explicitly.
+          toolchain: stable
           targets: x86_64-pc-windows-msvc
 
       - name: Cache Rust
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
           workspaces: './src-tauri -> target'
           cache-on-failure: true
@@ -67,14 +70,23 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
           New-Item -ItemType Directory -Force -Path src-tauri/binaries | Out-Null
-          Invoke-WebRequest -Uri "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip" -OutFile ffmpeg.zip
+          # Pinned to one dated BtbN autobuild and verified by SHA-256. It used to fetch the rolling
+          # "latest" zip, so the bundled ffmpeg could change between two builds of the same commit.
+          # This is the build that "latest" pointed to when v7.12.21 was built (2026-10-25 13:00 UTC).
+          # To upgrade: pick a new autobuild-* release, download its win64-gpl zip, and update both values.
+          $ffmpegUrl    = "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-10-25-13-00/ffmpeg-N-128094-g31855b2a70-win64-gpl.zip"
+          $ffmpegSha256 = "94810842a634c7742936dc2690d6b4957561a38b05f00c27f045e07131924acc"
+          Invoke-WebRequest -Uri $ffmpegUrl -OutFile ffmpeg.zip
+          $actual = (Get-FileHash ffmpeg.zip -Algorithm SHA256).Hash.ToLower()
+          if ($actual -ne $ffmpegSha256) { throw "ffmpeg.zip SHA-256 mismatch: expected $ffmpegSha256, got $actual" }
+          Write-Host "ffmpeg.zip verified ($actual)"
           Expand-Archive -Path ffmpeg.zip -DestinationPath ffmpeg_extract -Force
           $exe = Get-ChildItem -Path ffmpeg_extract -Recurse -Filter ffmpeg.exe | Select-Object -First 1
           Copy-Item $exe.FullName "src-tauri/binaries/ffmpeg.exe" -Force
           Write-Host "ffmpeg bundled: $((Get-Item 'src-tauri/binaries/ffmpeg.exe').Length) bytes"
 
       - name: Build Tauri app
-        uses: tauri-apps/tauri-action@v0
+        uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           MARK_GOOGLE_CLIENT_SECRET: ${{ secrets.MARK_GOOGLE_CLIENT_SECRET }}

@@ -167,3 +167,4 @@ ok(realTouch('mine') === 'complete' && realTouch('opponent') === 'incomplete', '
 console.log('   ' + (realTouch('mine') === 'complete' && realTouch('opponent') === 'incomplete' ? '✓ ' : '✗ ') + 'a real reception still completes a pass (same team) and not (other team) — unchanged')
 
 console.log('\n' + (fails === 0 ? 'ALL CHECKS PASS' : fails + ' FAILURE(S)'))
+if (fails > 0) process.exitCode = 1   // so `npm test` / CI can see a failure

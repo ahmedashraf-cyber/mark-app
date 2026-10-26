@@ -10,6 +10,7 @@ import { useSync } from '../hooks/useSync.js'
 import { formatHalf } from '../utils/half.js'
 import { loadRoster, saveIdentities, buildIdentityMap, formatPerson, formatPeople } from '../data/roster.js'
 import { SPEED_MIN, SPEED_MAX, SPEED_STEP } from '../data/shortcuts'
+import { SHEETS_API, getServiceToken, googleFetch } from '../services/google'
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 const fmt = (s) => {
@@ -2125,10 +2126,10 @@ export default function AuditPage({ session, onBack, onFullReport, initialResult
     async function checkSheetForExistingSession() {
       setCheckingSheet(true)
       try {
-        const token = await invoke('get_google_access_token_cmd')
-        const auth  = { headers: { Authorization: `Bearer ${token}` } }
-        const url = `https://sheets.googleapis.com/v4/spreadsheets/${COLLECTOR_SHEET_ID}/values/Sessions!A2:Z`
-        const res  = await fetch(url, auth)
+        const token = await getServiceToken()
+        const auth  = { token }
+        const url = `${SHEETS_API}/${COLLECTOR_SHEET_ID}/values/Sessions!A2:Z`
+        const res  = await googleFetch(url, auth)
         const data = await res.json()
         if (data.error) throw new Error(data.error.message)
         const rows = data.values || []
@@ -2156,8 +2157,8 @@ export default function AuditPage({ session, onBack, onFullReport, initialResult
         const sessionId = latest[SES_SESSION_ID] || ''
         let amendments = []
         try {
-          const evtUrl = `https://sheets.googleapis.com/v4/spreadsheets/${COLLECTOR_SHEET_ID}/values/Events!A2:K`
-          const evtRes  = await fetch(evtUrl, auth)
+          const evtUrl = `${SHEETS_API}/${COLLECTOR_SHEET_ID}/values/Events!A2:K`
+          const evtRes  = await googleFetch(evtUrl, auth)
           const evtData = await evtRes.json()
           amendments = (evtData.values || []).filter(r => (r[1]||'') === sessionId)
         } catch(e) { console.warn('[MARK] Events tab load failed:', e.message) }

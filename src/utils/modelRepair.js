@@ -13,17 +13,17 @@
  * Writes only is_model, model_version and model_status. Nothing else on the
  * row, and no other tab, is touched.
  */
-import { invoke } from '@tauri-apps/api/core'
 import { collection, query, where, getDocs } from 'firebase/firestore'
 import { db } from '../firebase/config'
 import { FIELD_SHEET_ID, FIELD_TAB_SESSIONS } from '../config/fieldConfig'
 import { toSheetHalf } from './fieldSheetSync'
+import { SHEETS_API, getServiceToken, googleFetch } from '../services/google'
 
-const BASE = 'https://sheets.googleapis.com/v4/spreadsheets'
+const BASE = SHEETS_API
 const norm = v => String(v ?? '').trim()
 
 async function token() {
-  const t = await invoke('get_google_access_token_cmd')
+  const t = await getServiceToken()
   if (!t) throw new Error('Google auth unavailable')
   return t
 }
@@ -32,8 +32,8 @@ const colLetter = i => i < 26 ? String.fromCharCode(65 + i)
   : String.fromCharCode(64 + Math.floor(i / 26)) + String.fromCharCode(65 + (i % 26))
 
 async function readSessions() {
-  const res = await fetch(`${BASE}/${FIELD_SHEET_ID}/values/${encodeURIComponent(FIELD_TAB_SESSIONS + '!A:ZZ')}`,
-    { headers: { Authorization: `Bearer ${await token()}` } })
+  const res = await googleFetch(`${BASE}/${FIELD_SHEET_ID}/values/${encodeURIComponent(FIELD_TAB_SESSIONS + '!A:ZZ')}`,
+    { token: await token() })
   if (!res.ok) throw new Error(`Could not read ${FIELD_TAB_SESSIONS} (${res.status})`)
   const values = (await res.json()).values || []
   const header = (values[0] || []).map(norm)
@@ -103,9 +103,9 @@ export async function applyRepair(plan) {
     data.push({ range: `${FIELD_TAB_SESSIONS}!${colLetter(idx('half'))}${f.rowNumber}`, values: [[f.to]] })
   })
   if (data.length) {
-    const res = await fetch(`${BASE}/${FIELD_SHEET_ID}/values:batchUpdate`, {
+    const res = await googleFetch(`${BASE}/${FIELD_SHEET_ID}/values:batchUpdate`, {
       method: 'POST',
-      headers: { Authorization: `Bearer ${await token()}`, 'Content-Type': 'application/json' },
+      token: await token(), headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ valueInputOption: 'RAW', data }),
     })
     if (!res.ok) throw new Error(`Repair write failed (${res.status}): ${await res.text()}`)

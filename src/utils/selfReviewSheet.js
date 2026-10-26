@@ -10,13 +10,13 @@
  * Does not touch Scout, Audit, FIELD, Drill, Comparison, or Insights.
  */
 
-import { invoke } from '@tauri-apps/api/core'
+import { DRIVE_API, SHEETS_API, getServiceToken, googleFetch } from '../services/google'
 
 const SAMPLED_SHEET_ID = '1XGVp4o7xu8mwPkhEamz-d1aiWYCkkhR-ffTlVQCcsrM'
 const SAMPLED_TAB      = 'Sampled Halves'
 const SAVE_TAB         = 'Collector Self Review'
-const BASE             = 'https://sheets.googleapis.com/v4/spreadsheets'
-const DRIVE_BASE       = 'https://www.googleapis.com/drive/v3/files'
+const BASE             = SHEETS_API
+const DRIVE_BASE       = DRIVE_API
 
 // The authoritative 19-column header (v7.12.9+).
 // Columns 18-19 (wrong_event, collector_event) were appended in v7.12.9.
@@ -40,23 +40,21 @@ const HALF_FROM_NUM = { '1':'1H', '2':'2H', '3':'ET1', '4':'ET2' }
 
 // ── SA token ─────────────────────────────────────────────────────────────────
 async function saToken() {
-  return invoke('get_google_access_token_cmd')
-}
-function authHdr(tok) {
-  return { Authorization: `Bearer ${tok}` }
+  return getServiceToken()
 }
 
 // ── Generic fetch helpers ─────────────────────────────────────────────────────
 async function sheetGet(url, tok) {
-  const res = await fetch(url, { headers: authHdr(tok) })
+  const res = await googleFetch(url, { token: tok })
   const data = await res.json()
   if (!res.ok) throw new Error(data?.error?.message || `HTTP ${res.status}`)
   return data
 }
 async function sheetPost(url, tok, body) {
-  const res = await fetch(url, {
+  const res = await googleFetch(url, {
     method: 'POST',
-    headers: { ...authHdr(tok), 'Content-Type': 'application/json' },
+    token: tok,
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   })
   const data = await res.json()
@@ -91,7 +89,7 @@ function cellUri(cell) {
 async function sheetIdFromFolder(folderId, tok) {
   const q   = encodeURIComponent(`'${folderId}' in parents and trashed=false and mimeType='application/vnd.google-apps.spreadsheet'`)
   const url = `${DRIVE_BASE}?q=${q}&fields=files(id,name,modifiedTime)&orderBy=modifiedTime+desc&supportsAllDrives=true&includeItemsFromAllDrives=true`
-  const res = await fetch(url, { headers: authHdr(tok) })
+  const res = await googleFetch(url, { token: tok })
   const data = await res.json()
   if (!res.ok) throw new Error(`Drive folder listing failed: ${data?.error?.message || `HTTP ${res.status}`}`)
   const files = data.files || []

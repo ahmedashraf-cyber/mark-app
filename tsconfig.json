@@ -1,0 +1,21 @@
+{
+  // Type checking for a JavaScript codebase (checkJs). Deliberately NOT strict: the first honest
+  // measurement was 8,708 errors under strict and 145 under this configuration. The remaining
+  // errors are recorded in typecheck-baseline.json and may only shrink (see scripts/typecheck.mjs).
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "allowJs": true,
+    "checkJs": true,
+    "noEmit": true,
+    "jsx": "react-jsx",
+    "strict": false,
+    "noImplicitAny": false,
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
+    "types": ["react", "react-dom"]
+  },
+  "include": ["src"],
+  "exclude": ["src/utils/modelImportData.js", "src/data", "src/test", "src/**/*.test.js", "src/**/*.test.jsx"]
+}

@@ -17,15 +17,15 @@
  * model_changes log is the only record of what the previous answer contained,
  * which is why it stores old and new values per change rather than just a count.
  */
-import { invoke } from '@tauri-apps/api/core'
 import {
   FIELD_SHEET_ID, SESSION_COLUMNS, EVENT_COLUMNS,
   FIELD_TAB_SESSIONS, FIELD_TAB_EVENTS, EVENT_BY_CODE,
 } from '../config/fieldConfig'
 import { msToReadable } from './fieldSheetSync'
 import { OPEN_STATE_PAIRS } from './fieldExtras'
+import { SHEETS_API, getServiceToken, googleFetch } from '../services/google'
 
-const BASE = 'https://sheets.googleapis.com/v4/spreadsheets'
+const BASE = SHEETS_API
 export const CHANGES_TAB = 'model_changes'
 export const CHANGES_HEADER = [
   'timestamp_iso', 'changed_by', 'match_id', 'half', 'session_id',
@@ -36,14 +36,14 @@ export const CHANGES_HEADER = [
 const norm = v => String(v ?? '').trim()
 
 async function token() {
-  const t = await invoke('get_google_access_token_cmd')
+  const t = await getServiceToken()
   if (!t) throw new Error('Google auth unavailable')
   return t
 }
 
 async function readTab(tab, range = 'A:ZZ') {
-  const res = await fetch(`${BASE}/${FIELD_SHEET_ID}/values/${encodeURIComponent(tab + '!' + range)}`,
-    { headers: { Authorization: `Bearer ${await token()}` } })
+  const res = await googleFetch(`${BASE}/${FIELD_SHEET_ID}/values/${encodeURIComponent(tab + '!' + range)}`,
+    { token: await token() })
   if (!res.ok) throw new Error(`Could not read ${tab} (${res.status})`)
   return (await res.json()).values || []
 }
@@ -169,26 +169,26 @@ export function deriveEventFields(events) {
 async function appendRows(tab, values) {
   const url = `${BASE}/${FIELD_SHEET_ID}/values/${encodeURIComponent(tab + '!A:A')}`
     + ':append?valueInputOption=RAW&insertDataOption=INSERT_ROWS'
-  const res = await fetch(url, {
+  const res = await googleFetch(url, {
     method: 'POST',
-    headers: { Authorization: `Bearer ${await token()}`, 'Content-Type': 'application/json' },
+    token: await token(), headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ values }),
   })
   if (!res.ok) throw new Error(`Append to ${tab} failed (${res.status}): ${await res.text()}`)
 }
 
 async function writeCell(tab, cell, value) {
-  const res = await fetch(`${BASE}/${FIELD_SHEET_ID}/values/${encodeURIComponent(tab + '!' + cell)}?valueInputOption=RAW`,
+  const res = await googleFetch(`${BASE}/${FIELD_SHEET_ID}/values/${encodeURIComponent(tab + '!' + cell)}?valueInputOption=RAW`,
     { method: 'PUT',
-      headers: { Authorization: `Bearer ${await token()}`, 'Content-Type': 'application/json' },
+      token: await token(), headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ values: [[String(value)]] }) })
   if (!res.ok) throw new Error(`Write ${cell} failed (${res.status})`)
 }
 
 /** Numeric sheet id of a tab, needed by deleteDimension. */
 async function sheetIdOf(tab) {
-  const res = await fetch(`${BASE}/${FIELD_SHEET_ID}?fields=sheets.properties`,
-    { headers: { Authorization: `Bearer ${await token()}` } })
+  const res = await googleFetch(`${BASE}/${FIELD_SHEET_ID}?fields=sheets.properties`,
+    { token: await token() })
   if (!res.ok) throw new Error(`Could not list tabs (${res.status})`)
   const found = ((await res.json()).sheets || [])
     .find(s => s.properties.title === tab)
@@ -216,9 +216,9 @@ async function deleteEventRows(sessionId) {
     deleteDimension: { range: { sheetId: gid, dimension: 'ROWS',
       startIndex: n - 1, endIndex: n } },
   }))
-  const res = await fetch(`${BASE}/${FIELD_SHEET_ID}:batchUpdate`, {
+  const res = await googleFetch(`${BASE}/${FIELD_SHEET_ID}:batchUpdate`, {
     method: 'POST',
-    headers: { Authorization: `Bearer ${await token()}`, 'Content-Type': 'application/json' },
+    token: await token(), headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ requests }),
   })
   if (!res.ok) throw new Error(`Deleting old event rows failed (${res.status}): ${await res.text()}`)
@@ -286,14 +286,14 @@ export async function saveModelAnswer({ model, events, changes, changedBy, onPro
 }
 
 async function ensureChangesTab() {
-  const res = await fetch(`${BASE}/${FIELD_SHEET_ID}?fields=sheets.properties.title`,
-    { headers: { Authorization: `Bearer ${await token()}` } })
+  const res = await googleFetch(`${BASE}/${FIELD_SHEET_ID}?fields=sheets.properties.title`,
+    { token: await token() })
   if (!res.ok) throw new Error(`Could not list tabs (${res.status})`)
   const titles = ((await res.json()).sheets || []).map(s => s.properties.title)
   if (titles.includes(CHANGES_TAB)) return
-  const mk = await fetch(`${BASE}/${FIELD_SHEET_ID}:batchUpdate`, {
+  const mk = await googleFetch(`${BASE}/${FIELD_SHEET_ID}:batchUpdate`, {
     method: 'POST',
-    headers: { Authorization: `Bearer ${await token()}`, 'Content-Type': 'application/json' },
+    token: await token(), headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ requests: [{ addSheet: { properties: { title: CHANGES_TAB } } }] }),
   })
   if (!mk.ok) throw new Error(`Could not create ${CHANGES_TAB} (${mk.status})`)

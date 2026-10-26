@@ -97,19 +97,12 @@ export default function LoginPage() {
       // resolveRole() in sheetRole.js had the rule but only the EMAIL path
       // called it, so nothing enforced it here.
       const allowed = user.hasRoleColumn && canUseHrCodeLogin(user.role)
-      console.log('[MARK login] HR-code', user.hrCode,
-        '| found in tab:', user.tab,
-        '| role column:', user.hasRoleColumn ? 'yes' : 'no (Trainers tab)',
-        '| role from sheet:', JSON.stringify(user.role),
-        '| status:', JSON.stringify(user.status),
-        '| decision:', allowed ? 'ACCEPT (collector)' : 'REJECT — not a collector role')
       if (!allowed) {
         throw new Error('Please sign in with your email and password.')
       }
 
       const statusLower = (user.status || '').toLowerCase()
       if (['inactive','removed','disabled','no','false','0'].includes(statusLower)) {
-        console.log('[MARK login] REJECT — status is', user.status)
         throw new Error('Your access has been removed. Contact your Batch Manager.')
       }
 

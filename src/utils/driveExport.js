@@ -22,6 +22,8 @@
  * the files that did not land, then the readability check again. It never starts over.
  */
 
+import { SHEETS_API, USERINFO_API, getServiceToken, googleFetch } from '../services/google'
+
 /** The shared master folder for Scout Done and Audit exports. */
 export const MASTER_FOLDER_ID = '1TeuEJqnKiGrCmZZfpfOKFMzwa3KBxO0A'
 
@@ -97,9 +99,8 @@ export async function serviceAccountCanRead(fileId, { attempts = 3, delayMs = 15
   let status = 0, detail = ''
   for (let i = 0; i < attempts; i++) {
     try {
-      const token = await invoke('get_google_access_token_cmd')
-      const r = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${fileId}/values/A1:Z5`,
-        { headers: { Authorization: `Bearer ${token}` } })
+      const token = await getServiceToken(invoke)
+      const r = await googleFetch(`${SHEETS_API}/${fileId}/values/A1:Z5`, { token })
       status = r.status
       if (r.status === 200) return { ok: true, status }
       detail = (await r.text().catch(() => '')).slice(0, 200)
@@ -136,7 +137,7 @@ export async function ensureRootShared({ invoke, accessToken, rootId, force = fa
 
 /** The folder cache is kept per Google account, so signing in as someone else never reuses another account's folder. */
 async function rootCacheKey(invoke, accessToken) {
-  try { const r = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', { headers: { Authorization: `Bearer ${accessToken}` } }); const j = await r.json(); return ROOT_KEY(j.email) } catch { return ROOT_KEY('') }
+  try { const r = await googleFetch(USERINFO_API, { token: accessToken }); const j = await r.json(); return ROOT_KEY(j.email) } catch { return ROOT_KEY('') }
 }
 /** The cached id of this reviewer's MARK Reviews folder (or null), and how to store a new one. */
 export async function rootCache(invoke, accessToken) {

@@ -10,26 +10,26 @@
  *
  * FIELD only. Scout and Audit untouched.
  */
-import { invoke } from '@tauri-apps/api/core'
 import {
   FIELD_SHEET_ID, FIELD_TAB_SESSIONS, FIELD_TAB_EVENTS,
   SESSION_COLUMNS, EVENT_COLUMNS,
 } from '../config/fieldConfig'
 import { MODEL_SESSION_ROWS, MODEL_EVENT_ROWS } from './modelImportData'
+import { SHEETS_API, getServiceToken, googleFetch } from '../services/google'
 
-const SHEETS_BASE = 'https://sheets.googleapis.com/v4/spreadsheets'
+const SHEETS_BASE = SHEETS_API
 const IMPORT_DONE_KEY = 'mark_field_model_imported'
 
 async function getToken() {
-  const token = await invoke('get_google_access_token_cmd')
+  const token = await getServiceToken()
   if (!token) throw new Error('Google auth required. Please sign in first.')
   return token
 }
 
 async function readHeader(token, tab) {
   const range = encodeURIComponent(`${tab}!1:1`)
-  const res = await fetch(`${SHEETS_BASE}/${FIELD_SHEET_ID}/values/${range}`,
-    { headers: { Authorization: `Bearer ${token}` } })
+  const res = await googleFetch(`${SHEETS_BASE}/${FIELD_SHEET_ID}/values/${range}`,
+    { token: token })
   if (!res.ok) throw new Error(`Read header failed (${res.status})`)
   return (await res.json()).values?.[0] || []
 }
@@ -37,9 +37,9 @@ async function readHeader(token, tab) {
 async function appendRows(token, tab, values) {
   const range = encodeURIComponent(`${tab}!A:A`)
   const url = `${SHEETS_BASE}/${FIELD_SHEET_ID}/values/${range}:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS`
-  const res = await fetch(url, {
+  const res = await googleFetch(url, {
     method: 'POST',
-    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    token: token, headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ values }),
   })
   if (!res.ok) {
@@ -68,8 +68,8 @@ async function validateOrWriteHeader(token, tab, expected) {
 
 async function getExistingSessionIds(token) {
   const range = encodeURIComponent(`${FIELD_TAB_SESSIONS}!B:B`)
-  const res = await fetch(`${SHEETS_BASE}/${FIELD_SHEET_ID}/values/${range}`,
-    { headers: { Authorization: `Bearer ${token}` } })
+  const res = await googleFetch(`${SHEETS_BASE}/${FIELD_SHEET_ID}/values/${range}`,
+    { token: token })
   if (!res.ok) return new Set()
   const vals = (await res.json()).values || []
   return new Set(vals.slice(1).map(r => r[0]).filter(Boolean))

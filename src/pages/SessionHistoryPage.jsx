@@ -33,6 +33,7 @@ import { showToast } from '../utils/toast'
 import { EXTRAS, GK_EXTRAS, GK_WRONG_EXTRAS } from '../components/TagPanel'
 import { SPEED_MIN, SPEED_MAX, SPEED_STEP } from '../data/shortcuts'
 import { formatHalf } from '../utils/half.js'
+import { SHEETS_API, getServiceToken, googleFetch } from '../services/google'
 
 // ── Collector Results Sheet — read audit sessions from here ───────
 const COLLECTOR_SHEET_ID  = '1-XbJFxAhR2QYxOQHdwIUVp-XSqol-3VJdHVhSoSkPmw'
@@ -48,9 +49,9 @@ const SES = {
 
 async function loadAuditSessionsFromSheet(reviewerEmail) {
   try {
-    const token = await invoke('get_google_access_token_cmd')
-    const url = `https://sheets.googleapis.com/v4/spreadsheets/${COLLECTOR_SHEET_ID}/values/Sessions!A2:Z`
-    const res  = await fetch(url, { headers: { Authorization: `Bearer ${token}` } })
+    const token = await getServiceToken()
+    const url = `${SHEETS_API}/${COLLECTOR_SHEET_ID}/values/Sessions!A2:Z`
+    const res  = await googleFetch(url, { token })
     const data = await res.json()
     if (data.error) throw new Error(data.error.message)
     const rows = data.values || []
@@ -968,11 +969,12 @@ async function backfillDefectTypeScores(scoutList) {
 
 // ------ Main Page ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 export default function SessionHistoryPage({ onBack, initialSession }) {
-  const { profile } = useAuth()
+  const { profile, caps: authCaps, role: authRole } = useAuth()
   const [sessions,      setSessions]      = useState([])
   const [allSessions,   setAllSessions]   = useState([])
   const [loading,       setLoading]       = useState(true)
-  const isAdmin = useAuth()?.caps?.admin || useAdmin(profile, useAuth()?.role)
+  const adminByRole = useAdmin(profile, authRole)   // a plain function (no React hooks inside); called every render on purpose
+  const isAdmin = authCaps?.admin || adminByRole
   const [adminMode,     setAdminMode]     = useState(isAdmin)  // admin sees all sessions by default
   const [activeSession, setActiveSession] = useState(null)
   // The Google Sheets export reports failure in a BLOCKING dialog (never an alert), because
