@@ -9,7 +9,10 @@ edition = "2021"
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = ["devtools"] }
+# "protocol-asset" is required by app.security.assetProtocol in tauri.conf.json. `tauri build` adds it to this
+# line itself on every build; declaring it here makes plain `cargo test` / `cargo check` work too,
+# with exactly the same resulting feature set.
+tauri = { version = "2", features = ["protocol-asset", "devtools"] }
 brotli-decompressor = "=5.0.1"
 alloc-stdlib = "=0.2.2"
 rfd = "0.15"
