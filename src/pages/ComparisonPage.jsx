@@ -26,11 +26,12 @@ import { writeComparisonResults, findExistingRun } from '../utils/comparisonShee
 import { FIELD_SHEET_ID } from '../config/fieldConfig'
 import { CURRENT_VERSION } from '../hooks/useUpdateCheck'
 import { msToReadable } from '../utils/fieldSheetSync'
+import { SHEETS_API, getServiceToken } from '../services/google'
 
-const SHEETS_BASE = `https://sheets.googleapis.com/v4/spreadsheets/${FIELD_SHEET_ID}`
+const SHEETS_BASE = `${SHEETS_API}/${FIELD_SHEET_ID}`
 
 async function getToken() {
-  const token = await invoke('get_google_access_token_cmd')
+  const token = await getServiceToken()
   if (!token) throw new Error('Google auth required.')
   return token
 }
