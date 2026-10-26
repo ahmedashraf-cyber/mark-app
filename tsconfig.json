@@ -17,5 +17,5 @@
     "types": ["react", "react-dom"]
   },
   "include": ["src"],
-  "exclude": ["src/utils/modelImportData.js", "src/data"]
+  "exclude": ["src/utils/modelImportData.js", "src/data", "src/test", "src/**/*.test.js", "src/**/*.test.jsx"]
 }
