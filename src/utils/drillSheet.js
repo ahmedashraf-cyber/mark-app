@@ -20,20 +20,20 @@
  * sees their score even when the sheet write fails. Firestore is written first
  * and is the recovery source.
  */
-import { invoke } from '@tauri-apps/api/core'
 import { db } from '../firebase/config'
 import { doc, getDoc, setDoc } from 'firebase/firestore'
 import {
   DRILL_CONFIG_DOC, DRILL_TABS, DRILL_SHEET_ID_DEFAULT,
 } from '../config/drillConfig'
+import { SHEETS_API, getServiceToken, googleFetch } from '../services/google'
 
-const SHEETS_BASE = 'https://sheets.googleapis.com/v4/spreadsheets'
+const SHEETS_BASE = SHEETS_API
 const QUEUE_KEY   = 'mark_drill_write_queue'
 
 let _sheetId = null   // in-memory cache for the session
 
 async function token() {
-  const t = await invoke('get_google_access_token_cmd')
+  const t = await getServiceToken()
   if (!t) throw new Error('Google auth unavailable')
   return t
 }
@@ -87,9 +87,9 @@ export function parseSpreadsheetId(input) {
 /** Can the service account actually reach it? Returns the title on success. */
 export async function verifySheetAccess(spreadsheetId) {
   const t = await token()
-  const res = await fetch(
+  const res = await googleFetch(
     `${SHEETS_BASE}/${spreadsheetId}?fields=properties.title,sheets.properties`,
-    { headers: { Authorization: `Bearer ${t}` } })
+    { token: t })
   if (res.status === 404) {
     throw new Error('Not found. Check the link, and that it is shared with ' +
       'mark-reporter@mark-app-498618.iam.gserviceaccount.com')
@@ -119,9 +119,9 @@ export async function setupDrillSheet(input) {
 
   const missing = DRILL_TABS.filter(tab => !existingTabs.includes(tab.name))
   if (missing.length) {
-    const res = await fetch(`${SHEETS_BASE}/${id}:batchUpdate`, {
+    const res = await googleFetch(`${SHEETS_BASE}/${id}:batchUpdate`, {
       method: 'POST',
-      headers: { Authorization: `Bearer ${t}`, 'Content-Type': 'application/json' },
+      token: t, headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         requests: missing.map(tab => ({ addSheet: { properties: { title: tab.name } } })),
       }),
@@ -134,9 +134,9 @@ export async function setupDrillSheet(input) {
 
   // headers only on tabs that were missing — never overwrite a populated tab
   if (missing.length) {
-    const hdrRes = await fetch(`${SHEETS_BASE}/${id}/values:batchUpdate`, {
+    const hdrRes = await googleFetch(`${SHEETS_BASE}/${id}/values:batchUpdate`, {
       method: 'POST',
-      headers: { Authorization: `Bearer ${t}`, 'Content-Type': 'application/json' },
+      token: t, headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         valueInputOption: 'RAW',
         data: missing.map(tab => ({ range: `${tab.name}!A1`, values: [tab.columns] })),
@@ -167,9 +167,9 @@ export async function syncHeaders() {
   const id = await getDrillSheetId()
   if (!id) throw new Error('No DRILL spreadsheet configured')
   const t = await token()
-  const res = await fetch(`${SHEETS_BASE}/${id}/values:batchUpdate`, {
+  const res = await googleFetch(`${SHEETS_BASE}/${id}/values:batchUpdate`, {
     method: 'POST',
-    headers: { Authorization: `Bearer ${t}`, 'Content-Type': 'application/json' },
+    token: t, headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       valueInputOption: 'RAW',
       data: DRILL_TABS.map(tab => ({ range: `${tab.name}!A1`, values: [tab.columns] })),
@@ -195,9 +195,9 @@ export async function readTab(tabName, { sheetId } = {}) {
   const id = sheetId || await getDrillSheetId()
   if (!id) return []
   const t = await token()
-  const res = await fetch(
+  const res = await googleFetch(
     `${SHEETS_BASE}/${id}/values/${encodeURIComponent(tabName + '!A:ZZ')}`,
-    { headers: { Authorization: `Bearer ${t}` } })
+    { token: t })
   if (!res.ok) throw new Error(`Reading ${tabName} failed (${res.status})`)
   const rows = (await res.json()).values || []
   if (rows.length < 2) return []
@@ -212,8 +212,8 @@ export async function readTabs(tabNames) {
   if (!id) return Object.fromEntries(tabNames.map(n => [n, []]))
   const t = await token()
   const qs = tabNames.map(n => `ranges=${encodeURIComponent(n + '!A:ZZ')}`).join('&')
-  const res = await fetch(`${SHEETS_BASE}/${id}/values:batchGet?${qs}`,
-    { headers: { Authorization: `Bearer ${t}` } })
+  const res = await googleFetch(`${SHEETS_BASE}/${id}/values:batchGet?${qs}`,
+    { token: t })
   if (!res.ok) throw new Error(`Batch read failed (${res.status})`)
   const ranges = (await res.json()).valueRanges || []
   const out = {}
@@ -254,9 +254,9 @@ export async function appendRows(tabName, objects, columns, { sheetId } = {}) {
     const chunk = rows.slice(i, i + 500)
     const url = `${SHEETS_BASE}/${id}/values/${encodeURIComponent(tabName + '!A:A')}`
       + ':append?valueInputOption=RAW&insertDataOption=INSERT_ROWS'
-    const res = await fetch(url, {
+    const res = await googleFetch(url, {
       method: 'POST',
-      headers: { Authorization: `Bearer ${t}`, 'Content-Type': 'application/json' },
+      token: t, headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ values: chunk }),
     })
     if (!res.ok) {
@@ -279,9 +279,9 @@ export async function replaceTabRows(tabName, columns, allObjects, { sheetId } =
   const t = await token()
 
   // clear everything below the header
-  const clearRes = await fetch(
+  const clearRes = await googleFetch(
     `${SHEETS_BASE}/${id}/values/${encodeURIComponent(tabName + '!A2:ZZ')}:clear`,
-    { method: 'POST', headers: { Authorization: `Bearer ${t}` } })
+    { method: 'POST', token: t })
   if (!clearRes.ok) throw new Error(`Clearing ${tabName} failed (${clearRes.status})`)
 
   if (!allObjects.length) return 0

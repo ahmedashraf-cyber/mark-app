@@ -9,11 +9,11 @@
  *
  * Read-only. Nothing here writes anywhere.
  */
-import { invoke } from '@tauri-apps/api/core'
 import { FIELD_SHEET_ID } from '../config/fieldConfig'
 import { TAB_COMPARISON_DETAIL } from '../config/comparisonConfig'
+import { SHEETS_API, getServiceToken, googleFetch } from '../services/google'
 
-const BASE = 'https://sheets.googleapis.com/v4/spreadsheets'
+const BASE = SHEETS_API
 const norm = v => String(v ?? '').trim()
 
 /** "1H", "1", "1h" all mean the first half — rows from different runs may differ. */
@@ -51,11 +51,11 @@ export function sessionDateFromId(id) {
  * session_id — every comparison_detail row would be dropped.
  */
 export async function readComparisonDetail() {
-  const token = await invoke('get_google_access_token_cmd')
+  const token = await getServiceToken()
   if (!token) throw new Error('Google auth unavailable')
   const range = encodeURIComponent(`${TAB_COMPARISON_DETAIL}!A:ZZ`)
-  const res = await fetch(`${BASE}/${FIELD_SHEET_ID}/values/${range}`,
-    { headers: { Authorization: `Bearer ${token}` } })
+  const res = await googleFetch(`${BASE}/${FIELD_SHEET_ID}/values/${range}`,
+    { token: token })
   if (!res.ok) throw new Error(`Could not read ${TAB_COMPARISON_DETAIL} (${res.status})`)
   const values = (await res.json()).values || []
   if (values.length < 2) return []

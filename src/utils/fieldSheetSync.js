@@ -17,7 +17,6 @@
  * video identity: video_size_bytes + video_duration_ms (separate columns per schema)
  * Mismatch is a flagged warning, not a hard block.
  */
-import { invoke } from '@tauri-apps/api/core'
 import {
   FIELD_SHEET_ID, FIELD_TAB_SESSIONS, FIELD_TAB_EVENTS,
   FIELD_SCHEMA_VERSION, SESSION_COLUMNS, EVENT_COLUMNS,
@@ -25,13 +24,14 @@ import {
 } from '../config/fieldConfig'
 import { CURRENT_VERSION } from '../hooks/useUpdateCheck'
 import { showToast } from './toast'
+import { SHEETS_API, getServiceToken, googleFetch } from '../services/google'
 
-const SHEETS_BASE = 'https://sheets.googleapis.com/v4/spreadsheets'
+const SHEETS_BASE = SHEETS_API
 
 // ── Auth ────────────────────────────────────────────────────────────────────
 async function getToken() {
   try {
-    const token = await invoke('get_google_access_token_cmd')
+    const token = await getServiceToken()
     if (!token) throw new Error('No token returned')
     return token
   } catch (e) {
@@ -292,8 +292,8 @@ export async function downloadFieldCsv(session, events) {
 // ── Sheet helpers ─────────────────────────────────────────────────────────
 async function readRange(token, tab, range) {
   const r = encodeURIComponent(`${tab}!${range}`)
-  const res = await fetch(`${SHEETS_BASE}/${FIELD_SHEET_ID}/values/${r}`,
-    { headers: { Authorization: `Bearer ${token}` } })
+  const res = await googleFetch(`${SHEETS_BASE}/${FIELD_SHEET_ID}/values/${r}`,
+    { token: token })
   if (!res.ok) {
     const txt = await res.text().catch(()=>'')
     throw new Error(`Read ${tab}!${range} failed (${res.status}): ${txt.slice(0,200)}`)
@@ -304,9 +304,9 @@ async function readRange(token, tab, range) {
 async function appendRows(token, tab, values) {
   const range = encodeURIComponent(`${tab}!A:A`)
   const url   = `${SHEETS_BASE}/${FIELD_SHEET_ID}/values/${range}:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS`
-  const res   = await fetch(url, {
+  const res   = await googleFetch(url, {
     method:'POST',
-    headers:{ Authorization:`Bearer ${token}`, 'Content-Type':'application/json' },
+    token: token, headers: { 'Content-Type':'application/json' },
     body: JSON.stringify({ values }),
   })
   if (!res.ok) {
@@ -333,9 +333,9 @@ async function deleteRowsBySessionId(token, tab, sessionId, colIndex = 0) {
                dimension: 'ROWS', startIndex: rowNum-1, endIndex: rowNum }
     }
   }))
-  const res = await fetch(`${SHEETS_BASE}/${FIELD_SHEET_ID}:batchUpdate`, {
+  const res = await googleFetch(`${SHEETS_BASE}/${FIELD_SHEET_ID}:batchUpdate`, {
     method:'POST',
-    headers:{ Authorization:`Bearer ${token}`, 'Content-Type':'application/json' },
+    token: token, headers: { 'Content-Type':'application/json' },
     body: JSON.stringify({ requests }),
   })
   if (!res.ok) {

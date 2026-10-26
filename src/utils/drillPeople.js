@@ -10,11 +10,11 @@
  * Passwords are present in the sheet but deliberately never read here — this
  * module only needs identity and role.
  */
-import { invoke } from '@tauri-apps/api/core'
 import {
   PEOPLE_SHEET_ID, PEOPLE_TAB_NAMES, PEOPLE_COL,
   DRILL_CREATOR_ROLES, DRILL_TRAINEE_ROLE_SUBSTRING,
 } from '../config/drillConfig'
+import { SHEETS_API, getServiceToken, googleFetch } from '../services/google'
 
 let _cache = null          // { at, rows }
 const CACHE_MS = 5 * 60 * 1000
@@ -27,14 +27,14 @@ export async function loadPeople({ force = false } = {}) {
   if (!force && _cache && Date.now() - _cache.at < CACHE_MS) return _cache.rows
 
   // Token obtained once; shared across all tab-name attempts.
-  const token = await invoke('get_google_access_token_cmd')
+  const token = await getServiceToken()
   let rows = null
   let lastErr = null
   for (const tab of PEOPLE_TAB_NAMES) {
     try {
       const range = encodeURIComponent(`${tab}!A2:E`)
-      const url = `https://sheets.googleapis.com/v4/spreadsheets/${PEOPLE_SHEET_ID}/values/${range}`
-      const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } })
+      const url = `${SHEETS_API}/${PEOPLE_SHEET_ID}/values/${range}`
+      const res = await googleFetch(url, { token: token })
       if (!res.ok) { lastErr = new Error(`${tab}: HTTP ${res.status}`); continue }
       const data = await res.json()
       const vals = data.values || []

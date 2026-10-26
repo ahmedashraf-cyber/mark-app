@@ -8,11 +8,11 @@
  *   Batch ID, HR-Code, Collector Name, Half #, Competition, Event, Match ID,
  *   Review Date, Reviewer
  */
-import { invoke } from '@tauri-apps/api/core'
+import { SHEETS_API, getServiceToken, googleFetch } from '../services/google'
 
 export const SAMPLED_SHEET_ID = '1XGVp4o7xu8mwPkhEamz-d1aiWYCkkhR-ffTlVQCcsrM'
 export const SAMPLED_TAB      = 'Sampled Halves'
-const BASE = 'https://sheets.googleapis.com/v4/spreadsheets'
+const BASE = SHEETS_API
 
 const norm     = v => String(v ?? '').trim()
 const normUp   = v => norm(v).toUpperCase()
@@ -31,10 +31,10 @@ export const normHalfNum = v => HALF_MAP[norm(v)] || normUp(v).replace(/H$/,'').
 let _cache = null
 export async function readSampledHalves(force = false) {
   if (_cache && !force) return _cache
-  const token = await invoke('get_google_access_token_cmd')
+  const token = await getServiceToken()
   const range = encodeURIComponent(`${SAMPLED_TAB}!A:Z`)
-  const res = await fetch(`${BASE}/${SAMPLED_SHEET_ID}/values/${range}`,
-    { headers: { Authorization: `Bearer ${token}` } })
+  const res = await googleFetch(`${BASE}/${SAMPLED_SHEET_ID}/values/${range}`,
+    { token: token })
   if (!res.ok) throw new Error(`Could not read Sampled Halves (${res.status})`)
   const values = (await res.json()).values || []
   if (values.length < 2) { _cache = []; return [] }

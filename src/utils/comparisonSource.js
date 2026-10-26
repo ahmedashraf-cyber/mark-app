@@ -19,10 +19,10 @@
  * Each tab is read ONCE per comparison and cached for that run, so a lookup and
  * its events never come from two different snapshots of the sheet.
  */
-import { invoke } from '@tauri-apps/api/core'
 import { FIELD_SHEET_ID, FIELD_TAB_SESSIONS, FIELD_TAB_EVENTS } from '../config/fieldConfig'
+import { SHEETS_API, getServiceToken, googleFetch } from '../services/google'
 
-const BASE = 'https://sheets.googleapis.com/v4/spreadsheets'
+const BASE = SHEETS_API
 const norm = v => String(v ?? '').trim()
 
 /**
@@ -36,15 +36,15 @@ const normCode = v => norm(v).replace(/\s+/g, '').toUpperCase()
 const isModelRow = r => norm(r.is_model) === '1'
 
 async function token() {
-  const t = await invoke('get_google_access_token_cmd')
+  const t = await getServiceToken()
   if (!t) throw new Error('Google auth unavailable')
   return t
 }
 
 async function readTab(tab) {
-  const res = await fetch(
+  const res = await googleFetch(
     `${BASE}/${FIELD_SHEET_ID}/values/${encodeURIComponent(tab + '!A:ZZ')}`,
-    { headers: { Authorization: `Bearer ${await token()}` } })
+    { token: await token() })
   if (!res.ok) throw new Error(`Could not read ${tab} (${res.status})`)
   const rows = (await res.json()).values || []
   if (rows.length < 2) return []

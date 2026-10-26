@@ -17,11 +17,11 @@
  * identifier in that row still matches. A mismatch aborts rather than guesses.
  * It costs a second per save and removes a whole class of silent corruption.
  */
-import { invoke } from '@tauri-apps/api/core'
 import { PEOPLE_SHEET_ID, PEOPLE_TAB_NAMES } from '../config/drillConfig'
 import { getDrillSheetId } from './drillSheet'
+import { SHEETS_API, getServiceToken, googleFetch } from '../services/google'
 
-const BASE = 'https://sheets.googleapis.com/v4/spreadsheets'
+const BASE = SHEETS_API
 
 export const ROLE_TAB   = 'Supervisor'
 export const LOG_TAB    = 'role_changes'
@@ -35,7 +35,7 @@ const norm     = v => String(v ?? '').trim()
 const normCode = v => norm(v).replace(/\s+/g, '').toUpperCase()
 
 async function saToken() {
-  const t = await invoke('get_google_access_token_cmd')
+  const t = await getServiceToken()
   if (!t) throw new Error('Google auth unavailable — cannot write to the sheet')
   return t
 }
@@ -44,16 +44,16 @@ async function saToken() {
 
 async function readRange(sheetId, range) {
   const url = `${BASE}/${sheetId}/values/${encodeURIComponent(range)}`
-  const res = await fetch(url, { headers: { Authorization: `Bearer ${await saToken()}` } })
+  const res = await googleFetch(url, { token: await saToken() })
   if (!res.ok) throw new Error(`Read failed (${res.status}) on ${range}`)
   return (await res.json()).values || []
 }
 
 async function writeRange(sheetId, range, values) {
   const url = `${BASE}/${sheetId}/values/${encodeURIComponent(range)}?valueInputOption=RAW`
-  const res = await fetch(url, {
+  const res = await googleFetch(url, {
     method: 'PUT',
-    headers: { Authorization: `Bearer ${await saToken()}`, 'Content-Type': 'application/json' },
+    token: await saToken(), headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ values }),
   })
   if (!res.ok) throw new Error(`Write failed (${res.status}) on ${range}: ${await res.text()}`)
@@ -62,9 +62,9 @@ async function writeRange(sheetId, range, values) {
 async function appendRows(sheetId, tab, values) {
   const url = `${BASE}/${sheetId}/values/${encodeURIComponent(tab + '!A:A')}`
     + ':append?valueInputOption=RAW&insertDataOption=INSERT_ROWS'
-  const res = await fetch(url, {
+  const res = await googleFetch(url, {
     method: 'POST',
-    headers: { Authorization: `Bearer ${await saToken()}`, 'Content-Type': 'application/json' },
+    token: await saToken(), headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ values }),
   })
   if (!res.ok) throw new Error(`Append failed (${res.status}) on ${tab}: ${await res.text()}`)
@@ -72,15 +72,15 @@ async function appendRows(sheetId, tab, values) {
 
 /** Create a tab if it is missing, then make sure row 1 is the header. */
 async function ensureTab(sheetId, tab, header) {
-  const meta = await fetch(`${BASE}/${sheetId}?fields=sheets.properties.title`,
-    { headers: { Authorization: `Bearer ${await saToken()}` } })
+  const meta = await googleFetch(`${BASE}/${sheetId}?fields=sheets.properties.title`,
+    { token: await saToken() })
   if (!meta.ok) throw new Error(`Could not list tabs (${meta.status})`)
   const titles = ((await meta.json()).sheets || []).map(s => s.properties.title)
 
   if (!titles.includes(tab)) {
-    const res = await fetch(`${BASE}/${sheetId}:batchUpdate`, {
+    const res = await googleFetch(`${BASE}/${sheetId}:batchUpdate`, {
       method: 'POST',
-      headers: { Authorization: `Bearer ${await saToken()}`, 'Content-Type': 'application/json' },
+      token: await saToken(), headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ requests: [{ addSheet: { properties: { title: tab } } }] }),
     })
     if (!res.ok) throw new Error(`Could not create ${tab} (${res.status})`)

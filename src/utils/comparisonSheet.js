@@ -4,7 +4,6 @@
  * FIELD / Comparison only. Scout and Audit never import this file.
  * Uses same auth approach as fieldSheetSync.js.
  */
-import { invoke } from '@tauri-apps/api/core'
 import {
   FIELD_SHEET_ID,
 } from '../config/fieldConfig'
@@ -15,27 +14,28 @@ import {
 } from '../config/comparisonConfig'
 import { CURRENT_VERSION } from '../hooks/useUpdateCheck'
 import { msToReadable } from './fieldSheetSync'
+import { SHEETS_API, getServiceToken, googleFetch } from '../services/google'
 
-const BASE = `https://sheets.googleapis.com/v4/spreadsheets/${FIELD_SHEET_ID}`
+const BASE = `${SHEETS_API}/${FIELD_SHEET_ID}`
 
 async function getToken() {
-  const token = await invoke('get_google_access_token_cmd')
+  const token = await getServiceToken()
   if (!token) throw new Error('Google auth required.')
   return token
 }
 
 async function readHeader(token, tab) {
-  const r = await fetch(`${BASE}/values/${encodeURIComponent(tab+'!1:1')}`,
-    { headers: { Authorization: `Bearer ${token}` } })
+  const r = await googleFetch(`${BASE}/values/${encodeURIComponent(tab+'!1:1')}`,
+    { token: token })
   return (await r.json()).values?.[0] || []
 }
 
 /** Overwrite row 1 only. Data rows are untouched. */
 async function writeHeaderRow(token, tab, header) {
   const url = `${BASE}/values/${encodeURIComponent(tab + '!1:1')}?valueInputOption=RAW`
-  const res = await fetch(url, {
+  const res = await googleFetch(url, {
     method: 'PUT',
-    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    token: token, headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ values: [header] }),
   })
   if (!res.ok) throw new Error(`Could not extend the ${tab} header (${res.status})`)
@@ -43,9 +43,9 @@ async function writeHeaderRow(token, tab, header) {
 
 async function appendRows(token, tab, values) {
   const url = `${BASE}/values/${encodeURIComponent(tab+'!A:A')}:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS`
-  const res = await fetch(url, {
+  const res = await googleFetch(url, {
     method: 'POST',
-    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    token: token, headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ values }),
   })
   if (!res.ok) {
@@ -165,8 +165,8 @@ function buildDetailRows(detailRows) {
  */
 export async function findExistingRun(modelSessionId, collectorSessionId) {
   const token = await getToken()
-  const res = await fetch(`${BASE}/values/${encodeURIComponent(TAB_SCORES + '!A:ZZ')}`,
-    { headers: { Authorization: `Bearer ${token}` } })
+  const res = await googleFetch(`${BASE}/values/${encodeURIComponent(TAB_SCORES + '!A:ZZ')}`,
+    { token: token })
   if (!res.ok) return null            // never block a write on a failed read
   const rows = (await res.json()).values || []
   if (rows.length < 2) return null
