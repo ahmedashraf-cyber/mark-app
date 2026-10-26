@@ -50,6 +50,37 @@ export default [
     },
   },
   {
+    // ARCHITECTURE GUARD (docs/audit/03-architecture-review.md, A1/A3): the UI talks to Google through
+    // src/services/google and nowhere else, so the credential source and the transport can be changed in
+    // one place. These three patterns are what used to be repeated across 19 files.
+    files: ['src/**/*.{js,jsx}'],
+    ignores: [
+      'src/services/google/**',
+      // The sign-in flow is out of scope by owner decision; it keeps its own Sheets call until auth is reworked.
+      'src/pages/LoginPage.jsx',
+    ],
+    rules: {
+      'no-restricted-syntax': ['error',
+        {
+          selector: "CallExpression[callee.name='invoke'][arguments.0.value='get_google_access_token_cmd']",
+          message: "Get the service-account token with getServiceToken() from src/services/google.",
+        },
+        {
+          selector: "Literal[value=/googleapis\\.com/]",
+          message: 'Google API hosts live in src/services/google (SHEETS_API / DRIVE_API / USERINFO_API).',
+        },
+        {
+          selector: "TemplateElement[value.raw=/googleapis\\.com/]",
+          message: 'Google API hosts live in src/services/google (SHEETS_API / DRIVE_API / USERINFO_API).',
+        },
+        {
+          selector: "TemplateElement[value.raw='Bearer ']",
+          message: 'Send authenticated Google requests with googleFetch() from src/services/google instead of building the Authorization header.',
+        },
+      ],
+    },
+  },
+  {
     // Node-side files: scripts, test scripts, configs
     files: ['scripts/**/*.{js,mjs}', 'src/**/*.test.mjs', 'src/**/*.parity.mjs', '*.config.{js,mjs}'],
     languageOptions: { ecmaVersion: 2023, sourceType: 'module', globals: { ...globals.node } },
