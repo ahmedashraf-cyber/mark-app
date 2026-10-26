@@ -968,11 +968,12 @@ async function backfillDefectTypeScores(scoutList) {
 
 // ------ Main Page ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 export default function SessionHistoryPage({ onBack, initialSession }) {
-  const { profile } = useAuth()
+  const { profile, caps: authCaps, role: authRole } = useAuth()
   const [sessions,      setSessions]      = useState([])
   const [allSessions,   setAllSessions]   = useState([])
   const [loading,       setLoading]       = useState(true)
-  const isAdmin = useAuth()?.caps?.admin || useAdmin(profile, useAuth()?.role)
+  const adminByRole = useAdmin(profile, authRole)   // a plain function (no React hooks inside); called every render on purpose
+  const isAdmin = authCaps?.admin || adminByRole
   const [adminMode,     setAdminMode]     = useState(isAdmin)  // admin sees all sessions by default
   const [activeSession, setActiveSession] = useState(null)
   // The Google Sheets export reports failure in a BLOCKING dialog (never an alert), because

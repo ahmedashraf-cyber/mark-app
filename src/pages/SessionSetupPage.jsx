@@ -162,7 +162,8 @@ export default function SessionSetupPage({ onSessionStart, lastResult, onShowHis
   const { profile, logout, role, caps, roleInfo } = useAuth()
   // caps.admin carries the overrides AND the Batch-Manager lock. The bootstrap
   // email check stays so a bad roster edit cannot remove the last way in.
-  const isAdmin    = caps.admin || useAdmin(profile, role)
+  const adminByRole = useAdmin(profile, role)   // a plain function (no React hooks inside); called every render on purpose
+  const isAdmin    = caps.admin || adminByRole
   // caps already has the Role Access Manager's overrides applied.
   const isInternal = caps.scout
 

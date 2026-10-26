@@ -107,9 +107,41 @@ export function selfReviewIsDirty(rows, isLocked) {
   return rows.some(r => r.eventCode || r.min !== '' || r.sec !== '')
 }
 
+/**
+ * The guard is HERE, outside the component that owns the hooks. It used to be an early `return`
+ * in the middle of that component, ahead of five useEffect calls, which breaks React's rule that
+ * hooks run in the same order on every render (it only worked because an account's HR code never
+ * changes while the page is open). Behaviour is identical for every account.
+ */
 export default function CollectorSelfReviewPage({ onBack, onDirtyChange }) {
   const { roleInfo } = useAuth()
   const hrCode = (roleInfo?.code || '').trim().toUpperCase()
+
+  // ── No HR-code guard ─────────────────────────────────────────────────────
+  if (!hrCode) {
+    return (
+      <div style={S.page}>
+        <div style={S.header}>
+          <button style={S.backBtn} onClick={onBack}>←</button>
+          <span style={S.title}>Self-Review</span>
+        </div>
+        <div style={{...S.body, display:'flex', alignItems:'center', justifyContent:'center'}}>
+          <div style={{...S.card, maxWidth:400, textAlign:'center'}}>
+            <div style={{fontSize:28, marginBottom:12}}>⚠</div>
+            <div style={{fontSize:14, fontWeight:600, color:'var(--t-1)', marginBottom:8}}>No HR-Code on your account</div>
+            <div style={{fontSize:13, color:'var(--t-2)'}}>
+              Your account has no HR-Code. Ask your coordinator to add it.
+            </div>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  return <CollectorSelfReview onBack={onBack} onDirtyChange={onDirtyChange} hrCode={hrCode} />
+}
+
+function CollectorSelfReview({ onBack, onDirtyChange, hrCode }) {
 
   // Page-level state
   const [halves,       setHalves]       = useState([])        // [{key,matchId,half,sheetId}]
@@ -138,27 +170,6 @@ export default function CollectorSelfReviewPage({ onBack, onDirtyChange }) {
   const [seekRow,      setSeekRow]      = useState(-1)   // briefly highlighted row index
   // Current video time in whole seconds — updated by the pop-out via event
   const videoTimeSec   = useRef(0)
-
-  // ── No HR-code guard ─────────────────────────────────────────────────────
-  if (!hrCode) {
-    return (
-      <div style={S.page}>
-        <div style={S.header}>
-          <button style={S.backBtn} onClick={onBack}>←</button>
-          <span style={S.title}>Self-Review</span>
-        </div>
-        <div style={{...S.body, display:'flex', alignItems:'center', justifyContent:'center'}}>
-          <div style={{...S.card, maxWidth:400, textAlign:'center'}}>
-            <div style={{fontSize:28, marginBottom:12}}>⚠</div>
-            <div style={{fontSize:14, fontWeight:600, color:'var(--t-1)', marginBottom:8}}>No HR-Code on your account</div>
-            <div style={{fontSize:13, color:'var(--t-2)'}}>
-              Your account has no HR-Code. Ask your coordinator to add it.
-            </div>
-          </div>
-        </div>
-      </div>
-    )
-  }
 
   // ── Load halves on mount ──────────────────────────────────────────────────
   useEffect(() => {

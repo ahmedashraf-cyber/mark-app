@@ -89,12 +89,13 @@ async function pluginInstall(onProgress) {
 }
 
 export default function UpdateBanner({ update, onDismiss, hasUnsavedWork }) {
-  if (!update) return null
-
   const [phase, setPhase]   = useState(null)  // null | 'checking' | 'downloading' | 'installing' | 'done' | 'error' | 'fallback'
   const [pct, setPct]       = useState(0)
   const [errMsg, setErrMsg] = useState('')
   const [installerPath, setInstallerPath] = useState('')
+  // After the hooks, not before: an early return ahead of them breaks React's hook-order rule.
+  // (App only mounts this with an `update`, so the result is the same.)
+  if (!update) return null
   const busy = phase === 'checking' || phase === 'downloading' || phase === 'installing'
 
   async function handleInstall() {
