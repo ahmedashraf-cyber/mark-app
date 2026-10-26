@@ -146,6 +146,28 @@ async function lookupModelAnswer(matchId, half) {
   return { home: m.home_team_name || '', away: m.away_team_name || '' }
 }
 
+/**
+ * The End stoppage entry in the OFFENSE panel — directly under Stoppage, click only (no hotkey).
+ * Enabled only while a Stoppage is open; otherwise greyed, and it says why.
+ */
+function EndStoppageItem({ open, onClick }) {
+  return (
+    <div data-testid="end-stoppage" data-open={open ? '1' : '0'} aria-disabled={!open}
+      onClick={open ? onClick : undefined}
+      title={open ? 'Close the open stoppage' : 'No open stoppage'}
+      className={`event-card mouse-only`}
+      style={{ cursor: open ? 'pointer' : 'not-allowed', opacity: open ? 1 : 0.4,
+        borderLeft: open ? '2px solid var(--p2)' : '2px solid transparent' }}>
+      <span style={{ fontSize: 12, color: open ? 'var(--p2)' : 'var(--t-3)', fontWeight: open ? 700 : 400, fontFamily: 'DM Sans, sans-serif' }}>
+        End stoppage
+      </span>
+      <span style={{ fontSize: 9, color: 'var(--t-3)', fontStyle: 'italic', opacity: 0.7 }}>
+        {open ? 'click' : 'No open stoppage'}
+      </span>
+    </div>
+  )
+}
+
 export default function FieldPage({ session: initialSession, onDone, onBack }) {
   const { profile, role, caps, roleInfo } = useAuth()
   // Gates the model-answer checkbox. Operators only: a model answer becomes the
@@ -229,6 +251,7 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
   const [saveUi, setSaveUi] = useState(null)    // null | { kind:'saving' | 'waiting' }
   const eventsRef       = useRef([])
   eventsRef.current = events
+  const openStatesRef   = useRef({})
   const sessionRef      = useRef(null)
   sessionRef.current = session
   const renderCountRef  = useRef(0)
@@ -324,6 +347,7 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
   // ── Open states ────────────────────────────────────────────────────────────
   // { eventId → { event, team, videoTimeSec } }
   const [openStates, setOpenStates] = useState({})
+  openStatesRef.current = openStates
 
   // ── Flash ──────────────────────────────────────────────────────────────────
   const [flashEvent,  setFlashEvent]  = useState(null)
@@ -496,11 +520,12 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
   function toggleMute() { const v=videoRef.current;if(!v)return;v.muted=!v.muted;setMuted(v.muted) }
 
   // ── Small helpers for saving ───────────────────────────────────────────────
-  function flashBusy() {
-    setFlashError('Still saving — that key was ignored')
+  function flashMsg(text, ms = 1800) {
+    setFlashError(text)
     clearTimeout(busyTimerRef.current)
-    busyTimerRef.current = setTimeout(() => setFlashError(null), 1400)
+    busyTimerRef.current = setTimeout(() => setFlashError(null), ms)
   }
+  function flashBusy() { flashMsg('Still saving — that key was ignored', 1400) }
   function releaseLock(token) {
     if (!token || lockOwnerRef.current !== token) return
     lockOwnerRef.current = 0; commitLockRef.current = false; setSaveUi(null)
@@ -642,18 +667,17 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
         !receptionAllowed(events.map(e => e.eventId))) return
     if (collStartRef.current===null) collStartRef.current=Date.now()
 
-    // Half end force-closes all open states
-    if (eventDef.forceClosesAll) {
-      Object.keys(openStates).forEach(oid => {
-        const pair = OPEN_STATE_PAIRS.find(p=>p.openId===oid)
-        // Auto-generated close for an open state when the half ends. There is
-        // no collector interaction to prompt for, so it carries the team the
-        // OPEN event was given — which was itself entered manually — and is
-        // marked 'manual' because no inference took place.
-        if (pair) commitEvent(EVENT_BY_ID[pair.closeId],vt,null,[],null,null,openStates[oid]?.team,'manual',true)
-      })
-      setOpenStates({})
+    // A second Stoppage while one is open would leave the first one never closed.
+    // (Re-tagging the open Stoppage itself — Edit — is allowed.)
+    if (eventDef.id === 'stoppage' && openStates.stoppage && !editing) {
+      flashMsg('Close the open stoppage first')
+      return
     }
+
+    // Half end closes every open state — but NOT here. It used to happen at this point, before
+    // the Home/Away question, so pressing Esc at that prompt left the stoppage / pressure /
+    // shot already closed and the half not ended. The closes now happen in commitEvent, at the
+    // moment Half end is actually saved, so cancelling leaves everything exactly as it was.
 
     setPendingEvent(eventDef)
     setPendingVideoTime(vt)
@@ -725,6 +749,14 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
       commitEvent(eventDef, vt, autoPassType, [], autoPassType ? 'inferred' : null, null, team, source)
     }
 
+    // End stoppage closes the Stoppage that opened it, so it takes that Stoppage's team through
+    // the pair_id — in BOTH collection methods, because the button is new in both. With no
+    // stoppage open there is nothing to inherit from, so it falls through and asks 1/2.
+    if (eventDef.id === 'end_stoppage') {
+      const t = pairedOpenerTeam('stoppage')
+      if (t) { proceed(t, 'inherited'); return }
+    }
+
     // All events: the phase decides whether the team is inferred or asked.
     // Not all events skips this and always asks, exactly as before.
     if (allEvents && eventDef.id !== 'half_start') {
@@ -738,9 +770,10 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
       const decision = teamDecision(currentPhase, eventDef.id)
       // Inferring needs "mine" to turn mine/opponent into a real team. If it is
       // ever missing, ask instead — never save a blank or guessed team.
-      const canInfer = decision === 'none' || !!mineTeam
-      if (canInfer && (decision === 'mine' || decision === 'opponent' || decision === 'none')) {
-        proceed(decision === 'none' ? null : toAbs(decision), decision === 'none' ? null : 'inferred')
+      // (teamDecision no longer returns 'none': every event has a team.)
+      const canInfer = !!mineTeam
+      if (canInfer && (decision === 'mine' || decision === 'opponent')) {
+        proceed(toAbs(decision), 'inferred')
         return
       }
       // Reception: the PHASE speaks first (above). Only when it gave no team —
@@ -962,6 +995,19 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
       const realVt   = vt   !== undefined ? vt   : pendingVideoTime
       const realTeam = team !== undefined ? team : pendingTeam
       const realTeamSrc = teamSrc !== undefined ? teamSrc : pendingTeamSource
+
+      // Half end closes every open state (Stoppage, Pressure, Shot, …), and it does so HERE, when
+      // it is actually saved — never earlier. Each close carries the team of the event it
+      // closes and keeps the teamSource it always had ('manual': nobody was asked).
+      // They are saved before Half end itself, in the same order as before.
+      if (realDef.forceClosesAll && !forceClose) {
+        const open = openStatesRef.current
+        Object.keys(open).forEach(oid => {
+          const pair = OPEN_STATE_PAIRS.find(p => p.openId === oid)
+          if (pair) commitEvent(EVENT_BY_ID[pair.closeId], realVt, null, [], null, null, open[oid]?.team, 'manual', true)
+        })
+        setOpenStates({})
+      }
 
       // If this closes an open state, remove it
       if (realDef.closesEventId) {
@@ -1469,11 +1515,26 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
 
   // Stable identities for the events bar, so it only re-renders when its own data changes.
   const handlersRef = useRef({})
-  handlersRef.current = { edit: editEvent, del: deleteEvent, seek: seekTo, retry: retryOne }
+  handlersRef.current = { edit: editEvent, del: deleteEvent, seek: seekTo, retry: retryOne, endStoppage: clickEndStoppage }
   const onEditStable   = useCallback(ev => handlersRef.current.edit(ev), [])
   const onDeleteStable = useCallback(ev => handlersRef.current.del(ev), [])
   const onSeekStable   = useCallback(t  => handlersRef.current.seek(t), [])
   const onRetryStable  = useCallback(ev => handlersRef.current.retry(ev), [])
+  const onEndStoppage  = useCallback(() => handlersRef.current.endStoppage(), [])
+  // The End stoppage button sits directly under Stoppage in the OFFENSE panel. The sidebar is
+  // memoised, so this node is rebuilt only when the stoppage opens or closes.
+  const stoppageOpen = !!openStates.stoppage
+  const endStoppageSlot = useMemo(() => ({
+    stoppage: <EndStoppageItem key="end_stoppage" open={stoppageOpen} onClick={onEndStoppage}/>,
+  }), [stoppageOpen, onEndStoppage])
+
+  // End stoppage: closes the open Stoppage (pair_id → duration_ms); team inherited from it.
+  function clickEndStoppage() {
+    if (!videoLoaded || captureStep !== 'idle') return
+    if (!openStatesRef.current.stoppage) { flashMsg('No open stoppage'); return }
+    const def = EVENT_BY_ID['end_stoppage']
+    if (def) startCapture(def, getVideoTime())
+  }
 
   // Mouse events from sidebar
   const mouseRef=useRef(null)
@@ -1862,7 +1923,7 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
 
       {/* ── Main ── */}
       <div style={{flex:1,display:'flex',overflow:'hidden',position:'relative'}}>
-        <EventsSidebar side="left"  activeKey={activeKey} onMouseEvent={onMouseEvent}/>
+        <EventsSidebar side="left"  activeKey={activeKey} onMouseEvent={onMouseEvent} insertAfter={endStoppageSlot}/>
 
         {/* Video */}
         <div style={{flex:1,position:'relative',background:'#000',display:'flex',alignItems:'center',justifyContent:'center'}}>
@@ -2092,7 +2153,7 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
       {/* ── Events list ── */}
       <TaggedEventsList tags={events} videoDuration={duration}
         matchName="Home vs Away" onEdit={onEditStable} onDelete={onDeleteStable} onSeek={onSeekStable} onRetry={onRetryStable}
-        highlightIds={highlightIds} highlightNearestId={highlightNearest} pastCount={pastCount} neutralLane/>
+        highlightIds={highlightIds} highlightNearestId={highlightNearest} pastCount={pastCount}/>
 
       {perfEnabled() && <PerfOverlay videoRef={videoRef} renderCountRef={renderCountRef} eventCount={events.length}/>}
 

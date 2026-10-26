@@ -270,7 +270,7 @@ export function runChain(events, { part = 1 } = {}) {
     const skipsBall = NON_BALL.has(raw.code) || advantagePlayed
 
     if (lastBall && lastBall.event === 'pass' && !skipsBall) {
-      const received = raw.team === lastBall.team && raw.code !== 'foul_committed'
+      const received = raw.team === lastBall.team && raw.code !== 'foul_committed' && !NOT_A_TOUCH.has(raw.code)
       ev.fields['pass-end'] = new Set([received ? 'complete' : 'incomplete'])
     }
     // out "from a pass": derived, never asked. The document requires it in
@@ -321,12 +321,32 @@ export function runChain(events, { part = 1 } = {}) {
 }
 
 // ════════════════════════════════════════════════════════════════════════════
+// 4b. Events that can never RECEIVE a pass
+// ════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Stoppage, End stoppage, Half end, Match status and Unknown pass end are not a player
+ * touching the ball, so they can never be what completes a pass. They used to have no
+ * team, so `team === passer's team` was always false and the pass before them was always
+ * 'incomplete'. Now that they carry a team, that same-team test could make the pass
+ * 'complete' — a stoppage "receiving" a pass. This keeps today's answer exactly: the pass
+ * before any of them stays 'incomplete', whatever team the collector chose.
+ * (Camera on/off are NON_BALL and never reach this test.)
+ */
+const NOT_A_TOUCH = new Set(['stoppage', 'end_stoppage', 'half_end', 'match_status', 'unknown_pass_end'])
+
+// ════════════════════════════════════════════════════════════════════════════
 // 5. INFERENCE — the confirmed phase × event table
 // ════════════════════════════════════════════════════════════════════════════
 
 const M = 'mine', O = 'opponent', A = 'ask', N = 'none'
-const NO_TEAM = ['stoppage', 'end_stoppage', 'half_end', 'match_status',
-  'camera_on', 'camera_off', 'unknown_pass_end']
+// Every event now has a team, so nothing is "no team" any more: Camera on/off, Stoppage,
+// End stoppage, Half end, Match status and Unknown pass end ASK Home/Away like everything
+// else (End stoppage inherits it from the Stoppage it closes — see FieldPage). The list is
+// kept, empty, so teamDecision() can never return 'none' and the mistake of adding an
+// event to it is a one-line, visible change. Old saved sessions may still hold null teams;
+// the events bar shows those in an "Unassigned" row.
+const NO_TEAM = []
 
 /**
  * Who performs each kind of action, taken from the confirmed table — not a new

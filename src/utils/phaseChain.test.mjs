@@ -72,7 +72,7 @@ gate.forEach(([ph,ev,w]) => { const a = P.keyAllowed(ph, ev); ok(a===w, `${ev} i
 console.log('\n5. team inference')
 ;[['carry','pass','mine'],['carry','dribble','mine'],['defense','tackle','mine'],['carry','foul_committed','ask'],
   ['idle','pass','opponent'],['looseO','ball_recovery','ask'],['carry','pressure_start','opponent'],
-  ['defense','pressure_start','mine'],['carry','stoppage','none']].forEach(([ph,ev,w]) => {
+  ['defense','pressure_start','mine'],['carry','stoppage','ask']].forEach(([ph,ev,w]) => {
   const d = P.teamDecision(ph, ev); ok(d===w, `${ev} in ${ph}`)
   console.log('   ' + (d===w?'✓':'✗') + ' ' + ev.padEnd(15) + 'in ' + ph.padEnd(8) + '→ ' + d) })
 
@@ -133,5 +133,37 @@ RC('pass that ended the other team\'s pass (incomplete)', [SE('pass','home','inc
 RC('pass with no team',                                   [SE('pass',null)], null)
 RC('previous event is not a pass',                        [SE('tackle','home')], null)
 RC('no events at all',                                    [], null)
+
+// ── 9. every event has a team (v7.12.21): the Match lane is gone ──
+console.log('\n9. teamDecision never returns "none"; the seven former no-team events ask')
+const SEVEN = ['camera_off', 'camera_on', 'stoppage', 'end_stoppage', 'half_end', 'match_status', 'unknown_pass_end']
+const allPhases = [...Object.keys(P.MAIN), 'preHalf']
+let nones = 0, nonAsk = []
+for (const ph of allPhases) for (const ev of SEVEN) { const d = P.teamDecision(ph, ev); if (d === 'none') nones++; if (d !== 'ask') nonAsk.push(ph + '/' + ev + '=' + d) }
+ok(nones === 0, `teamDecision returned "none" ${nones} times`)
+console.log('   ' + (nones === 0 ? '✓ ' : '✗ ') + `teamDecision never returns "none" (${allPhases.length} phases x all events checked)`)
+ok(nonAsk.length === 0, 'the seven events must ask in every phase: ' + nonAsk.join(', '))
+console.log('   ' + (nonAsk.length === 0 ? '✓ ' : '✗ ') + `all seven events ask Home/Away in all ${allPhases.length} phases` + (nonAsk.length ? '  ' + nonAsk.slice(0, 4).join(', ') : ''))
+const FX9 = await import('./fieldExtras.js')
+let anyNone = 0, checked = 0
+for (const ph of allPhases) for (const e of FX9.FIELD_EVENTS) { checked++; if (P.teamDecision(ph, e.id) === 'none') anyNone++ }
+ok(anyNone === 0, 'no event anywhere returns none')
+console.log('   ' + (anyNone === 0 ? '✓ ' : '✗ ') + `no event of the ${FX9.FIELD_EVENTS.length} returns "none" in any phase (${checked} combinations)`)
+
+// ── 10. the five events can never RECEIVE a pass ──
+console.log('\n10. NOT_A_TOUCH: the pass before a stoppage etc. stays incomplete whatever team was chosen')
+const passEndOf = (code, team) => {
+  const run = P.runChain([{ code: 'half_start', team: 'mine', groups: [] }, { code: 'pass', team: 'mine', groups: [] }, { code, team, groups: [] }], { part: 1 })
+  return [...(run[2].docEvent.fields['pass-end'] || [])][0]
+}
+for (const ev of ['stoppage', 'end_stoppage', 'half_end', 'match_status', 'unknown_pass_end']) {
+  const a = passEndOf(ev, 'mine'), b = passEndOf(ev, 'opponent'), c = passEndOf(ev, null)
+  const good = a === 'incomplete' && b === 'incomplete' && c === 'incomplete'
+  ok(good, `${ev}: ${a}/${b}/${c}`)
+  console.log('   ' + (good ? '✓ ' : '✗ ') + ev.padEnd(17) + 'same team → ' + a + ' | other team → ' + b + ' | no team → ' + c)
+}
+const realTouch = (team) => [...(P.runChain([{ code: 'half_start', team: 'mine', groups: [] }, { code: 'pass', team: 'mine', groups: [] }, { code: 'reception', team, groups: [] }], { part: 1 })[2].docEvent.fields['pass-end'] || [])][0]
+ok(realTouch('mine') === 'complete' && realTouch('opponent') === 'incomplete', 'a real reception still completes a pass')
+console.log('   ' + (realTouch('mine') === 'complete' && realTouch('opponent') === 'incomplete' ? '✓ ' : '✗ ') + 'a real reception still completes a pass (same team) and not (other team) — unchanged')
 
 console.log('\n' + (fails === 0 ? 'ALL CHECKS PASS' : fails + ' FAILURE(S)'))
