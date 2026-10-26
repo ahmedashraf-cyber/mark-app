@@ -19,6 +19,7 @@
 //! side calls them by their snake_case names.
 
 mod drive_export;
+mod open_target;
 use std::sync::{Arc, Mutex};
 use tauri::command;
 use futures_util::{SinkExt, StreamExt};
@@ -1048,22 +1049,21 @@ fn inject_bridge_windows(id_token: &str, refresh_token: &str, user_uid: &str, us
 fn open_file(path: String) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
-        if path.starts_with("http://") || path.starts_with("https://") {
-            // Open URL in the default browser via rundll32 — single-arg, so `&`
-            // in the URL isn't chopped by cmd's command separator.
-            std::process::Command::new("rundll32")
-                .args(["url.dll,FileProtocolHandler", &path])
-                .spawn()
-                .map_err(|e| format!("Failed to open URL: {}", e))?;
-        } else {
-            // Open file with default app via PowerShell
-            let mut cmd = std::process::Command::new("powershell");
-            cmd.args(["-NoProfile", "-Command", &format!("Invoke-Item '{}'", path.replace('\'', "''"))]);
-            #[cfg(target_os = "windows")]
-            cmd.creation_flags(CREATE_NO_WINDOW);
-            cmd.spawn()
-                .map_err(|e| format!("Failed to open file: {}", e))?;
+        // What to run is decided by open_target::plan (unit-tested, std-only): a URL goes to the browser,
+        // anything else to PowerShell's Invoke-Item with a CONSTANT command; the path travels in an
+        // environment variable and is never part of command text (see open_target.rs).
+        let launch = open_target::plan(&path);
+        let mut cmd = std::process::Command::new(launch.program);
+        cmd.args(&launch.args);
+        for (name, value) in &launch.env {
+            cmd.env(name, value);
         }
+        if launch.no_window {
+            cmd.creation_flags(CREATE_NO_WINDOW);
+        }
+        cmd.spawn().map_err(|e| {
+            if launch.is_url { format!("Failed to open URL: {}", e) } else { format!("Failed to open file: {}", e) }
+        })?;
     }
     Ok(())
 }
