@@ -125,6 +125,9 @@ describe('an event that was not saved never looks saved', () => {
     expect(body()).toMatch(/not saved/)
     press('H')                                                  // lock must not be stuck
     await waitFor(() => collected() === 5, 'a second event to be accepted')
+    // "accepted" only means it is in the bar; wait until BOTH have actually failed before the network
+    // "recovers", or Retry is (correctly) asked to retry only the one that had failed by then.
+    await waitFor(() => document.querySelectorAll('[data-status="failed"]').length === 2, 'both events to be marked failed')
     FS.failAll = false
     click(document.querySelector('[data-testid="unsaved-chip"]'))
     await waitFor(() => !document.querySelector('[data-status]') && mine().length === 2, 'both to be saved')
