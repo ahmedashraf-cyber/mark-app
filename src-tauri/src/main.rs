@@ -18,6 +18,7 @@
 //! All commands are registered in the `invoke_handler!` near the bottom; the JS
 //! side calls them by their snake_case names.
 
+mod drive_export;
 use std::sync::{Arc, Mutex};
 use tauri::command;
 use futures_util::{SinkExt, StreamExt};
@@ -1311,42 +1312,161 @@ async fn google_oauth_refresh(refresh_token: String) -> Result<serde_json::Value
 }
 
 // Create a Google Sheet in the signed-in user's Drive from .xlsx bytes (converted
-// Creates a Google Sheet inside the shared MARK Trainer Reviews folder using the
-// service-account token (full drive scope — required for parents with arbitrary folder IDs;
-// drive.file reviewer OAuth cannot reference a folder it did not create).
-// The folder inherits sharing with mark-reporter, so no per-file permission call is needed.
-// access_token is kept in the signature for backward compat but is no longer used.
-// folder_id must be set; if omitted the function returns an error rather than silently
-// saving to Drive root.
-// Returns { id, webViewLink }.
-#[command]
-async fn drive_create_sheet(
-    _access_token: String,   // reserved — SA token is used instead
-    name: String,
-    data: Vec<u8>,
-    folder_id: Option<String>,
-) -> Result<serde_json::Value, String> {
-    let fid = folder_id.as_deref().unwrap_or("").trim().to_string();
-    if fid.is_empty() {
-        return Err(
-            "Couldn't save to the MARK Trainer Reviews folder — folder_id was not supplied.".to_string()
-        );
+// ─── Reviewer-owned exports (Session History, Scout Done, Audit) ────────────────
+// v7.12.10 moved creation to the service account so files would land in the shared
+// folders. A service account that creates a file OWNS it, and it is charged to the
+// service account's storage (a My Drive folder's owner does not pay for what other people
+// put in it) — which filled mark-reporter's Drive. Creation is back with the REVIEWER:
+// the reviewer owns the files and their own storage is used.
+//
+// Preferred home: the shared folder (parents: [folder]). With the `drive.file` scope
+// Google may refuse a folder this app did not create (404 / 403 on the parent); ONLY then
+// is the app's own "MARK Reviews" folder in the reviewer's Drive used (created once, found
+// again by id or by name, never duplicated). The returned `path` says which ran
+// ("folder" | "app_root"). Every other failure is returned as a structured error (see
+// drive_export.rs) and is never retried elsewhere.
+
+const REVIEWS_ROOT_NAME: &str = "MARK Reviews";
+const FOLDER_MIME: &str = "application/vnd.google-apps.folder";
+
+/// POST one multipart upload; every failure comes back classified.
+async fn drive_post_multipart(
+    client: &reqwest::Client,
+    token: &str,
+    boundary: &str,
+    body: Vec<u8>,
+) -> Result<serde_json::Value, drive_export::DriveErr> {
+    let resp = client
+        .post("https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&supportsAllDrives=true&fields=id,webViewLink,parents")
+        .header("Authorization", format!("Bearer {}", token))
+        .header("Content-Type", format!("multipart/related; boundary={}", boundary))
+        .body(body)
+        .send()
+        .await
+        .map_err(|e| drive_export::DriveErr::network(format!("upload failed: {}", e)))?;
+    let status = resp.status().as_u16();
+    let json: serde_json::Value = resp.json().await.unwrap_or_else(|_| serde_json::json!({}));
+    if status >= 400 || json.get("error").is_some() {
+        eprintln!("[MARK] Drive upload error (HTTP {}): {}", status, json);
+        return Err(drive_export::classify(status, &json));
     }
+    Ok(json)
+}
 
-    // Use the service-account token so the upload works regardless of which Google
-    // account the reviewer is signed in to, and so the file lands in a folder
-    // shared with mark-reporter (drive.file scope would 404 on a foreign parent).
-    let sa_token = get_google_access_token().await
-        .map_err(|e| format!("Couldn't save to the MARK Trainer Reviews folder — SA token error: {}", e))?;
+/// The signed-in reviewer's email, for error messages ("storage is full for <email>").
+async fn reviewer_email(client: &reqwest::Client, token: &str) -> Option<String> {
+    let v: serde_json::Value = client
+        .get("https://www.googleapis.com/oauth2/v3/userinfo")
+        .header("Authorization", format!("Bearer {}", token))
+        .send()
+        .await
+        .ok()?
+        .json()
+        .await
+        .ok()?;
+    v["email"].as_str().map(|s| s.to_string())
+}
 
-    let client = reqwest::Client::new();
+/// A classified failure as the string JS receives. Names the account only where the
+/// message needs it (quota / permission).
+async fn fail_json(client: &reqwest::Client, token: &str, e: drive_export::DriveErr) -> String {
+    let account = if matches!(e.kind, drive_export::Kind::Quota | drive_export::Kind::Permission) {
+        reviewer_email(client, token).await
+    } else {
+        None
+    };
+    drive_export::to_json_string(&e, account.as_deref())
+}
+
+/// One folder lookup by exact name under a parent (None = the reviewer's Drive root).
+/// Under drive.file only app-created folders are visible, which is exactly what is wanted.
+/// Any error is treated as "not found": the create that follows reports a real problem.
+async fn find_folder(client: &reqwest::Client, token: &str, name: &str, parent: Option<&str>) -> Option<String> {
+    let q = format!(
+        "name='{}' and '{}' in parents and mimeType='{}' and trashed=false",
+        name.replace('\\', "\\\\").replace('\'', "\\'"),
+        parent.unwrap_or("root"),
+        FOLDER_MIME
+    );
+    let v: serde_json::Value = client
+        .get("https://www.googleapis.com/drive/v3/files")
+        .query(&[("q", q.as_str()), ("fields", "files(id)"), ("spaces", "drive"), ("supportsAllDrives", "true"), ("includeItemsFromAllDrives", "true")])
+        .header("Authorization", format!("Bearer {}", token))
+        .send()
+        .await
+        .ok()?
+        .json()
+        .await
+        .ok()?;
+    v["files"].as_array()?.first()?["id"].as_str().map(|s| s.to_string())
+}
+
+async fn create_folder(client: &reqwest::Client, token: &str, name: &str, parent: Option<&str>) -> Result<serde_json::Value, drive_export::DriveErr> {
+    let mut meta = serde_json::json!({ "name": name, "mimeType": FOLDER_MIME });
+    if let Some(p) = parent {
+        meta["parents"] = serde_json::json!([p]);
+    }
+    let resp = client
+        .post("https://www.googleapis.com/drive/v3/files?supportsAllDrives=true&fields=id,parents")
+        .header("Authorization", format!("Bearer {}", token))
+        .json(&meta)
+        .send()
+        .await
+        .map_err(|e| drive_export::DriveErr::network(format!("folder create failed: {}", e)))?;
+    let status = resp.status().as_u16();
+    let json: serde_json::Value = resp.json().await.unwrap_or_else(|_| serde_json::json!({}));
+    if status >= 400 || json.get("error").is_some() {
+        eprintln!("[MARK] Drive folder create error (HTTP {}): {}", status, json);
+        return Err(drive_export::classify(status, &json));
+    }
+    Ok(json)
+}
+
+/// The reviewer's own "MARK Reviews" folder: the cached id if it still exists, else the
+/// one already there (found by name), else a new one. Returns (id, created).
+async fn ensure_root_folder(client: &reqwest::Client, token: &str, cached: Option<&str>) -> Result<(String, bool), drive_export::DriveErr> {
+    if let Some(id) = cached.map(|c| c.trim()).filter(|c| !c.is_empty()) {
+        if let Ok(resp) = client
+            .get(format!("https://www.googleapis.com/drive/v3/files/{}?fields=id,trashed&supportsAllDrives=true", id))
+            .header("Authorization", format!("Bearer {}", token))
+            .send()
+            .await
+        {
+            if resp.status().is_success() {
+                let v: serde_json::Value = resp.json().await.unwrap_or_else(|_| serde_json::json!({}));
+                if v["trashed"] != serde_json::json!(true) {
+                    return Ok((id.to_string(), false));
+                }
+            }
+        }
+    }
+    if let Some(id) = find_folder(client, token, REVIEWS_ROOT_NAME, None).await {
+        return Ok((id, false));
+    }
+    let v = create_folder(client, token, REVIEWS_ROOT_NAME, None).await?;
+    let id = v["id"].as_str().unwrap_or("").to_string();
+    if id.is_empty() {
+        return Err(drive_export::DriveErr { kind: drive_export::Kind::Other, status: 0, reason: String::new(), message: "Google returned no id for the MARK Reviews folder".into() });
+    }
+    Ok((id, true))
+}
+
+/// One upload attempt of the Session History sheet, with or without a parent.
+async fn drive_upload_once(
+    client: &reqwest::Client,
+    token: &str,
+    name: &str,
+    data: &[u8],
+    parent: Option<&str>,
+) -> Result<serde_json::Value, drive_export::DriveErr> {
     let boundary = "MARKb0undary7e3f2a";
-    let metadata = serde_json::json!({
+    let mut metadata = serde_json::json!({
         "name": name,
-        "mimeType": "application/vnd.google-apps.spreadsheet",
-        "parents": [fid]
+        "mimeType": "application/vnd.google-apps.spreadsheet"
     });
-
+    if let Some(p) = parent {
+        metadata["parents"] = serde_json::json!([p]);
+    }
     let mut body: Vec<u8> = Vec::new();
     body.extend_from_slice(format!("--{}\r\n", boundary).as_bytes());
     body.extend_from_slice(b"Content-Type: application/json; charset=UTF-8\r\n\r\n");
@@ -1355,46 +1475,167 @@ async fn drive_create_sheet(
     body.extend_from_slice(
         b"Content-Type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet\r\n\r\n",
     );
-    body.extend_from_slice(&data);
+    body.extend_from_slice(data);
     body.extend_from_slice(format!("\r\n--{}--\r\n", boundary).as_bytes());
+    drive_post_multipart(client, token, boundary, body).await
+}
 
-    let json: serde_json::Value = client
-        .post("https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,webViewLink,parents")
-        .header("Authorization", format!("Bearer {}", sa_token))
-        .header("Content-Type", format!("multipart/related; boundary={}", boundary))
-        .body(body)
+// Session History: create the "MARK Review" sheet as the reviewer.
+// Returns { id, webViewLink, parents, path, root_id?, fallback_reason? }.
+#[command]
+async fn drive_create_sheet(
+    access_token: String,    // the REVIEWER's OAuth token
+    name: String,
+    data: Vec<u8>,
+    folder_id: Option<String>,
+    root_id: Option<String>, // cached id of the reviewer's MARK Reviews folder, if known
+) -> Result<serde_json::Value, String> {
+    let client = reqwest::Client::new();
+    let upload = |parent: Option<String>| {
+        let client = client.clone();
+        let token = access_token.clone();
+        let name = name.clone();
+        let data = data.clone();
+        async move { drive_upload_once(&client, &token, &name, &data, parent.as_deref()).await }
+    };
+    let fallback = || {
+        let client = client.clone();
+        let token = access_token.clone();
+        let root_id = root_id.clone();
+        async move { ensure_root_folder(&client, &token, root_id.as_deref()).await.map(|(id, _)| Some(id)) }
+    };
+    match drive_export::create_with_fallback(folder_id.as_deref(), upload, fallback).await {
+        Ok(v) => {
+            eprintln!("[MARK] drive_create_sheet: created {} via path={} {}", v["id"], v["path"], v["fallback_reason"].as_str().unwrap_or(""));
+            Ok(v)
+        }
+        Err(e) => Err(fail_json(&client, &access_token, e).await),
+    }
+}
+
+// Scout Done / Audit: the per-session export folder. Reuses a folder of the same name under
+// the same parent (so a Retry never makes a second one). Returns { id, path, root_id? }.
+#[command]
+async fn drive_create_export_folder(
+    access_token: String,
+    name: String,
+    parent_id: String,           // the shared master folder
+    root_id: Option<String>,     // cached id of the reviewer's MARK Reviews folder, if known
+) -> Result<serde_json::Value, String> {
+    let client = reqwest::Client::new();
+    let attempt = |parent: Option<String>| {
+        let client = client.clone();
+        let token = access_token.clone();
+        let name = name.clone();
+        async move {
+            if let Some(p) = parent.as_deref() {
+                if let Some(id) = find_folder(&client, &token, &name, Some(p)).await {
+                    return Ok(serde_json::json!({ "id": id, "reused": true }));
+                }
+            }
+            create_folder(&client, &token, &name, parent.as_deref()).await
+        }
+    };
+    let fallback = || {
+        let client = client.clone();
+        let token = access_token.clone();
+        let root_id = root_id.clone();
+        async move { ensure_root_folder(&client, &token, root_id.as_deref()).await.map(|(id, _)| Some(id)) }
+    };
+    match drive_export::create_with_fallback(Some(&parent_id), attempt, fallback).await {
+        Ok(v) => {
+            eprintln!("[MARK] drive_create_export_folder: {} via path={} {}", v["id"], v["path"], v["fallback_reason"].as_str().unwrap_or(""));
+            Ok(v)
+        }
+        Err(e) => Err(fail_json(&client, &access_token, e).await),
+    }
+}
+
+// Share a folder the reviewer owns (the MARK Reviews folder, ONCE) with mark-reporter and
+// with the chosen audience, both as readers. Everything inside inherits it, so no per-file
+// permission calls are needed. `audience_type`: "domain" | "group" | "user" | "none".
+// Never an "anyone with the link" permission. Returns which shares worked; it does not
+// fail the export — the caller decides what a missing share means.
+#[command]
+async fn drive_share_folder(
+    access_token: String,
+    folder_id: String,
+    audience_type: String,
+    audience_value: String,
+) -> Result<serde_json::Value, String> {
+    let client = reqwest::Client::new();
+    let url = format!(
+        "https://www.googleapis.com/drive/v3/files/{}/permissions?sendNotificationEmail=false&supportsAllDrives=true",
+        folder_id
+    );
+    let mut errors: Vec<String> = vec![];
+    let share = |body: serde_json::Value, label: String| {
+        let client = client.clone();
+        let url = url.clone();
+        let token = access_token.clone();
+        async move {
+            match client.post(&url).header("Authorization", format!("Bearer {}", token)).json(&body).send().await {
+                Err(e) => Err(format!("{}: {}", label, e)),
+                Ok(r) => {
+                    let status = r.status().as_u16();
+                    let j: serde_json::Value = r.json().await.unwrap_or_else(|_| serde_json::json!({}));
+                    if status >= 400 || j.get("error").is_some() {
+                        let e = drive_export::classify(status, &j);
+                        Err(format!("{}: HTTP {} {} {}", label, status, e.reason, e.message))
+                    } else {
+                        Ok(())
+                    }
+                }
+            }
+        }
+    };
+    let sa_ok = match share(serde_json::json!({ "role": "reader", "type": "user", "emailAddress": SA_CLIENT_EMAIL }), "mark-reporter".to_string()).await {
+        Ok(()) => true,
+        Err(e) => { errors.push(e); false }
+    };
+    let audience_ok = match audience_type.as_str() {
+        "none" | "" => serde_json::Value::Null,
+        t => {
+            let body = if t == "domain" {
+                serde_json::json!({ "role": "reader", "type": "domain", "domain": audience_value })
+            } else {
+                serde_json::json!({ "role": "reader", "type": t, "emailAddress": audience_value })
+            };
+            match share(body, format!("{} {}", t, audience_value)).await {
+                Ok(()) => serde_json::json!(true),
+                Err(e) => { errors.push(e); serde_json::json!(false) }
+            }
+        }
+    };
+    eprintln!("[MARK] drive_share_folder {}: mark-reporter={} audience={} errors={:?}", folder_id, sa_ok, audience_ok, errors);
+    Ok(serde_json::json!({ "sa_shared": sa_ok, "audience_shared": audience_ok, "errors": errors }))
+}
+
+// Share ONE file with mark-reporter (reader) using the reviewer's token. Used by Retry when
+// the file is not readable and it did not land under a folder that mark-reporter inherits.
+// No "anyone with the link" permission exists anywhere.
+#[command]
+async fn drive_share_sheet(access_token: String, file_id: String) -> Result<serde_json::Value, String> {
+    let client = reqwest::Client::new();
+    let url = format!(
+        "https://www.googleapis.com/drive/v3/files/{}/permissions?sendNotificationEmail=false&supportsAllDrives=true",
+        file_id
+    );
+    let resp = client
+        .post(&url)
+        .header("Authorization", format!("Bearer {}", access_token))
+        .json(&serde_json::json!({ "role": "reader", "type": "user", "emailAddress": SA_CLIENT_EMAIL }))
         .send()
         .await
-        .map_err(|e| format!("Couldn't save to the MARK Trainer Reviews folder — upload failed: {}", e))?
-        .json()
-        .await
-        .map_err(|e| format!("Couldn't save to the MARK Trainer Reviews folder — response parse failed: {}", e))?;
-
-    if json.get("error").is_some() {
-        let msg = json["error"]["message"].as_str().unwrap_or("unknown Drive error");
-        eprintln!("[MARK] drive_create_sheet: Drive API error: {}", json);
-        return Err(format!(
-            "Couldn't save to the MARK Trainer Reviews folder — ask Fady to give you access. ({})",
-            msg
-        ));
+        .map_err(|e| drive_export::to_json_string(&drive_export::DriveErr::network(format!("share failed: {}", e)), None))?;
+    let status = resp.status().as_u16();
+    let json: serde_json::Value = resp.json().await.unwrap_or_else(|_| serde_json::json!({}));
+    if status >= 400 || json.get("error").is_some() {
+        eprintln!("[MARK] drive_share_sheet: HTTP {} for {}: {}", status, file_id, json);
+        let e = drive_export::classify(status, &json);
+        return Err(drive_export::to_json_string(&e, None));
     }
-
-    // Verify the file landed in the expected folder.
-    let empty = vec![];
-    let parents: Vec<&str> = json["parents"]
-        .as_array()
-        .unwrap_or(&empty)
-        .iter()
-        .filter_map(|v| v.as_str())
-        .collect();
-    if !parents.contains(&fid.as_str()) {
-        eprintln!("[MARK] drive_create_sheet: file {} has parents {:?}, expected {}", json["id"], parents, fid);
-        return Err(
-            "Couldn't save to the MARK Trainer Reviews folder — file ended up in a different location. Ask Fady for help.".to_string()
-        );
-    }
-
-    Ok(json)
+    Ok(serde_json::json!({ "shared_with": SA_CLIENT_EMAIL }))
 }
 
 // --- ffmpeg clip cutting ------------------------------------------------------
@@ -2667,8 +2908,33 @@ async fn drive_upload_file(
     file_name: String,
     parent_folder_id: String,
 ) -> Result<String, String> {
-    let bytes = std::fs::read(&file_path)
-        .map_err(|e| format!("Could not read file {}: {}", file_path, e))?;
+    let client = reqwest::Client::new();
+    // A Retry must not upload a clip twice: if one with this name is already in the folder
+    // (an earlier attempt landed but its answer was lost), that is the answer.
+    {
+        let q = format!(
+            "name='{}' and '{}' in parents and trashed=false",
+            file_name.replace('\\', "\\\\").replace('\'', "\\'"), parent_folder_id
+        );
+        if let Ok(r) = client
+            .get("https://www.googleapis.com/drive/v3/files")
+            .query(&[("q", q.as_str()), ("fields", "files(id,webViewLink)"), ("spaces", "drive"), ("supportsAllDrives", "true"), ("includeItemsFromAllDrives", "true")])
+            .header("Authorization", format!("Bearer {}", token))
+            .send()
+            .await
+        {
+            if let Ok(v) = r.json::<serde_json::Value>().await {
+                if let Some(f) = v["files"].as_array().and_then(|a| a.first()) {
+                    return Ok(f["webViewLink"].as_str().unwrap_or("").to_string());
+                }
+            }
+        }
+    }
+
+    let bytes = std::fs::read(&file_path).map_err(|e| {
+        drive_export::to_json_string(&drive_export::DriveErr { kind: drive_export::Kind::Other, status: 0, reason: String::new(),
+            message: format!("could not read the local file {}: {}", file_path, e) }, None)
+    })?;
 
     // Detect MIME type from extension
     let mime = if file_path.ends_with(".mp4") {
@@ -2679,7 +2945,6 @@ async fn drive_upload_file(
         "application/octet-stream"
     };
 
-    let client = reqwest::Client::new();
     let boundary = "MARKuploadboundary9f3e1a";
     let metadata = serde_json::json!({
         "name": file_name,
@@ -2695,22 +2960,10 @@ async fn drive_upload_file(
     body.extend_from_slice(&bytes);
     body.extend_from_slice(format!("\r\n--{}--\r\n", boundary).as_bytes());
 
-    let resp: serde_json::Value = client
-        .post("https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&supportsAllDrives=true&fields=id,webViewLink")
-        .header("Authorization", format!("Bearer {}", token))
-        .header("Content-Type", format!("multipart/related; boundary={}", boundary))
-        .body(body)
-        .send()
-        .await
-        .map_err(|e| format!("Drive upload failed: {}", e))?
-        .json()
-        .await
-        .map_err(|e| format!("Drive upload parse failed: {}", e))?;
-
-    if let Some(err) = resp.get("error") {
-        return Err(format!("Drive upload error: {}", err));
+    match drive_post_multipart(&client, &token, boundary, body).await {
+        Ok(resp) => Ok(resp["webViewLink"].as_str().unwrap_or("").to_string()),
+        Err(e) => Err(fail_json(&client, &token, e).await),
     }
-    Ok(resp["webViewLink"].as_str().unwrap_or("").to_string())
 }
 
 // ─── Save a text/CSV string to a local path ──────────────────────────────────
@@ -2743,20 +2996,10 @@ async fn upload_csv_as_sheet(
     body.extend_from_slice(b"Content-Type: text/csv\r\n\r\n");
     body.extend_from_slice(&bytes);
     body.extend_from_slice(format!("\r\n--{}--\r\n", boundary).as_bytes());
-    let upload_resp: serde_json::Value = client
-        .post("https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&supportsAllDrives=true&fields=id,webViewLink")
-        .header("Authorization", format!("Bearer {}", token))
-        .header("Content-Type", format!("multipart/related; boundary={}", boundary))
-        .body(body)
-        .send()
-        .await
-        .map_err(|e| format!("Sheet upload failed: {}", e))?
-        .json()
-        .await
-        .map_err(|e| format!("Sheet upload parse failed: {}", e))?;
-    if let Some(err) = upload_resp.get("error") {
-        return Err(format!("Sheet upload error: {}", err));
-    }
+    let upload_resp = match drive_post_multipart(&client, &token, boundary, body).await {
+        Ok(v) => v,
+        Err(e) => return Err(fail_json(&client, &token, e).await),
+    };
     let sheet_id = upload_resp["id"].as_str().unwrap_or("").to_string();
     let web_link = upload_resp["webViewLink"].as_str().unwrap_or("").to_string();
     if sheet_id.is_empty() { return Ok(web_link); }
@@ -2883,20 +3126,10 @@ async fn upload_xlsx_as_sheet(
     body.extend_from_slice(b"Content-Type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet\r\n\r\n");
     body.extend_from_slice(&bytes);
     body.extend_from_slice(format!("\r\n--{}--\r\n", boundary).as_bytes());
-    let resp: serde_json::Value = client
-        .post("https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&supportsAllDrives=true&fields=id,webViewLink")
-        .header("Authorization", format!("Bearer {}", token))
-        .header("Content-Type", format!("multipart/related; boundary={}", boundary))
-        .body(body)
-        .send()
-        .await
-        .map_err(|e| format!("XLSX sheet upload failed: {}", e))?
-        .json()
-        .await
-        .map_err(|e| format!("XLSX sheet upload parse failed: {}", e))?;
-    if let Some(err) = resp.get("error") {
-        return Err(format!("XLSX sheet upload error: {}", err));
-    }
+    let resp = match drive_post_multipart(&client, &token, boundary, body).await {
+        Ok(v) => v,
+        Err(e) => return Err(fail_json(&client, &token, e).await),
+    };
     let sheet_id  = resp["id"].as_str().unwrap_or("").to_string();
     let web_link  = resp["webViewLink"].as_str().unwrap_or("").to_string();
     if !sheet_id.is_empty() {
@@ -2944,6 +3177,9 @@ fn save_binary_file(path: String, data: Vec<u8>) -> Result<(), String> {
             drill_clip_url,
             google_oauth_refresh,
             drive_create_sheet,
+            drive_share_sheet,
+            drive_create_export_folder,
+            drive_share_folder,
             cut_clips,
             get_video_url,
             open_file,

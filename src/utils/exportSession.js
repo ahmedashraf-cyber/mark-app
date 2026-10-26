@@ -239,11 +239,25 @@ export async function exportSessionToXlsx({ session, tags, quality, tagCount, to
   return savedPath // null if the user cancelled the dialog
 }
 
-// Creates a "MARK Review" sheet inside the shared MARK Trainer Reviews folder using
-// the service-account token (full drive scope). No reviewer OAuth sign-in needed.
-// Returns { url }.
+// ─── Session History export → a Google Sheet the REVIEWER owns ──────────────────────
+// The reviewer's own OAuth token creates the sheet, so the reviewer owns it and THEIR
+// storage is used. It goes into the shared MARK Trainer Reviews folder when Google allows
+// that, otherwise into the reviewer's own "MARK Reviews" folder (shared once with
+// mark-reporter and the audience). The export is only reported as done after mark-reporter
+// has actually READ it. The decisions live in driveExport.js, shared with Scout and Audit.
+import {
+  DriveExportError, explainDriveError, getReviewerToken, serviceAccountCanRead, shareAndVerify,
+  ensureRootShared, rootCache, UNREADABLE_MSG,
+} from './driveExport'
+export { DriveExportError, explainDriveError, serviceAccountCanRead, shareAndVerify, UNREADABLE_MSG }
+
+// Creates the "MARK Review" sheet with the reviewer's token. Returns { url, id, path }.
 export async function exportSessionToUserDrive({ session, tags, quality, tagCount, total }) {
   const { invoke } = await import('@tauri-apps/api/core')
+
+  // 0. The reviewer's own Google token (silent after the first sign-in).
+  const accessToken = await getReviewerToken(invoke)
+  const cache = await rootCache(invoke, accessToken)
 
   // 1. Cut a 10-second clip per error into Downloads/<matchId>_<half>/.
   const matchId   = (session.matchId || session.sessionId || 'Session').toString()
@@ -295,14 +309,29 @@ export async function exportSessionToUserDrive({ session, tags, quality, tagCoun
   XLSX.utils.book_append_sheet(wb, ws, tabName)
   const wbout = XLSX.write(wb, { bookType: 'xlsx', type: 'array' })
 
-  // 3. Upload to the shared MARK Trainer Reviews folder via SA (full drive scope).
+  // 4. Create it as the reviewer. The Rust command tries the shared folder and, only if Google
+  // refuses the PARENT, the reviewer's own Drive; it reports which path ran.
   const name = `MARK Review — ${session.matchName || session.matchId || 'Session'}`
-  const res  = await invoke('drive_create_sheet', {
-    accessToken: '',          // unused — SA token is used inside the Rust command
-    name,
-    data: Array.from(new Uint8Array(wbout)),
-    folderId: TRAINER_REVIEWS_FOLDER_ID,
-  })
+  let res
+  try {
+    res = await invoke('drive_create_sheet', {
+      accessToken,
+      name,
+      data: Array.from(new Uint8Array(wbout)),
+      folderId: TRAINER_REVIEWS_FOLDER_ID,
+      rootId: cache.id,
+    })
+  } catch (e) {
+    throw explainDriveError(e)
+  }
+  console.log('[MARK] Session History export path:', res.path, res.fallback_reason ? `(shared folder refused: ${res.fallback_reason})` : '')
   const url = res.webViewLink || (res.id ? `https://docs.google.com/spreadsheets/d/${res.id}` : '')
-  return { url }
+  const rootId = res.root_id || ''
+  if (rootId) cache.store(rootId)
+
+  // 5. Make sure mark-reporter can open it, then confirm it can read A1:Z5 before calling this done.
+  //    In the MARK Reviews folder the folder is shared once and the sheet inherits it; in the
+  //    shared folder the sheet itself is shared with mark-reporter.
+  const share = await shareAndVerify({ fileId: res.id, url, path: res.path, rootId, invoke, force: false })
+  return { url, id: res.id, path: res.path, warnings: share.warnings || [] }
 }

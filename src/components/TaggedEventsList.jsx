@@ -269,7 +269,7 @@ const EventSlot = memo(function EventSlot({ tag, fieldMode, isSelected, isPast, 
 })
 
 function TimelineRow({ label, tags, allTags, videoDuration, currentTime, selectedId, onCardClick, onCommentClick, homeTeam,
-                       dotColor = null, fieldMode = false, highlightSet = null, scrollTargetId = null, pastCount = null, slotIndex = null }) {
+                       dotColor = null, muted = false, fieldMode = false, highlightSet = null, scrollTargetId = null, pastCount = null, slotIndex = null }) {
   const rowRef = useRef(null)
   // One lookup per slot instead of tags.find() per slot: the old shape was
   // O(events²) on every render — 15 ms a tick at 1000 events.
@@ -299,13 +299,14 @@ function TimelineRow({ label, tags, allTags, videoDuration, currentTime, selecte
   }, [scrollTargetId, fieldMode, slotIndex])
 
   const dot = dotColor || (label === homeTeam ? '#0A84FF' : '#FF453A')
-  const dotGlow = dotColor ? 'rgba(142,142,147,0.6)' : (label === homeTeam ? 'rgba(10,132,255,0.6)' : 'rgba(255,69,58,0.6)')
+  const dotGlow = dotColor ? 'rgba(110,110,115,0.5)' : (label === homeTeam ? 'rgba(10,132,255,0.6)' : 'rgba(255,69,58,0.6)')
 
   return (
-    <div style={{
+    <div data-lane={muted ? 'unassigned' : undefined} style={{
       display: 'flex', alignItems: 'center',
       borderBottom: '1px solid var(--b-1)',
       minHeight: 76,
+      ...(muted ? { opacity: 0.62 } : {}),     // only the Unassigned row is dimmed; every other row's markup is unchanged
     }}>
       {/* Team badge */}
       <div style={{
@@ -384,12 +385,11 @@ function TimelineRow({ label, tags, allTags, videoDuration, currentTime, selecte
 //                      on every render)
 //   pastCount        — how many events are at or before the playhead, instead of
 //                      re-rendering on every tick with a raw currentTime
-//   neutralLane      — a third "Match" row for events that belong to no team
 //   onRetry          — retry an event that is failed / not confirmed
 function TaggedEventsList({
   tags, videoDuration, currentTime, matchName,
   onEdit, onDelete, onSeek, readOnly = false,
-  highlightIds, highlightNearestId = null, pastCount = null, neutralLane = false, onRetry = null,
+  highlightIds, highlightNearestId = null, pastCount = null, onRetry = null,
 }) {
   const [selectedTag, setSelectedTag] = useState(null)
   const [commentTag, setCommentTag] = useState(null)
@@ -408,11 +408,13 @@ function TaggedEventsList({
     [tags, comments])
   const homeTags = useMemo(() => tagsWithComments.filter(t => t.team === 'home'), [tagsWithComments])
   const awayTags = useMemo(() => tagsWithComments.filter(t => t.team === 'away'), [tagsWithComments])
-  // Events with no team (Camera on/off, Stoppage, Half end, …). Only FIELD asks for
-  // the lane; everywhere else they keep leaving a blank slot as they always did.
-  const matchTags = useMemo(
-    () => neutralLane ? tagsWithComments.filter(t => t.team !== 'home' && t.team !== 'away') : [],
-    [tagsWithComments, neutralLane])
+  // Every event asked for a team since v7.12.21, so a new session never has this row. Old saved
+  // sessions can hold events with no team (Camera on/off, Stoppage, …); rather than leave a blank
+  // slot, FIELD shows them in a muted "Unassigned" row BELOW Away — only when there are some.
+  // Elsewhere (Scout) nothing changes: they keep leaving a blank slot as they always did.
+  const unassignedTags = useMemo(
+    () => fieldMode ? tagsWithComments.filter(t => t.team !== 'home' && t.team !== 'away') : [],
+    [tagsWithComments, fieldMode])
   const allTagsSorted = useMemo(
     () => [...tagsWithComments].sort((a, b) => (a.videoTimeSec || 0) - (b.videoTimeSec || 0)),
     [tagsWithComments])
@@ -484,13 +486,13 @@ function TaggedEventsList({
       {/* Home row */}
       <TimelineRow label={homeTeam} tags={homeTags} {...rowProps} />
 
-      {/* Match row — events with no team. Shown only when there is at least one. */}
-      {neutralLane && matchTags.length > 0 && (
-        <TimelineRow label="Match" tags={matchTags} dotColor="#8E8E93" {...rowProps} />
-      )}
-
       {/* Away row */}
       <TimelineRow label={awayTeam} tags={awayTags} {...rowProps} />
+
+      {/* Unassigned — old sessions only. Muted, below Away, shown only when it has events. */}
+      {fieldMode && unassignedTags.length > 0 && (
+        <TimelineRow label="Unassigned" tags={unassignedTags} dotColor="#6E6E73" muted {...rowProps} />
+      )}
 
       {/* Empty state */}
       {tags.length === 0 && (

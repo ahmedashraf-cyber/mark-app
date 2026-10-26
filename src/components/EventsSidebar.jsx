@@ -19,7 +19,7 @@
  * Props: side ('left'|'right'), activeKey (currently-pressed key, for the active
  * highlight), onMouseEvent (handler for clicking a mouse-only card).
  */
-import { memo } from 'react'
+import { memo, Fragment } from 'react'
 
 const LEFT_EVENTS = [
   { key: 'E',    label: 'Pass',              id: 'pass' },
@@ -110,7 +110,9 @@ function EventCard({ ev, active, onClick }) {
   )
 }
 
-function EventsSidebar({ side, activeKey, onMouseEvent, extraItems }) {
+// insertAfter (optional, FIELD only): { [eventId]: node } — a node rendered directly under that
+// event's card. Scout passes nothing, so its panel is exactly as before.
+function EventsSidebar({ side, activeKey, onMouseEvent, extraItems, insertAfter }) {
   const events = side === 'left' ? LEFT_EVENTS : RIGHT_EVENTS
   const activeUpper = activeKey ? activeKey.toUpperCase() : null
 
@@ -142,12 +144,23 @@ function EventsSidebar({ side, activeKey, onMouseEvent, extraItems }) {
       {/* Events — extraItems rendered inside the same scroll container */}
       <div style={{ flex: 1, overflowY: 'auto', padding: '4px 0' }}>
         {events.map(ev => (
-          <EventCard
-            key={ev.id}
-            ev={ev}
-            active={ev.key !== null && activeUpper === ev.key}
-            onClick={ev.key === null ? () => onMouseEvent?.(ev) : undefined}
-          />
+          insertAfter && insertAfter[ev.id] ? (
+            <Fragment key={ev.id}>
+              <EventCard
+                ev={ev}
+                active={ev.key !== null && activeUpper === ev.key}
+                onClick={ev.key === null ? () => onMouseEvent?.(ev) : undefined}
+              />
+              {insertAfter[ev.id]}
+            </Fragment>
+          ) : (
+            <EventCard
+              key={ev.id}
+              ev={ev}
+              active={ev.key !== null && activeUpper === ev.key}
+              onClick={ev.key === null ? () => onMouseEvent?.(ev) : undefined}
+            />
+          )
         ))}
         {extraItems}
       </div>
