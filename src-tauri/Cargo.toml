@@ -9,10 +9,10 @@ edition = "2021"
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-# "protocol-asset" is required by app.security.assetProtocol in tauri.conf.json. `tauri build` adds it to this
-# line itself on every build; declaring it here makes plain `cargo test` / `cargo check` work too,
-# with exactly the same resulting feature set.
-tauri = { version = "2", features = ["protocol-asset", "devtools"] }
+# The asset protocol is OFF (tauri.conf.json: app.security.assetProtocol.enable = false) because nothing in the
+# app uses it: every video is served by the local server (get_video_url / drill_clip_url). tauri-build requires
+# the "protocol-asset" feature to match that setting in BOTH directions, so it is not listed here.
+tauri = { version = "2", features = ["devtools"] }
 brotli-decompressor = "=5.0.1"
 alloc-stdlib = "=0.2.2"
 rfd = "0.15"

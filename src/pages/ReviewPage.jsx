@@ -25,7 +25,7 @@
  * so a tagging key and a transport key never collide.
  */
 import { useState, useEffect, useRef, useCallback } from 'react'
-import { invoke, convertFileSrc } from '@tauri-apps/api/core'
+import { invoke } from '@tauri-apps/api/core'
 import { db, auth } from '../firebase/config'
 import { collection, addDoc, updateDoc, doc, serverTimestamp, increment } from 'firebase/firestore'
 import { useAuth } from '../hooks/useAuth.jsx'
