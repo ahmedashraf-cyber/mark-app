@@ -22,7 +22,7 @@ vi.mock('../utils/fieldSheetSync', async (orig) => ({ ...(await orig()), syncSes
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 const sleep = ms => new Promise(r => setTimeout(r, ms))
-async function waitFor(fn, what, ms = 3000) {
+async function waitFor(fn, what, ms = 10000) {
   const t0 = Date.now()
   for (;;) {
     let v; try { v = fn() } catch { v = false }
@@ -32,7 +32,11 @@ async function waitFor(fn, what, ms = 3000) {
   }
 }
 const press = (key, o = {}) => window.dispatchEvent(new KeyboardEvent('keydown', { key, repeat: !!o.repeat, bubbles: true, cancelable: true }))
-const keys = async (...ks) => { for (const k of ks) { press(k); await sleep(25) } }
+const keys = async (...ks) => { for (const k of ks) { press(k); await sleep(50) } }
+// An event appears in the bar the moment it is accepted, but is still "saving" until Firestore answers; during that
+// time the app deliberately ignores event keys and disables Clear all. Tests that chain one event into the next
+// action must wait for the save to settle first (this used to be a race that only lost on a slower machine).
+const settled = () => waitFor(() => !document.querySelector('[data-testid="save-chip"]') && !document.querySelector('[data-status="pending"]'), 'the save to finish')
 const click = (el, detail = 1) => el.dispatchEvent(new MouseEvent('click', { bubbles: true, detail }))
 const byText = (sel, re) => [...document.querySelectorAll(sel)].find(e => re.test(e.textContent))
 const body = () => document.body.textContent
@@ -136,7 +140,7 @@ describe('an event that was not saved never looks saved', () => {
 
 // ── 3. Clear all ─────────────────────────────────────────────────────────────
 describe('Clear all', () => {
-  async function withTwoNewEvents() { await mount(); press('U'); await waitFor(() => collected() === 4, 'event 1'); press('H'); await waitFor(() => collected() === 5, 'event 2') }
+  async function withTwoNewEvents() { await mount(); press('U'); await waitFor(() => collected() === 4, 'event 1'); await settled(); press('H'); await waitFor(() => collected() === 5, 'event 2'); await settled() }
   it('Enter, Space and a keyboard-made click can NEVER confirm the wipe; Esc closes it', async () => {
     await withTwoNewEvents()
     click(document.querySelector('[data-testid="clear-all"]'))
@@ -175,7 +179,7 @@ describe('Stoppage, End stoppage and Half end', () => {
     video().currentTime = 10
     click(sideItem('Stoppage')); await waitFor(() => TEAMQ.test(panelText()), 'the team question')
     await keys('2', '1', '1')                                    // team, type, paused
-    await waitFor(() => of('stoppage'), 'the stoppage'); await waitFor(() => endItem().getAttribute('data-open') === '1', 'End stoppage to enable')
+    await waitFor(() => of('stoppage'), 'the stoppage'); await waitFor(() => endItem().getAttribute('data-open') === '1', 'End stoppage to enable'); await settled()
     click(sideItem('Stoppage'))
     await waitFor(() => /Close the open stoppage first/.test(body()), 'the refusal')
     expect(mine().filter(d => d.eventId === 'stoppage')).toHaveLength(1)
@@ -190,7 +194,7 @@ describe('Stoppage, End stoppage and Half end', () => {
     await mount()
     video().currentTime = 10
     click(sideItem('Stoppage')); await waitFor(() => TEAMQ.test(panelText()), 'team'); await keys('1', '1', '1')
-    await waitFor(() => of('stoppage'), 'the stoppage')
+    await waitFor(() => of('stoppage'), 'the stoppage'); await settled()
     const before = FS.count('mark_collected_events')
     video().currentTime = 60
     click(sideItem('Half end')); await waitFor(() => TEAMQ.test(panelText()), 'the Half end question')
