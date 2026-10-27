@@ -19,6 +19,7 @@
 //! side calls them by their snake_case names.
 
 mod drive_export;
+mod video_range;
 use std::sync::{Arc, Mutex};
 use tauri::command;
 use futures_util::{SinkExt, StreamExt};
@@ -157,6 +158,12 @@ async fn start_video_server(video_path: Arc<Mutex<Option<String>>>) -> u16 {
                 .body(Body::empty()).unwrap(),
         };
 
+        // Tag mode asks for the chunked path with ?chunked=1 (see serve_chunked). Every other caller falls through to
+        // the original behaviour below, unchanged.
+        if params.contains_key("chunked") {
+            return serve_chunked(path, method, headers, tr.take(), t_handler).await;
+        }
+
         let t_open = Instant::now();
         let mut file = match std::fs::File::open(&path) {
             Ok(f) => f,
@@ -253,6 +260,106 @@ async fn start_video_server(video_path: Arc<Mutex<Option<String>>>) -> u16 {
             Response::builder()
                 .status(StatusCode::INTERNAL_SERVER_ERROR)
                 .body(Body::empty()).unwrap()
+        }
+    }
+
+    // ── Chunked path (Tag mode, opt-in with ?chunked=1) ──────────────────────────────────────────────────────────
+    // The original handler reads the WHOLE requested range into memory before it sends a byte, and a <video> asks for
+    // "from N to the end of the file", so every seek cost one read of up to ~800 MB (median 309 ms in a real trace,
+    // 99% of it the read). This path answers with at most CHUNK_BYTES per response (HTTP lets a server send less than
+    // asked; Content-Range says what it sent and the browser asks for the next piece when it needs it), reads it with
+    // tokio::fs so no worker thread is blocked, answers HEAD without reading anything, and answers a request that
+    // cannot be satisfied (e.g. "bytes=<file size>-") with 416 instead of the whole file.
+    async fn serve_chunked(
+        path: String,
+        method: axum::http::Method,
+        headers: HeaderMap,
+        mut tr: Option<VideoTrace>,
+        t_handler: std::time::Instant,
+    ) -> Response<axum::body::Body> {
+        use crate::video_range::{plan, RangePlan, CHUNK_BYTES};
+        use axum::body::Body;
+        use std::io::SeekFrom;
+        use std::time::Instant;
+        use tokio::io::{AsyncReadExt, AsyncSeekExt};
+
+        let fail = |code: StatusCode| Response::builder().status(code).body(Body::empty()).unwrap();
+
+        let t_open = Instant::now();
+        let mut file = match tokio::fs::File::open(&path).await {
+            Ok(f) => f,
+            Err(_) => return fail(StatusCode::NOT_FOUND),
+        };
+        if let Some(t) = tr.as_mut() { t.open_ms = ms_since(t_open); }
+
+        let t_stat = Instant::now();
+        let size = match file.metadata().await {
+            Ok(m) => m.len(),
+            Err(_) => return fail(StatusCode::INTERNAL_SERVER_ERROR),
+        };
+        if let Some(t) = tr.as_mut() { t.stat_ms = ms_since(t_stat); t.file_size = size; }
+
+        let mime = if path.ends_with(".mp4") { "video/mp4" }
+            else if path.ends_with(".webm") { "video/webm" }
+            else if path.ends_with(".mkv") { "video/x-matroska" }
+            else if path.ends_with(".mov") { "video/quicktime" }
+            else if path.ends_with(".avi") { "video/x-msvideo" }
+            else if path.ends_with(".mts") || path.ends_with(".m2ts") { "video/mp2t" }
+            else { "video/mp4" };
+
+        let range_str = headers.get("range").and_then(|h| h.to_str().ok());
+        if let (Some(t), Some(r)) = (tr.as_mut(), range_str) {
+            t.range_req = r.to_string();
+            t.open_ended = r.trim_end().ends_with('-');
+        }
+        const EXPOSE: &str = "Content-Range, Accept-Ranges, Content-Length, Content-Type";
+
+        match plan(range_str, size, CHUNK_BYTES) {
+            RangePlan::Unsatisfiable => {
+                let mut resp = Response::builder()
+                    .status(StatusCode::RANGE_NOT_SATISFIABLE)
+                    .header("Content-Range", format!("bytes */{}", size))
+                    .header("Accept-Ranges", "bytes")
+                    .header("Access-Control-Allow-Origin", "*")
+                    .header("Access-Control-Expose-Headers", EXPOSE)
+                    .body(Body::empty()).unwrap();
+                if let Some(mut t) = tr.take() { t.outcome = "416"; t.finish(ms_since(t_handler), &mut resp); }
+                resp
+            }
+            RangePlan::Serve { start, length } => {
+                let end = start + length - 1;
+                let mut alloc_ms = 0.0; let mut seek_ms = 0.0; let mut read_ms = 0.0;
+                let body = if method == axum::http::Method::HEAD {
+                    Body::empty()          // headers only: nothing is read
+                } else {
+                    let t_alloc = Instant::now();
+                    let mut buf = vec![0u8; length as usize];
+                    alloc_ms = ms_since(t_alloc);
+                    let t_seek = Instant::now();
+                    if file.seek(SeekFrom::Start(start)).await.is_err() { return fail(StatusCode::INTERNAL_SERVER_ERROR); }
+                    seek_ms = ms_since(t_seek);
+                    let t_read = Instant::now();
+                    if file.read_exact(&mut buf).await.is_err() { return fail(StatusCode::INTERNAL_SERVER_ERROR); }
+                    read_ms = ms_since(t_read);
+                    Body::from(buf)
+                };
+                let t_build = Instant::now();
+                let mut resp = Response::builder()
+                    .status(StatusCode::PARTIAL_CONTENT)
+                    .header("Content-Type", mime)
+                    .header("Content-Length", length.to_string())
+                    .header("Content-Range", format!("bytes {}-{}/{}", start, end, size))
+                    .header("Accept-Ranges", "bytes")
+                    .header("Access-Control-Allow-Origin", "*")
+                    .header("Access-Control-Expose-Headers", EXPOSE)
+                    .body(body).unwrap();
+                if let Some(mut t) = tr.take() {
+                    t.alloc_ms = alloc_ms; t.seek_ms = seek_ms; t.read_ms = read_ms; t.build_ms = ms_since(t_build);
+                    t.start = start; t.len = length; t.outcome = "206-chunk";
+                    t.finish(ms_since(t_handler), &mut resp);
+                }
+                resp
+            }
         }
     }
 
