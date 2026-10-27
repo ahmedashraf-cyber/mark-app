@@ -429,7 +429,9 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
       const url = await invoke('get_video_url',{path})
       setVideoPath(path)
       const v = videoRef.current
-      if (v) { v.src=url; v.load(); setVideoLoaded(true) }
+      // With the perf overlay on, ask the server to time every request (Server-Timing header + %TEMP%\mark-video-trace.log).
+      // Off by default, and Tag mode only: no other screen adds this flag.
+      if (v) { v.src = perfEnabled() ? `${url}?trace=1` : url; v.load(); setVideoLoaded(true) }
       // Fetch file size for video identity (non-blocking — failures are non-fatal)
       let sizeBytes = null
       try { sizeBytes = await invoke('get_file_size', { path }) } catch(e) { console.warn('[MARK Field] get_file_size:', e) }
