@@ -366,6 +366,43 @@ async function validateOrWriteHeader(token, tab, expectedHeaders) {
     )
 }
 
+// ── "Have I already saved this half?" (asked on the Tag start screen, before Continue) ─────────────────────
+const normHr = v => String(v ?? '').replace(/\s+/g, '').toUpperCase()
+const SAVED_LOCAL = ['completed', 'pending_sheet_upload']
+
+/**
+ * Pure. Is there already a saved session by THIS collector for this match and half?
+ *   rows   field_sessions read as A:E, header first: A schema_version, B session_id, C match_id, D half, E collector_hr_code
+ *   local  this PC's saved sessions (FieldPage's local list): used when the sheet cannot be read, and also as a
+ *          second source, since a session that is saved locally but still waiting to upload is not in the sheet yet
+ * Returns { sessionId, source } or null.
+ */
+export function findOwnHalfIn({ rows = [], local = [], matchId, half, hrCode }) {
+  const id = String(matchId ?? '').trim(), h = toSheetHalf(half), hr = normHr(hrCode)
+  if (!id || !h || !hr) return null
+  const hit = rows.slice(1).find(r =>
+    String(r?.[2] ?? '').trim() === id && toSheetHalf(r?.[3]) === h && normHr(r?.[4]) === hr)
+  if (hit) return { sessionId: String(hit[1] ?? ''), source: 'sheet' }
+  const mine = local.find(x => SAVED_LOCAL.includes(x?.status)
+    && String(x.matchId ?? '').trim() === id && toSheetHalf(x.half) === h && normHr(x.collectorHrCode) === hr)
+  return mine ? { sessionId: String(mine.sessionId ?? ''), source: 'local' } : null
+}
+
+/**
+ * Reads the sheet and answers the question above.
+ * → { found, sessionId?, source?, verified }   verified=false means the sheet could not be read (offline), so only
+ * this PC's own list was checked. Never throws: a failed check must not stop anyone collecting.
+ */
+export async function findOwnSavedHalf({ matchId, half, hrCode, local = [] }) {
+  let rows = [], verified = true
+  try {
+    const token = await getToken()
+    rows = await readRange(token, FIELD_TAB_SESSIONS, 'A:E')
+  } catch (e) { verified = false; console.warn('[MARK Field] own-half check (sheet unreadable):', e?.message || e) }
+  const hit = findOwnHalfIn({ rows, local, matchId, half, hrCode })
+  return hit ? { found: true, ...hit, verified } : { found: false, verified }
+}
+
 // ── Main sync ─────────────────────────────────────────────────────────────
 export async function syncSessionToSheet(session, events) {
   const token = await getToken()
