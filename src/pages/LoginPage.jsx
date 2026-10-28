@@ -1,6 +1,8 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { invoke } from '@tauri-apps/api/core'
-import { auth, signInWithEmailAndPassword } from '../firebase/config'
+import { signInWithSession } from '../utils/sessionPolicy'
+import { MSG_DEACTIVATED } from '../utils/sessionFlags'
+import { useAuth } from '../hooks/useAuth.jsx'
 
 import { canUseHrCodeLogin } from '../hooks/useAdmin.js'
 
@@ -64,6 +66,15 @@ export default function LoginPage() {
   const [password, setPassword] = useState('')
   const [loading,  setLoading]  = useState(false)
   const [error,    setError]    = useState('')
+  // "Remember me" is deliberately NOT stored anywhere and always starts unticked: it is a decision made at each
+  // sign-in, and sign-out puts the box back to unticked simply because this component is mounted fresh.
+  const [remember, setRemember] = useState(false)
+  // A message left by the app itself (deactivated account, expired saved sign-in)
+  const { notice = '', clearNotice = () => {} } = useAuth() || {}
+  // A sign-in can succeed and still end up back on this screen: a deactivated account is signed out again right
+  // after it signs in, and the notice says why. Success used to unmount this page; now the form can stay on screen,
+  // so without this the button would stay on "Signing in…" and disabled.
+  useEffect(() => { if (notice) setLoading(false) }, [notice])
 
   const EMAIL_ERRORS = {
     'auth/invalid-credential':     'Incorrect email or password',
@@ -75,9 +86,10 @@ export default function LoginPage() {
 
   async function handleLogin(e) {
     e.preventDefault()
-    setError(''); setLoading(true)
+    setError(''); clearNotice(); setLoading(true)
     try {
-      await signInWithEmailAndPassword(auth, email.trim(), password)
+      // persistence is set inside signInWithSession BEFORE the sign-in call
+      await signInWithSession(email.trim(), password, { remember })
     } catch (err) {
       setLoading(false)
       setError(EMAIL_ERRORS[err.code] || 'Login failed')
@@ -86,7 +98,7 @@ export default function LoginPage() {
 
   async function handleHrLogin(e) {
     e.preventDefault()
-    setError(''); setLoading(true)
+    setError(''); clearNotice(); setLoading(true)
     try {
       const user = await lookupHrCode(hrCode)
       if (!user)          throw new Error('HR Code not found — check the code and try again')
@@ -110,12 +122,13 @@ export default function LoginPage() {
       const statusLower = (user.status || '').toLowerCase()
       if (['inactive','removed','disabled','no','false','0'].includes(statusLower)) {
         console.log('[MARK login] REJECT — status is', user.status)
-        throw new Error('Your access has been removed. Contact your Batch Manager.')
+        throw new Error(MSG_DEACTIVATED)
       }
 
       if (!user.email)    throw new Error('No email set for this HR Code — contact your admin')
       if (!user.password) throw new Error('No password set for this HR Code — contact your admin')
-      await signInWithEmailAndPassword(auth, user.email, user.password)
+      // HR-code sign-in never survives closing the app: remember is always false here
+      await signInWithSession(user.email, user.password, { remember: false })
     } catch (err) {
       setLoading(false)
       setError(EMAIL_ERRORS[err.code] || err.message || 'Sign-in failed')
@@ -161,6 +174,11 @@ export default function LoginPage() {
                 style={{fontFamily:'JetBrains Mono,monospace',letterSpacing:1}}
               />
             </div>
+            {notice && !error && (
+              <div style={{background:'rgba(255,159,10,0.1)',border:'1px solid rgba(255,159,10,0.35)',borderRadius:8,padding:'8px 12px',fontSize:12,color:'#FF9F0A'}}>
+                {notice}
+              </div>
+            )}
             {error && (
               <div style={{background:'rgba(255,69,58,0.1)',border:'1px solid rgba(255,69,58,0.3)',borderRadius:8,padding:'8px 12px',fontSize:12,color:'#FF453A'}}>
                 {error}
@@ -230,6 +248,16 @@ export default function LoginPage() {
                 onChange={e => { setPassword(e.target.value); setError('') }}
                 placeholder="••••••••" autoComplete="current-password"/>
             </div>
+            <label style={{display:'flex',alignItems:'center',gap:8,fontSize:12,color:'var(--t-2)',cursor:'pointer',userSelect:'none'}}>
+              <input type="checkbox" checked={remember} onChange={e => setRemember(e.target.checked)}
+                data-testid="remember-me" style={{accentColor:'var(--p2)',width:15,height:15,cursor:'pointer'}}/>
+              Remember me
+            </label>
+            {notice && !error && (
+              <div style={{background:'rgba(255,159,10,0.1)',border:'1px solid rgba(255,159,10,0.35)',borderRadius:8,padding:'8px 12px',fontSize:12,color:'#FF9F0A'}}>
+                {notice}
+              </div>
+            )}
             {error && (
               <div style={{background:'rgba(255,69,58,0.1)',border:'1px solid rgba(255,69,58,0.3)',borderRadius:8,padding:'8px 12px',fontSize:12,color:'#FF453A'}}>
                 {error}

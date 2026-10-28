@@ -1,7 +1,8 @@
 import { useState, useEffect, createContext, useContext } from 'react'
-import { auth, onAuthStateChanged, signOut, db } from '../firebase/config'
+import { auth, onAuthStateChanged, db } from '../firebase/config'
 import { doc, getDoc } from 'firebase/firestore'
 import { resolveRole } from '../utils/sheetRole'
+import { startupGate, endSession } from '../utils/sessionPolicy'
 import { capabilities } from './useAdmin'
 
 // ── Bootstrap full-access accounts ──────────────────────────────────────────
@@ -65,9 +66,19 @@ export function AuthProvider({ children }) {
   // change therefore takes effect on the user's next login, which is the
   // documented behaviour and avoids polling for a monthly event.
   const [sheetRole, setSheetRole] = useState(null)
+  // A message for the login screen after the app signed someone out on its own
+  // (deactivated account, or a remembered sign-in that ran out).
+  const [notice, setNotice] = useState('')
 
   useEffect(() => {
-    const unsub = onAuthStateChanged(auth, async (firebaseUser) => {
+    let cancelled = false
+    let unsub = () => {}
+    // Nothing below trusts a restored session until the startup guard has run:
+    // at a real app start it signs out anyone who was not remembered on purpose.
+    startupGate().then(guard => {
+      if (cancelled) return
+      if (guard?.notice) setNotice(guard.notice)
+    unsub = onAuthStateChanged(auth, async (firebaseUser) => {
       if (!firebaseUser) {
         setUser(null); setProfile(null); setSheetRole(null); setLoading(false); return
       }
@@ -101,6 +112,14 @@ export function AuthProvider({ children }) {
       // throwing.
       try {
         const r = await resolveRole({ email: firebaseUser.email })
+        // The status is checked at EVERY start, so a remembered user who was
+        // deactivated since is signed out here, not just refused at first login.
+        // (endSession signs out; the listener then fires again with no user.)
+        if (r.deactivated) {
+          setNotice(r.reason)
+          await endSession()
+          return
+        }
         setSheetRole(r)
         if (!r.role) console.warn('[MARK] no role for', firebaseUser.email, '—', r.reason)
       } catch (e) {
@@ -110,14 +129,18 @@ export function AuthProvider({ children }) {
 
       setLoading(false)
     })
-    return unsub
+    })
+    return () => { cancelled = true; unsub() }
   }, [])
 
-  const logout = () => signOut(auth)
+  // Ends the session and forgets what the app remembered about it (the remember
+  // flag, the saved role). In-progress work on disk is left alone.
+  const logout = () => endSession()
 
   return (
     <AuthContext.Provider value={{
       user, profile, loading, logout,
+      notice, clearNotice: () => setNotice(''),
       // the resolved role, and the full result for diagnostics
       role: sheetRole?.role || null,
       roleInfo: sheetRole,
