@@ -20,7 +20,7 @@
 import { invoke } from '@tauri-apps/api/core'
 import { PEOPLE_SHEET_ID, PEOPLE_TAB_NAMES } from '../config/drillConfig'
 import { getDrillSheetId } from './drillSheet'
-import { FIELD_SHEET_ID, FIELD_TAB_SESSIONS } from '../config/fieldConfig'
+import { FIELD_SHEET_ID, FIELD_TAB_SESSIONS, FIELD_TAB_EVENTS } from '../config/fieldConfig'
 import { TAB_SCORES } from '../config/comparisonConfig'
 import { capabilities } from '../hooks/useAdmin'
 import {
@@ -515,4 +515,52 @@ export async function editFieldSession({ role, changedBy, session, matchId, half
     firestore = /not-found|No document/i.test(String(e?.code || e?.message)) ? 'no Firestore copy of this session' : `not updated (${e?.code || e?.message || e})`
   }
   return { changes, scoresRows: scores.rows, scoresChecked: scores.checked, firestore }
+}
+
+// ── The Sessions table's data (READ-ONLY) ───────────────────────────────────
+// Read once when the tab opens (and again only on Reload); everything after that is in memory.
+// Each source reports its own outcome, so one failed read never makes another look empty: a table
+// that said "Not compared" for every session because the scores tab could not be read would be a lie.
+//   field_sessions   required: if it cannot be read there is nothing to show, and the error is thrown
+//   scores           optional: a missing tab is a real "nothing compared yet"; any other failure is reported
+//   session_edits    optional: a missing tab is a real "never edited"; any other failure is reported
+//   roster           optional: names and roles; if unreadable the table still works without them
+const settle = p => p.then(v => ({ ok: true, v }), e => ({ ok: false, error: e?.message || String(e) }))
+const tabMissing = r => !r.ok && /\(400\)/.test(r.error)
+
+export async function loadSessionsDataset() {
+  const [fs, sc, ed, ro] = await Promise.all([
+    settle(readRange(FIELD_SHEET_ID, `${FIELD_TAB_SESSIONS}!A:ZZ`)),
+    settle(readRange(FIELD_SHEET_ID, `${TAB_SCORES}!A:ZZ`)),
+    settle(readRange(FIELD_SHEET_ID, `${EDIT_LOG_TAB}!A:ZZ`)),
+    settle(loadUsers()),
+  ])
+  if (!fs.ok) throw new Error(`Could not read ${FIELD_TAB_SESSIONS}: ${fs.error}`)
+  const header = (fs.v[0] || []).map(norm)
+  for (const n of ['session_id', 'match_id', 'half']) {
+    if (!header.includes(n)) throw new Error(`Column ${n} not found in ${FIELD_TAB_SESSIONS}`)
+  }
+  const optional = r => (r.ok ? { ok: true, values: r.v } : tabMissing(r) ? { ok: true, values: [] } : { ok: false, error: r.error })
+  return {
+    sessions: fs.v,
+    scores: optional(sc),
+    edits: optional(ed),
+    roster: ro.ok ? { ok: true, list: ro.v } : { ok: false, error: ro.error },
+    loadedAt: new Date().toISOString(),
+  }
+}
+
+/**
+ * How many events each session has: rows per session_id in field_events, reading column A only.
+ * field_sessions has no event-count column, and this tab can be large, so it is loaded after the table
+ * is already on screen. → Map(session_id → count)
+ */
+export async function loadEventCounts() {
+  const values = await readRange(FIELD_SHEET_ID, `${FIELD_TAB_EVENTS}!A:A`)
+  const counts = new Map()
+  for (let i = 1; i < values.length; i++) {
+    const id = norm(values[i]?.[0])
+    if (id) counts.set(id, (counts.get(id) || 0) + 1)
+  }
+  return counts
 }
