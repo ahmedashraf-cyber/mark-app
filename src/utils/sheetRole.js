@@ -1,8 +1,12 @@
 /**
  * sheetRole.js — resolve a person's role from the Supervisor tab
  * ============================================================================
- * One read per login, cached for the session and persisted so the app still
- * works offline. Nothing re-reads the sheet on a screen transition.
+ * The sheet is read at EVERY app start and every sign-in; nothing re-reads it on a screen transition. The role
+ * is never taken from a cache while the sheet is reachable, so a role change or a deactivation takes effect at
+ * the next start, including for a "Remember me" session.
+ *
+ * One narrow exception, the OFFLINE FALLBACK (see offlineRole below): when the sheet cannot be reached, a COLLECTOR
+ * may keep collecting on the role last verified, for at most a week. Any other role must be verified online.
  *
  * Sheet layout, verified live: A=Code B=Name C=Role D=Mail E=Password F=Status
  * 541 users at the time of writing.
@@ -14,6 +18,7 @@
 import { invoke } from '@tauri-apps/api/core'
 import { PEOPLE_SHEET_ID, PEOPLE_TAB_NAMES } from '../config/drillConfig'
 import { COLLECTOR_ROLES, isCollector, capabilities } from '../hooks/useAdmin'
+import { MSG_DEACTIVATED } from './sessionFlags'
 const CACHE_KEY = 'mark_role_cache_v1'
 const COL = { code: 0, name: 1, role: 2, mail: 3, pass: 4, status: 5 }
 
@@ -44,6 +49,27 @@ function writeCache(key, entry) {
 export function cachedRole(key) {
   const hit = readCache()[String(key || '').toLowerCase()]
   return hit || null
+}
+
+/** Forget every saved role. Called on sign-out, so nothing about the previous person is left behind. */
+export function clearRoleCache() {
+  try { localStorage.removeItem(CACHE_KEY) } catch { /* nothing to clear */ }
+}
+
+/** How long a collector may keep working offline on a role that was last verified online. */
+export const OFFLINE_ROLE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000
+
+/**
+ * The saved role, ONLY if it may be used while the sheet is unreachable:
+ *   - a collector role. Collecting only adds data; a manager's access can rewrite everyone's roles, so it must
+ *     never rest on something saved on this PC.
+ *   - verified within the last week, so a deactivated collector cannot work offline indefinitely.
+ */
+function offlineRole(key) {
+  const hit = cachedRole(key)
+  if (!hit || !isCollector(hit.role)) return null
+  if (!Number.isFinite(hit.cachedAt) || Date.now() - hit.cachedAt > OFFLINE_ROLE_MAX_AGE_MS) return null
+  return hit
 }
 
 // ── config and role_access ──────────────────────────────────────────────────
@@ -193,14 +219,15 @@ export async function resolveRole({ email, hrCode }) {
     // ── OFFLINE FALLBACK ──────────────────────────────────────────────────
     // A collector must be able to work with no connection; that is the whole
     // point of the offline write queue. So:
-    //   · a cached role is honoured, flagged offline
-    //   · with no cache, an HR-code gets COLLECTOR access only — the least
-    //     privilege that still allows the job
-    //   · with no cache, an EMAIL is denied, because elevated access must
-    //     never rest on an unverified identity
+    //   · a saved COLLECTOR role, verified within the last week, is honoured,
+    //     flagged offline (see offlineRole)
+    //   · any other saved role is NOT honoured: elevated access must be
+    //     verified against the sheet, never rest on something saved locally
+    //   · with no saved role, an HR-code gets COLLECTOR access only (note:
+    //     the sign-in path passes the email, so this branch is not reached today)
     // The asymmetry is deliberate: an unverified collector can only add data,
     // whereas an unverified manager could rewrite everyone's roles.
-    const hit = cachedRole(key)
+    const hit = offlineRole(key)
     if (hit) {
       return { ...hit, source: 'cache', offline: true,
         reason: 'Sheet unreachable — using your last known role' }
@@ -213,8 +240,7 @@ export async function resolveRole({ email, hrCode }) {
       }
     }
     return { role: null, source: 'fallback', offline: true,
-      reason: 'Sheet unreachable and no cached role. Connect to the internet '
-        + 'and sign in again.' }
+      reason: "Can't reach the sheet to verify your account. Connect to the internet and try again." }
   }
 
   const found = email
@@ -227,7 +253,7 @@ export async function resolveRole({ email, hrCode }) {
   }
   if (!found.active) {
     return { role: null, source: 'sheet', code: found.code, name: found.name,
-      reason: 'Your access has been removed. Contact your Batch Manager.' }
+      deactivated: true, reason: MSG_DEACTIVATED }
   }
   // HR-code login is for collectors only; everyone else must use email
   if (hrCode && !isCollector(found.role)) {

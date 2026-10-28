@@ -199,6 +199,31 @@ function AppInner() {
     checkForUpdate().then(u => { if (u) setUpdate(u) })
   }, [user])
 
+  // Closing the main window must close the pop-out video window with it. The pop-out is created at runtime (see
+  // ComparisonPage / CollectorSelfReviewPage) and has no parent, so left alone it would keep the app process alive
+  // after the main window is gone. (A non-remembered sign-in already ends with the main window: it lives in that
+  // window's session storage. The pop-out itself never touches Firebase.) We do NOT preventDefault: the close goes on.
+  useEffect(() => {
+    let off = () => {}
+    let stopped = false
+    ;(async () => {
+      try {
+        const { getCurrentWindow } = await import('@tauri-apps/api/window')
+        const me = getCurrentWindow()
+        if (me.label !== 'main') return
+        const un = await me.onCloseRequested(async () => {
+          try {
+            const { WebviewWindow } = await import('@tauri-apps/api/webviewWindow')
+            const pop = await WebviewWindow.getByLabel('mark-video')
+            if (pop) await pop.close()
+          } catch { /* nothing to close, or not running inside Tauri */ }
+        })
+        if (stopped) un(); else off = un
+      } catch { /* not running inside Tauri (browser / tests) */ }
+    })()
+    return () => { stopped = true; try { off() } catch { /* ignore */ } }
+  }, [])
+
   // Patch Tag Once shortcuts and app.asar on every MARK launch (idempotent).
   // asar patch re-enabled in v5.0.0 — embeds correct fiber-based event counting
   // bridge directly into the collection app. Runs silently, skips if already patched.
@@ -318,6 +343,12 @@ function AppInner() {
           <div style={{ fontSize:11, color:'var(--t-3)', marginTop:14 }}>
             {user?.email || ''}
           </div>
+          {roleInfo.offline && (
+            // The sheet could not be reached. A reload re-reads it with the same sign-in (the session survives a
+            // reload), so the person can retry once the connection is back without signing out.
+            <button className="btn-orange" style={{ marginTop:18, marginRight:8, padding:'8px 20px', fontSize:12 }}
+              onClick={() => window.location.reload()}>Try again</button>
+          )}
           <button className="btn-ghost" style={{ marginTop:18, padding:'8px 20px', fontSize:12 }}
             onClick={logout}>Sign out</button>
         </div>
