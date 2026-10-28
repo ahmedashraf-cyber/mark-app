@@ -28,7 +28,8 @@ import { createSource } from '../utils/comparisonSource'
 import ErrorTimeline from '../components/ErrorTimeline'
 import EventsSidebar from '../components/EventsSidebar'
 import TaggedEventsList from '../components/TaggedEventsList'
-import { downloadFieldCsv, syncSessionToSheet } from '../utils/fieldSheetSync'
+import { downloadFieldCsv, syncSessionToSheet, findOwnSavedHalf } from '../utils/fieldSheetSync'
+import { matchSummaryLine } from '../utils/tagMatchLine'
 import { showToast } from '../utils/toast'
 import { FIELD_LS_KEY, FIELD_SHEET_ID, validateMatchId } from '../config/fieldConfig'
 import { importModelAnswers, isModelImportDone } from '../utils/importModelAnswers'
@@ -209,6 +210,11 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
   const [startMatchId, setStartMatchId] = useState(initialSession?.matchId ? String(initialSession.matchId) : '')
   // idle | checking | found | none | error
   const [modelCheck, setModelCheck] = useState({ state:'idle' })
+  // Has THIS collector already saved this half of this match? idle | checking | none | found | unverified
+  // (unverified = the sheet could not be read, so only this PC's own list was checked; it never blocks.)
+  // A 'found' needs one deliberate click (dupAck) before Continue works.
+  const [dupCheck, setDupCheck] = useState({ state:'idle' })
+  const [dupAck, setDupAck] = useState(false)
 
   // Runs once both Match ID and Part are set. Debounced so typing a match ID
   // doesn't query the sheet on every keystroke; `live` discards an answer for
@@ -229,6 +235,22 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
         if (live) setModelCheck({ state:'error', message: e?.message || String(e) })
       }
     }, 500)
+    return () => { live = false; clearTimeout(t) }
+  }, [startMatchId, matchPart, methodConfirmed])
+
+  // Same moment as the model-answer check: once Match ID and Part are both set. Changing either one withdraws a
+  // previous acknowledgement, so the click always refers to what is on screen now.
+  useEffect(() => {
+    setDupAck(false)
+    if (methodConfirmed) return
+    const id = startMatchId.trim(), hr = String(roleInfo?.code || '').trim()
+    if (!id || !matchPart || !hr) { setDupCheck({ state:'idle' }); return }
+    let live = true
+    setDupCheck({ state:'checking' })
+    const t = setTimeout(async () => {
+      const r = await findOwnSavedHalf({ matchId:id, half:partToHalf(matchPart), hrCode:hr, local:loadLocalSessions() })
+      if (live) setDupCheck(r.found ? { state:'found', sessionId:r.sessionId } : { state: r.verified ? 'none' : 'unverified' })
+    }, 600)
     return () => { live = false; clearTimeout(t) }
   }, [startMatchId, matchPart, methodConfirmed])
 
@@ -1698,6 +1720,11 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
     setSaveResult(null)
     setSaveMatchId(''); setSaveHalf(''); setSaveHrCode('')
     setSaveHomeTeam(''); setSaveAwayTeam(''); setSaveMatchError('')
+    // The start-screen choices are cleared too. They used to survive this reset, so the NEXT video was saved under
+    // the previous Match ID and Part, with the start screen never shown again. A new session starts blank: method,
+    // Part and Match ID are chosen again, and the model-answer / already-saved checks run again for them.
+    setStartMatchId(''); setMatchPart(null); setCollectionMethod(null); setMethodConfirmed(false)
+    setModelCheck({ state:'idle' }); setDupCheck({ state:'idle' }); setDupAck(false)
     setIsModelAnswer(false)
     setSession(null)
     setEvents([])
@@ -1801,13 +1828,37 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
                 continue, and this session will be flagged as unverified.</span>)}
           </div>
 
+          {/* What the collector typed, read back with the teams the model answer returned: a wrong Match ID or a
+              wrong Part shows up as the wrong teams or the wrong half BEFORE anything is collected. */}
+          {(() => {
+            const line = modelCheck.state === 'found'
+              ? matchSummaryLine({ matchId:startMatchId, home:modelCheck.home, away:modelCheck.away, part:matchPart }) : ''
+            return line ? (
+              <div data-testid="match-confirm" style={{ margin:'0 0 14px', padding:'10px 12px', borderRadius:8,
+                background:'rgba(48,209,88,0.08)', border:'1px solid rgba(48,209,88,0.25)',
+                fontSize:13, fontWeight:600, color:'var(--t-1)', lineHeight:1.5 }}>{line}</div>
+            ) : null
+          })()}
+          {dupCheck.state === 'found' && (
+            <div data-testid="dup-half" style={{ margin:'0 0 14px', padding:'10px 12px', borderRadius:8,
+              background:'rgba(255,159,10,0.1)', border:'1px solid rgba(255,159,10,0.4)', fontSize:12, lineHeight:1.5 }}>
+              <div style={{ fontWeight:700, color:'#FF9F0A' }}>You already saved this half for this match.</div>
+              {dupAck
+                ? <div style={{ color:'var(--t-3)', marginTop:4 }}>Understood — you can continue and collect it again.</div>
+                : <button className="btn-ghost" data-testid="dup-ack" style={{ marginTop:8, padding:'6px 12px', fontSize:11 }}
+                    onClick={() => setDupAck(true)}>I want to collect it again</button>}
+            </div>
+          )}
+
           <div style={{ display:'flex', gap:8 }}>
             <button className="btn-ghost" style={{ padding:'9px 16px', fontSize:12 }}
               onClick={onBack}>Back</button>
             <div style={{ flex:1 }}/>
             {(() => {
               // method + part + match ID + a passing model answer check
-              const ready = !!(collectionMethod && matchPart && startMatchId.trim() && modelOk)
+              // …and the already-saved check must have answered, and a 'found' must have been clicked through
+              const dupClear = dupCheck.state !== 'checking' && (dupCheck.state !== 'found' || dupAck)
+              const ready = !!(collectionMethod && matchPart && startMatchId.trim() && modelOk && dupClear)
               return (
                 <button className="btn-orange" style={{ padding:'9px 20px', fontSize:12,
                   opacity: ready ? 1 : 0.45 }}
@@ -2416,6 +2467,13 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
                         <div style={{fontSize:13,fontWeight:600,marginTop:2,fontFamily:'JetBrains Mono,monospace'}}>{v || '—'}</div>
                       </div>
                     ))}
+                     {/* The last check before saving: is this the video that belongs to that Match ID? */}
+                     <div style={{gridColumn:'1 / -1',minWidth:0}}>
+                       <div style={{fontSize:9,fontWeight:700,color:'var(--t-3)',letterSpacing:0.8,textTransform:'uppercase'}}>Video file</div>
+                       <div data-testid="save-video-name" title={videoName || session?.videoName || ''}
+                         style={{fontSize:13,fontWeight:600,marginTop:2,fontFamily:'JetBrains Mono,monospace',
+                           overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{videoName || session?.videoName || '—'}</div>
+                     </div>
                   </div>
                 </div>
 

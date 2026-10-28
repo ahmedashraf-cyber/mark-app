@@ -1,0 +1,38 @@
+import { validateSessionEdit, planSessionEdit, matchesQuery, buildEditLogRows, scoresWarning, HALF_CHOICES, PART_OF_HALF, EDIT_LOG_HEADER } from './sessionEdit.js'
+let pass = 0, fail = 0
+const ok = (n, c, d = '') => { c ? pass++ : fail++; console.log(`${c ? '  ✓' : '  ✗'} ${n}${!c && d ? '   [' + d + ']' : ''}`) }
+const J = JSON.stringify
+console.log('validation')
+ok('a valid edit passes', validateSessionEdit({ matchId: '1366067', half: '2H' }).ok)
+ok('match id must be 6-8 digits (same rule as the Tag start screen)', !validateSessionEdit({ matchId: '12345', half: '1H' }).ok && !validateSessionEdit({ matchId: '123456789', half: '1H' }).ok && !validateSessionEdit({ matchId: '13a6067', half: '1H' }).ok && !validateSessionEdit({ matchId: '', half: '1H' }).ok)
+ok('half must be one of the five real halves', !validateSessionEdit({ matchId: '1366067', half: '3H' }).ok && !validateSessionEdit({ matchId: '1366067', half: '' }).ok && !validateSessionEdit({ matchId: '1366067', half: '1HH' }).ok)
+ok('both errors are reported together', Object.keys(validateSessionEdit({ matchId: 'x', half: 'y' }).errors).sort().join() === 'half,matchId')
+ok('surrounding spaces in the match id are tolerated', validateSessionEdit({ matchId: ' 1366067 ', half: '1H' }).ok)
+ok('the five halves map to parts 1-5 consistently', HALF_CHOICES.every(([c]) => PART_OF_HALF[c]) && HALF_CHOICES.map(([c]) => PART_OF_HALF[c]).join('') === '12345')
+console.log('plan')
+const cur = { match_id: '1366067', half: '1H', part: '1' }
+ok('nothing changes -> no changes', planSessionEdit(cur, { matchId: '1366067', half: '1H' }).length === 0)
+ok('only the match id changes', J(planSessionEdit(cur, { matchId: '1454815', half: '1H' })) === J([{ field: 'match_id', from: '1366067', to: '1454815' }]))
+ok('half changes -> part follows (so the row never says 2H and part 1)', J(planSessionEdit(cur, { matchId: '1366067', half: '2H' })) === J([{ field: 'half', from: '1H', to: '2H' }, { field: 'part', from: '1', to: '2' }]))
+ok('both change -> three fields', planSessionEdit(cur, { matchId: '1454815', half: 'PEN' }).map(c => c.field).join() === 'match_id,half,part')
+ok('a part that is already right is not rewritten', J(planSessionEdit({ match_id: '1366067', half: '1H', part: '2' }, { matchId: '1366067', half: '2H' })) === J([{ field: 'half', from: '1H', to: '2H' }]))
+ok('an old "1HH" row is not reported as changed when 1H is chosen', planSessionEdit({ match_id: '1366067', half: '1HH', part: '1' }, { matchId: '1366067', half: '1H' }).length === 0)
+ok('an older session with no part column value gets one when the half changes', J(planSessionEdit({ match_id: '1366067', half: '1H', part: '' }, { matchId: '1366067', half: '2H' })) === J([{ field: 'half', from: '1H', to: '2H' }, { field: 'part', from: '', to: '2' }]))
+ok('values with stray spaces compare equal', planSessionEdit({ match_id: ' 1366067 ', half: ' 1H', part: '1' }, { matchId: '1366067', half: '1H' }).length === 0)
+console.log('search')
+const row = { match_id: '1366067', session_id: 'field_uid_abc_123', collector_hr_code: 'C-77', collector_email: 'Cal@hudl.com', video_filename: 'Arsenal_Chelsea.mp4' }
+ok('by match id / session id / HR code / email / video name', ['1366067', 'abc_123', 'c-77', 'cal@', 'arsenal'].every(q => matchesQuery(row, q)))
+ok('empty search matches nothing (no accidental "show everything")', !matchesQuery(row, '') && !matchesQuery(row, '   '))
+ok('a non-matching term does not match', !matchesQuery(row, '9999999'))
+console.log('log rows')
+const rows = buildEditLogRows({ at: '2026-10-28T10:00:00.000Z', changedBy: 'mia@hudl.com', session: { session_id: 's1', collector_hr_code: 'C-77' }, changes: planSessionEdit(cur, { matchId: '1454815', half: '2H' }), scoresCount: 2, status: 'applied' })
+ok('one log row per changed field, same width as the header', rows.length === 3 && rows.every(r => r.length === EDIT_LOG_HEADER.length))
+ok('it records who, when, which session, old value and new value', J(rows[0]) === J(['2026-10-28T10:00:00.000Z', 'mia@hudl.com', 's1', 'C-77', 'match_id', '1366067', '1454815', '2', 'applied', '']), J(rows[0]))
+ok('a failed write is logged with its own status', buildEditLogRows({ at: 'x', changedBy: 'm', session: { session_id: 's' }, changes: [{ field: 'half', from: '1H', to: '2H' }], scoresCount: 0, status: 'NOT APPLIED', note: 'boom' })[0][8] === 'NOT APPLIED')
+console.log('scores warning')
+ok('no scores rows -> no warning', scoresWarning([]) === '' && scoresWarning(undefined) === '')
+const w = scoresWarning([{ run_timestamp_iso: '2026-10-01T00:00:00Z' }, { run_timestamp_iso: '2026-10-20T00:00:00Z' }])
+ok('says how many rows, that they keep the old values, and that the comparison must be run again', /2 rows in the scores tab/.test(w) && /OLD match and half/.test(w) && /must be run again/.test(w) && /latest run 2026-10-20/.test(w))
+ok('is honest that Comparison will refuse to re-write an identical run', /no changes detected/.test(w) && /does not remove them/.test(w))
+ok('singular for one row', /1 row in the scores tab/.test(scoresWarning([{}])))
+console.log(`\n${pass} passed, ${fail} failed`); process.exit(fail ? 1 : 0)

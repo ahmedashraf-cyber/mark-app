@@ -12,7 +12,7 @@
  * touching it. Saves therefore take a second or two; that is the price of not
  * overwriting the wrong person when the sheet has been sorted underneath us.
  */
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useRef, useCallback } from 'react'
 import { ALL_ROLES, capabilities } from '../hooks/useAdmin'
 import {
   loadUsers, setUserRole, setUserStatus, addUser,
@@ -24,6 +24,11 @@ import { sendPasswordResetEmail } from 'firebase/auth'
 import { auth } from '../firebase/config'
 import { CURRENT_VERSION } from '../hooks/useUpdateCheck'
 import { planRepair, applyRepair } from '../utils/modelRepair'
+import { findScoresRows, editFieldSession, loadSessionsDataset, loadEventCounts } from '../utils/adminSheet'
+import { buildSessionRows, patchAfterEdit } from '../utils/sessionScores'
+import SessionsTable from '../components/SessionsTable'
+import { HALF_CHOICES, EDIT_LOG_TAB, validateSessionEdit, planSessionEdit, scoresWarning } from '../utils/sessionEdit'
+import { toSheetHalf } from '../utils/fieldSheetSync'
 import { showToast } from '../utils/toast'
 
 const INACTIVE = ['inactive', 'removed', 'disabled', 'no', 'false', '0']
@@ -62,6 +67,7 @@ export default function AdminPage({ role, changedBy, onBack }) {
       {tab === 'users'   ? <UsersSection changedBy={changedBy}/>
        : tab === 'access' ? <AccessSection changedBy={changedBy}/>
        : tab === 'app'    ? <><AppSection changedBy={changedBy}/><RepairSection/></>
+       : tab === 'sessions' ? <SessionsSection role={role} changedBy={changedBy}/>
        : <QuizzesSection changedBy={changedBy} canEdit={caps.editQuizSettings}/>}
     </Shell>
   )
@@ -679,6 +685,152 @@ function RepairSection() {
   )
 }
 
+// ── Sessions: a read-only table of every saved session with its latest score, plus the Edit panel ──────────────
+/**
+ * Batch Manager only (the page refuses everyone else, and editFieldSession checks the role again).
+ *
+ * field_sessions, scores, session_edits and the roster are read ONCE when this tab opens (and again on Reload) and
+ * joined in memory by session id (utils/sessionScores.js). Filters, sorting and paging never read a sheet. The
+ * table is a view: nothing here writes to scores, and the Edit panel below is the same one as before. Clicking
+ * a row opens it. If a read fails the real error is shown, and a source that could not be read is never shown as
+ * "nothing there".
+ */
+function SessionsSection({ role, changedBy }) {
+  const [ds, setDs]         = useState(null)                       // the raw sheets, as read
+  const [load, setLoad]     = useState({ status: 'loading', error: '' })   // loading | reloading | ready | error
+  const [events, setEvents] = useState({ status: 'idle', map: null, error: '' })
+  const [busy, setBusy]     = useState('')
+  const [msg, setMsg]       = useState('')
+  const [edit, setEdit]     = useState(null)                       // { row, matchId, half, scores }
+  const [done, setDone]     = useState(null)                       // result of the last saved edit
+  const gen = useRef(0)                                            // a slow read must not overwrite a newer one
+
+  const reload = useCallback(async () => {
+    const my = ++gen.current
+    setLoad(l => ({ status: l.status === 'ready' ? 'reloading' : 'loading', error: '' }))
+    try {
+      const raw = await loadSessionsDataset()
+      if (my !== gen.current) return
+      setDs(raw); setLoad({ status: 'ready', error: '' }); setEdit(null)
+      // the event counts are a separate, larger read: the table is already usable while they arrive
+      setEvents({ status: 'loading', map: null, error: '' })
+      loadEventCounts().then(
+        map => { if (my === gen.current) setEvents({ status: 'ready', map, error: '' }) },
+        e => { if (my === gen.current) setEvents({ status: 'error', map: null, error: e?.message || String(e) }) })
+    } catch (e) { if (my === gen.current) setLoad({ status: 'error', error: e?.message || String(e) }) }
+  }, [])
+  useEffect(() => { reload(); return () => { gen.current++ } }, [reload])
+
+  const built = useMemo(() => (ds ? buildSessionRows(ds, events.map) : null), [ds, events.map])
+
+  const open = async row0 => {
+    // the Edit panel compares against the cell as it is in the sheet, so it gets the raw half, not the tidied one
+    const row = { ...row0, half: row0.halfRaw }
+    setDone(null); setMsg('')
+    setEdit({ row, matchId: row.match_id, half: toSheetHalf(row.half) || row.half, scores: null })
+    try {
+      const sc = await findScoresRows(row.session_id)
+      setEdit(e => (e && e.row.session_id === row.session_id ? { ...e, scores: sc } : e))
+    } catch (e) { setEdit(x => (x && x.row.session_id === row.session_id ? { ...x, scores: { rows: [], checked: false, error: e?.message || String(e) } } : x)) }
+  }
+
+  const current = edit && { match_id: edit.row.match_id, half: edit.row.half, part: edit.row.part }
+  const valid   = edit ? validateSessionEdit({ matchId: edit.matchId, half: edit.half }) : null
+  const changes = edit && valid.ok ? planSessionEdit(current, { matchId: edit.matchId, half: edit.half }) : []
+  const warn    = edit?.scores?.checked ? scoresWarning(edit.scores.rows) : ''
+
+  const save = async () => {
+    const lines = changes.map(c => `  ${c.field}: ${c.from || '(blank)'}  →  ${c.to}`).join('\n')
+    const ask = `Change this session?\n\n${edit.row.session_id}\n${lines}\n\n` + (warn ? `${warn}\n\n` : '')
+      + `This is logged in ${EDIT_LOG_TAB} as ${changedBy}.`
+    if (!window.confirm(ask)) return
+    setBusy('save'); setMsg('')
+    try {
+      const r = await editFieldSession({ role, changedBy, session: edit.row, matchId: edit.matchId, half: edit.half })
+      // update the in-memory copy, so the row shows its new values and its Stale flag at once
+      setDs(d => patchAfterEdit(d, edit.row, r.changes, changedBy))
+      setDone({ session: edit.row.session_id, ...r }); setEdit(null)
+    } catch (e) { setMsg(e?.message || String(e)) }
+    finally { setBusy('') }
+  }
+
+  const box = (color, border, bg) => ({ fontSize:11, lineHeight:1.6, padding:'10px 12px', borderRadius:8, color, border:`1px solid ${border}`, background:bg })
+  return (
+    <div className="card" style={{ padding: 16 }}>
+      <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 4 }}>Sessions</div>
+      <div style={{ fontSize: 10, color: 'var(--t-3)', marginBottom: 12, lineHeight: 1.6 }}>
+        Every session saved to <code>field_sessions</code> with its latest score from <code>scores</code>. This is a view:
+        nothing here changes a score. Click a row to correct its <b>Match ID</b> or <b>half</b>; every change is logged in <code>{EDIT_LOG_TAB}</code>.
+      </div>
+
+      {load.status === 'loading' && <div data-testid="sessions-loading" style={{ fontSize: 12, color: 'var(--t-3)', padding: '18px 0' }}>Reading field_sessions, scores and session_edits…</div>}
+      {load.status === 'error' && (
+        <div data-testid="sessions-load-error" style={{ ...box('#FF453A', 'rgba(255,69,58,0.3)', 'rgba(255,69,58,0.08)') }}>
+          Couldn&rsquo;t load the sessions: {load.error}
+          <div style={{ marginTop: 8 }}><button style={btn} onClick={reload}>Try again</button></div>
+        </div>)}
+
+      {built && load.status !== 'error' && (
+        <>
+      {edit && (
+        <div data-testid="edit-panel" style={{ border:'1px solid var(--b-1)', borderRadius:10, padding:14, background:'var(--bg-3)' }}>
+          <div style={{ fontSize:11, color:'var(--t-3)', marginBottom:10, fontFamily:'JetBrains Mono,monospace' }}>{edit.row.session_id}</div>
+          <div style={{ display:'flex', gap:12, alignItems:'flex-end', flexWrap:'wrap', marginBottom:12 }}>
+            <label style={{ fontSize:9, fontWeight:800, color:'var(--t-3)', letterSpacing:0.5 }}>MATCH ID
+              <input data-testid="edit-match" style={{ ...inputStyle, display:'block', marginTop:4, width:150, fontFamily:'JetBrains Mono,monospace' }}
+                inputMode="numeric" value={edit.matchId}
+                onChange={e => setEdit({ ...edit, matchId: e.target.value.replace(/\D/g, '') })}/>
+            </label>
+            <label style={{ fontSize:9, fontWeight:800, color:'var(--t-3)', letterSpacing:0.5 }}>HALF
+              <select data-testid="edit-half" style={{ ...inputStyle, display:'block', marginTop:4, cursor:'pointer' }}
+                value={edit.half} onChange={e => setEdit({ ...edit, half: e.target.value })}>
+                {!HALF_CHOICES.some(([c]) => c === edit.half) && <option value={edit.half}>{edit.half || '(blank)'}</option>}
+                {HALF_CHOICES.map(([c, l]) => <option key={c} value={c}>{c} · {l}</option>)}
+              </select>
+            </label>
+          </div>
+          {!valid.ok && <div style={{ ...box('#FF453A', 'rgba(255,69,58,0.3)', 'rgba(255,69,58,0.08)'), marginBottom:10 }}>{Object.values(valid.errors).join('. ')}</div>}
+          {changes.length > 0 && (
+            <div style={{ fontSize:11, color:'var(--t-2)', marginBottom:10, lineHeight:1.7 }}>
+              {changes.map(c => <div key={c.field} style={{ fontFamily:'JetBrains Mono,monospace' }}>{c.field}: {c.from || '(blank)'} → <b>{c.to}</b>{c.field === 'part' ? '  (follows the half)' : ''}</div>)}
+            </div>
+          )}
+          {edit.scores === null && <div style={{ fontSize:11, color:'var(--t-3)', marginBottom:10 }}>Checking the scores tab…</div>}
+          {edit.scores && !edit.scores.checked && (
+            <div data-testid="scores-unchecked" style={{ ...box('#FF9F0A', 'rgba(255,159,10,0.4)', 'rgba(255,159,10,0.1)'), marginBottom:10 }}>
+              Couldn&rsquo;t check the scores tab ({edit.scores.error}). If this session has been compared, the comparison must be run again after this edit.
+            </div>
+          )}
+          {warn && <div data-testid="scores-warning" style={{ ...box('#FF9F0A', 'rgba(255,159,10,0.4)', 'rgba(255,159,10,0.1)'), marginBottom:10 }}>⚠ {warn}</div>}
+          <div style={{ display:'flex', gap:8 }}>
+            <button style={btn} disabled={!!busy} onClick={() => setEdit(null)}>Cancel</button>
+            <button className="btn-orange" style={{ padding:'6px 14px', fontSize:11, opacity: (!valid.ok || !changes.length) ? 0.45 : 1 }}
+              data-testid="edit-save" disabled={!!busy || !valid.ok || !changes.length || edit.scores === null} onClick={save}>
+              {busy === 'save' ? 'Saving…' : 'Save change'}</button>
+          </div>
+        </div>
+      )}
+
+      {done && (
+        <div data-testid="edit-done" style={{ ...box('var(--t-2)', 'rgba(48,209,88,0.3)', 'rgba(48,209,88,0.07)'), marginTop:12 }}>
+          <b style={{ color:'#30D158' }}>Saved.</b>{' '}
+          {done.changes.map(c => `${c.field}: ${c.from || '(blank)'} → ${c.to}`).join(' · ')}
+          <div style={{ color:'var(--t-3)' }}>Logged in {EDIT_LOG_TAB}. Firestore copy: {done.firestore}.</div>
+          {done.scoresChecked && done.scoresRows.length > 0 && (
+            <div data-testid="done-scores-warning" style={{ marginTop:8, color:'#FF9F0A' }}>⚠ {scoresWarning(done.scoresRows)}</div>)}
+          {!done.scoresChecked && (
+            <div style={{ marginTop:8, color:'#FF9F0A' }}>⚠ The scores tab could not be checked. If this session has been compared, the comparison must be run again.</div>)}
+        </div>
+      )}
+      {msg && <div data-testid="edit-error" style={{ ...box('#FF453A', 'rgba(255,69,58,0.3)', 'rgba(255,69,58,0.08)'), marginTop:12 }}>{msg}</div>}
+          <SessionsTable rows={built.rows} notes={built.notes} eventsState={events} loadedAt={ds.loadedAt}
+            reloading={load.status === 'reloading'} onReload={reload} onOpen={open} editingKey={edit?.row.session_id}/>
+        </>
+      )}
+    </div>
+  )
+}
+
 /** numeric version compare: -1, 0, 1 */
 function cmp(a, b) {
   const pa = String(a).split('.').map(Number), pb = String(b).split('.').map(Number)
@@ -705,13 +857,13 @@ function Shell({ onBack, tab, setTab, children }) {
           color:'var(--p2)', letterSpacing:1.5, background:'rgba(232,89,12,0.12)',
           padding:'2px 8px', borderRadius:4 }}>ADMIN</div>
         <div style={{ flex:1 }}/>
-        {setTab && ['users','access','quizzes','app'].map(t => (
+        {setTab && ['users','access','quizzes','sessions','app'].map(t => (
           <button key={t} onClick={() => setTab(t)}
             style={{ ...btn, background: tab === t ? 'rgba(232,89,12,0.14)' : 'transparent',
               borderColor: tab === t ? 'var(--p2)' : 'var(--b-1)',
               color: tab === t ? 'var(--p2)' : 'var(--t-3)' }}>
             {t === 'users' ? 'Users' : t === 'access' ? 'Role access'
-              : t === 'quizzes' ? 'Quiz settings' : 'App'}
+              : t === 'quizzes' ? 'Quiz settings' : t === 'sessions' ? 'Sessions' : 'App'}
           </button>
         ))}
       </div>
