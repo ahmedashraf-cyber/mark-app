@@ -33,15 +33,32 @@ export default function PerfOverlay({ videoRef, renderCountRef, eventCount }) {
     const v = videoRef.current
     if (!v) return
     let seekStart = 0, tu = 0, longTasks = 0
+    // Seek bookkeeping (per second, reset on each tick): how many seeks started, how many started while the previous
+    // one had NOT finished (the browser abandons the old one and starts again), how many started during playback,
+    // how many were slow, and how many stalls (`waiting` = the decoder ran out of data). `recent` keeps the last
+    // seeks for the JSON copy.
+    let seeks = 0, overlaps = 0, whilePlaying = 0, waits = 0, slow = 0, pending = false
+    const recent = []
     const lat = []
-    const onSeeking = () => { seekStart = performance.now() }
-    const onSeeked = () => {
-      if (!seekStart) return
-      lat.push(performance.now() - seekStart); if (lat.length > 60) lat.shift(); seekStart = 0
+    const onSeeking = () => {
+      if (pending) overlaps++
+      pending = true; seeks++; if (!v.paused) whilePlaying++
+      seekStart = performance.now()
+      recent.push({ target: +v.currentTime.toFixed(2), playing: !v.paused, ms: null }); if (recent.length > 12) recent.shift()
     }
+    const onSeeked = () => {
+      pending = false
+      if (!seekStart) return
+      const ms = performance.now() - seekStart
+      lat.push(ms); if (lat.length > 60) lat.shift(); seekStart = 0
+      if (ms > 200) slow++
+      if (recent.length) recent[recent.length - 1].ms = +ms.toFixed(1)
+    }
+    const onWaiting = () => { waits++ }
     const onTU = () => { tu++ }
     v.addEventListener('seeking', onSeeking)
     v.addEventListener('seeked', onSeeked)
+    v.addEventListener('waiting', onWaiting)
     v.addEventListener('timeupdate', onTU)
     let obs = null
     try {
@@ -64,14 +81,22 @@ export default function PerfOverlay({ videoRef, renderCountRef, eventCount }) {
         seekMsMedian: sorted.length ? +sorted[sorted.length >> 1].toFixed(1) : null,
         seekMsMax: sorted.length ? +sorted[sorted.length - 1].toFixed(1) : null,
         playing: !v.paused,
+        seeksPerSec: seeks,
+        overlappingSeeksPerSec: overlaps,     // a seek started before the previous one finished
+        seeksWhilePlayingPerSec: whilePlaying,
+        slowSeeksPerSec: slow,                // took longer than 200 ms
+        waitingPerSec: waits,                 // the decoder ran out of data
+        recentSeeks: recent.map(r => ({ ...r })),
       }
       lastRenders = renderCountRef.current; lastDropped = dropped; tu = 0; longTasks = 0
+      seeks = 0; overlaps = 0; whilePlaying = 0; waits = 0; slow = 0
       history.current.push(row); if (history.current.length > 20) history.current.shift()
       setS(row)
     }, 1000)
     return () => {
       clearInterval(iv)
       v.removeEventListener('seeking', onSeeking); v.removeEventListener('seeked', onSeeked)
+      v.removeEventListener('waiting', onWaiting)
       v.removeEventListener('timeupdate', onTU)
       try { obs && obs.disconnect() } catch {}
     }
@@ -91,6 +116,8 @@ export default function PerfOverlay({ videoRef, renderCountRef, eventCount }) {
       {row('seek→seeked ms (last)', s.seekMsLast)}
       {row('seek→seeked ms (median)', s.seekMsMedian)}
       {row('seek→seeked ms (max)', s.seekMsMax)}
+      {row('seeks/s · overlapping · while playing', `${s.seeksPerSec} · ${s.overlappingSeeksPerSec} · ${s.seeksWhilePlayingPerSec}`)}
+      {row('slow seeks/s (>200 ms) · stalls/s', `${s.slowSeeksPerSec} · ${s.waitingPerSec}`)}
       <button style={{ pointerEvents: 'auto', marginTop: 6, width: '100%', fontSize: 9, padding: '3px 0', cursor: 'pointer',
         background: 'transparent', color: '#d0d0d8', border: '1px solid rgba(255,255,255,0.2)', borderRadius: 4 }}
         onClick={() => { try { navigator.clipboard.writeText(JSON.stringify(history.current)) } catch {} }}>

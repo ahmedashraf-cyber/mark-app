@@ -19,6 +19,7 @@
 //! side calls them by their snake_case names.
 
 mod drive_export;
+mod video_range;
 use std::sync::{Arc, Mutex};
 use tauri::command;
 use futures_util::{SinkExt, StreamExt};
@@ -41,6 +42,72 @@ struct VideoState {
 }
 
 // ─── HTTP video server with range request support ─────────────────────────────
+
+// Per-request timing for the video server. OFF unless the request URL carries `?trace=1`, which only Tag mode's
+// perf overlay adds, so every other screen takes exactly the code path it always did. When on, the response gets
+//   Server-Timing: open;dur=…, stat;dur=…, alloc;dur=…, seek;dur=…, read;dur=…, build;dur=…, total;dur=…
+// (read it in DevTools → Network → the request → Timing), an X-MARK-* header with the range actually served and how
+// many traced handlers were running at the same moment, and one line is appended to %TEMP%\mark-video-trace.log.
+// The phases are measured INSIDE the handler. If the browser's wait for a request is much longer than `total`, the
+// difference was spent before the handler started (the request queued behind other work), not in it.
+static TRACE_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static TRACE_INFLIGHT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+static TRACE_T0: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+
+struct TraceGuard;
+impl Drop for TraceGuard {
+    fn drop(&mut self) { TRACE_INFLIGHT.fetch_sub(1, std::sync::atomic::Ordering::Relaxed); }
+}
+
+#[derive(Default)]
+struct VideoTrace {
+    id: u64,
+    concurrent: usize,
+    started_ms: f64,
+    open_ms: f64,
+    stat_ms: f64,
+    alloc_ms: f64,
+    seek_ms: f64,
+    read_ms: f64,
+    build_ms: f64,
+    method: String,
+    range_req: String,
+    open_ended: bool,
+    file_size: u64,
+    start: u64,
+    len: u64,
+    outcome: &'static str,
+}
+
+fn ms_since(t: std::time::Instant) -> f64 { t.elapsed().as_secs_f64() * 1000.0 }
+
+impl VideoTrace {
+    /// Add the timing headers and write the log line. `total_ms` is the whole handler.
+    fn finish(&self, total_ms: f64, resp: &mut axum::http::Response<axum::body::Body>) {
+        let st = format!(
+            "open;dur={:.3}, stat;dur={:.3}, alloc;dur={:.3}, seek;dur={:.3}, read;dur={:.3}, build;dur={:.3}, total;dur={:.3}",
+            self.open_ms, self.stat_ms, self.alloc_ms, self.seek_ms, self.read_ms, self.build_ms, total_ms
+        );
+        let served = format!(
+            "id={} concurrent={} range={:?} open_ended={} start={} len={} file_size={} outcome={}",
+            self.id, self.concurrent, self.range_req, self.open_ended, self.start, self.len, self.file_size, self.outcome
+        );
+        let h = resp.headers_mut();
+        if let Ok(v) = axum::http::HeaderValue::from_str(&st) { h.insert("Server-Timing", v); }
+        if let Ok(v) = axum::http::HeaderValue::from_str(&served) { h.insert("X-MARK-Trace", v); }
+        h.insert("Timing-Allow-Origin", axum::http::HeaderValue::from_static("*"));
+        h.insert("Access-Control-Expose-Headers", axum::http::HeaderValue::from_static("Server-Timing, X-MARK-Trace, Content-Range, Accept-Ranges, Content-Length, Content-Type"));
+        let line = format!(
+            "t={:.1}ms {} {} | open={:.2} stat={:.2} alloc={:.2} seek={:.2} read={:.2} build={:.2} total={:.2} (ms)\n",
+            self.started_ms, self.method, served, self.open_ms, self.stat_ms, self.alloc_ms, self.seek_ms, self.read_ms, self.build_ms, total_ms
+        );
+        eprint!("[MARK video] {}", line);
+        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(std::env::temp_dir().join("mark-video-trace.log")) {
+            use std::io::Write;
+            let _ = f.write_all(line.as_bytes());
+        }
+    }
+}
 async fn start_video_server(video_path: Arc<Mutex<Option<String>>>) -> u16 {
     use axum::{
         extract::{Query, State},
@@ -55,12 +122,30 @@ async fn start_video_server(video_path: Arc<Mutex<Option<String>>>) -> u16 {
 
     async fn serve_video(
         State(path_state): State<ServerState>,
+        method: axum::http::Method,
         headers: HeaderMap,
         Query(params): Query<HashMap<String, String>>,
     ) -> Response<axum::body::Body> {
         use axum::body::Body;
         use http_range::HttpRange;
         use std::io::{Read, Seek, SeekFrom};
+        use std::sync::atomic::Ordering;
+        use std::time::Instant;
+
+        let t_handler = Instant::now();
+        // Tracing is opt-in per request; when it is off none of the bookkeeping below runs.
+        let mut tr: Option<VideoTrace> = if params.contains_key("trace") {
+            let t0 = *TRACE_T0.get_or_init(Instant::now);
+            Some(VideoTrace {
+                id: TRACE_SEQ.fetch_add(1, Ordering::Relaxed) + 1,
+                concurrent: TRACE_INFLIGHT.fetch_add(1, Ordering::Relaxed) + 1,
+                started_ms: t0.elapsed().as_secs_f64() * 1000.0,
+                method: method.to_string(),
+                outcome: "?",
+                ..Default::default()
+            })
+        } else { None };
+        let _guard = tr.as_ref().map(|_| TraceGuard);
 
         let path = params.get("path")
             .cloned()
@@ -73,19 +158,29 @@ async fn start_video_server(video_path: Arc<Mutex<Option<String>>>) -> u16 {
                 .body(Body::empty()).unwrap(),
         };
 
+        // Tag mode asks for the chunked path with ?chunked=1 (see serve_chunked). Every other caller falls through to
+        // the original behaviour below, unchanged.
+        if params.contains_key("chunked") {
+            return serve_chunked(path, method, headers, tr.take(), t_handler).await;
+        }
+
+        let t_open = Instant::now();
         let mut file = match std::fs::File::open(&path) {
             Ok(f) => f,
             Err(_) => return Response::builder()
                 .status(StatusCode::NOT_FOUND)
                 .body(Body::empty()).unwrap(),
         };
+        if let Some(t) = tr.as_mut() { t.open_ms = ms_since(t_open); }
 
+        let t_stat = Instant::now();
         let file_size = match file.metadata() {
             Ok(m) => m.len(),
             Err(_) => return Response::builder()
                 .status(StatusCode::INTERNAL_SERVER_ERROR)
                 .body(Body::empty()).unwrap(),
         };
+        if let Some(t) = tr.as_mut() { t.stat_ms = ms_since(t_stat); t.file_size = file_size; }
 
         let mime = if path.ends_with(".mp4") { "video/mp4" }
             else if path.ends_with(".webm") { "video/webm" }
@@ -98,17 +193,25 @@ async fn start_video_server(video_path: Arc<Mutex<Option<String>>>) -> u16 {
         // Handle Range request — the key to seekable video in WebView2
         if let Some(range_header) = headers.get("range") {
             if let Ok(range_str) = range_header.to_str() {
+                if let Some(t) = tr.as_mut() { t.range_req = range_str.to_string(); t.open_ended = range_str.trim_end().ends_with('-'); }
                 if let Ok(ranges) = HttpRange::parse(range_str, file_size) {
                     let range = &ranges[0];
                     let start = range.start;
                     let length = range.length.min(file_size - start);
                     let end = start + length - 1;
 
+                    let t_alloc = Instant::now();
                     let mut buf = vec![0u8; length as usize];
-                    if file.seek(SeekFrom::Start(start)).is_ok()
-                        && file.read_exact(&mut buf).is_ok()
-                    {
-                        return Response::builder()
+                    if let Some(t) = tr.as_mut() { t.alloc_ms = ms_since(t_alloc); t.start = start; t.len = length; }
+                    let t_seek = Instant::now();
+                    let seek_ok = file.seek(SeekFrom::Start(start)).is_ok();
+                    if let Some(t) = tr.as_mut() { t.seek_ms = ms_since(t_seek); }
+                    let t_read = Instant::now();
+                    let read_ok = seek_ok && file.read_exact(&mut buf).is_ok();
+                    if let Some(t) = tr.as_mut() { t.read_ms = ms_since(t_read); }
+                    if read_ok {
+                        let t_build = Instant::now();
+                        let mut resp = Response::builder()
                             .status(StatusCode::PARTIAL_CONTENT)
                             .header("Content-Type", mime)
                             .header("Content-Length", length.to_string())
@@ -117,6 +220,11 @@ async fn start_video_server(video_path: Arc<Mutex<Option<String>>>) -> u16 {
                             .header("Access-Control-Allow-Origin", "*")
                             .header("Access-Control-Expose-Headers", "Content-Range, Accept-Ranges, Content-Length, Content-Type")
                             .body(Body::from(buf)).unwrap();
+                        if let Some(mut t) = tr.take() {
+                            t.build_ms = ms_since(t_build); t.outcome = "206-range";
+                            t.finish(ms_since(t_handler), &mut resp);
+                        }
+                        return resp;
                     }
                 }
             }
@@ -126,9 +234,15 @@ async fn start_video_server(video_path: Arc<Mutex<Option<String>>>) -> u16 {
         // knows the total size from the first request and can compute duration.
         // Also handle HEAD requests (browser probes for duration this way).
         let end = file_size.saturating_sub(1);
+        let t_alloc = Instant::now();
         let mut buf = vec![0u8; file_size as usize];
-        if file.read_exact(&mut buf).is_ok() {
-            Response::builder()
+        if let Some(t) = tr.as_mut() { t.alloc_ms = ms_since(t_alloc); t.start = 0; t.len = file_size; }
+        let t_read = Instant::now();
+        let read_ok = file.read_exact(&mut buf).is_ok();
+        if let Some(t) = tr.as_mut() { t.read_ms = ms_since(t_read); }
+        if read_ok {
+            let t_build = Instant::now();
+            let mut resp = Response::builder()
                 .status(StatusCode::PARTIAL_CONTENT)
                 .header("Content-Type", mime)
                 .header("Content-Length", file_size.to_string())
@@ -136,11 +250,116 @@ async fn start_video_server(video_path: Arc<Mutex<Option<String>>>) -> u16 {
                 .header("Accept-Ranges", "bytes")
                 .header("Access-Control-Allow-Origin", "*")
                 .header("Access-Control-Expose-Headers", "Content-Range, Accept-Ranges, Content-Length, Content-Type")
-                .body(Body::from(buf)).unwrap()
+                .body(Body::from(buf)).unwrap();
+            if let Some(mut t) = tr.take() {
+                t.build_ms = ms_since(t_build); t.outcome = "206-whole-file";
+                t.finish(ms_since(t_handler), &mut resp);
+            }
+            resp
         } else {
             Response::builder()
                 .status(StatusCode::INTERNAL_SERVER_ERROR)
                 .body(Body::empty()).unwrap()
+        }
+    }
+
+    // ── Chunked path (Tag mode, opt-in with ?chunked=1) ──────────────────────────────────────────────────────────
+    // The original handler reads the WHOLE requested range into memory before it sends a byte, and a <video> asks for
+    // "from N to the end of the file", so every seek cost one read of up to ~800 MB (median 309 ms in a real trace,
+    // 99% of it the read). This path answers with at most CHUNK_BYTES per response (HTTP lets a server send less than
+    // asked; Content-Range says what it sent and the browser asks for the next piece when it needs it), reads it with
+    // tokio::fs so no worker thread is blocked, answers HEAD without reading anything, and answers a request that
+    // cannot be satisfied (e.g. "bytes=<file size>-") with 416 instead of the whole file.
+    async fn serve_chunked(
+        path: String,
+        method: axum::http::Method,
+        headers: HeaderMap,
+        mut tr: Option<VideoTrace>,
+        t_handler: std::time::Instant,
+    ) -> Response<axum::body::Body> {
+        use crate::video_range::{plan, RangePlan, CHUNK_BYTES};
+        use axum::body::Body;
+        use std::io::SeekFrom;
+        use std::time::Instant;
+        use tokio::io::{AsyncReadExt, AsyncSeekExt};
+
+        let fail = |code: StatusCode| Response::builder().status(code).body(Body::empty()).unwrap();
+
+        let t_open = Instant::now();
+        let mut file = match tokio::fs::File::open(&path).await {
+            Ok(f) => f,
+            Err(_) => return fail(StatusCode::NOT_FOUND),
+        };
+        if let Some(t) = tr.as_mut() { t.open_ms = ms_since(t_open); }
+
+        let t_stat = Instant::now();
+        let size = match file.metadata().await {
+            Ok(m) => m.len(),
+            Err(_) => return fail(StatusCode::INTERNAL_SERVER_ERROR),
+        };
+        if let Some(t) = tr.as_mut() { t.stat_ms = ms_since(t_stat); t.file_size = size; }
+
+        let mime = if path.ends_with(".mp4") { "video/mp4" }
+            else if path.ends_with(".webm") { "video/webm" }
+            else if path.ends_with(".mkv") { "video/x-matroska" }
+            else if path.ends_with(".mov") { "video/quicktime" }
+            else if path.ends_with(".avi") { "video/x-msvideo" }
+            else if path.ends_with(".mts") || path.ends_with(".m2ts") { "video/mp2t" }
+            else { "video/mp4" };
+
+        let range_str = headers.get("range").and_then(|h| h.to_str().ok());
+        if let (Some(t), Some(r)) = (tr.as_mut(), range_str) {
+            t.range_req = r.to_string();
+            t.open_ended = r.trim_end().ends_with('-');
+        }
+        const EXPOSE: &str = "Content-Range, Accept-Ranges, Content-Length, Content-Type";
+
+        match plan(range_str, size, CHUNK_BYTES) {
+            RangePlan::Unsatisfiable => {
+                let mut resp = Response::builder()
+                    .status(StatusCode::RANGE_NOT_SATISFIABLE)
+                    .header("Content-Range", format!("bytes */{}", size))
+                    .header("Accept-Ranges", "bytes")
+                    .header("Access-Control-Allow-Origin", "*")
+                    .header("Access-Control-Expose-Headers", EXPOSE)
+                    .body(Body::empty()).unwrap();
+                if let Some(mut t) = tr.take() { t.outcome = "416"; t.finish(ms_since(t_handler), &mut resp); }
+                resp
+            }
+            RangePlan::Serve { start, length } => {
+                let end = start + length - 1;
+                let mut alloc_ms = 0.0; let mut seek_ms = 0.0; let mut read_ms = 0.0;
+                let body = if method == axum::http::Method::HEAD {
+                    Body::empty()          // headers only: nothing is read
+                } else {
+                    let t_alloc = Instant::now();
+                    let mut buf = vec![0u8; length as usize];
+                    alloc_ms = ms_since(t_alloc);
+                    let t_seek = Instant::now();
+                    if file.seek(SeekFrom::Start(start)).await.is_err() { return fail(StatusCode::INTERNAL_SERVER_ERROR); }
+                    seek_ms = ms_since(t_seek);
+                    let t_read = Instant::now();
+                    if file.read_exact(&mut buf).await.is_err() { return fail(StatusCode::INTERNAL_SERVER_ERROR); }
+                    read_ms = ms_since(t_read);
+                    Body::from(buf)
+                };
+                let t_build = Instant::now();
+                let mut resp = Response::builder()
+                    .status(StatusCode::PARTIAL_CONTENT)
+                    .header("Content-Type", mime)
+                    .header("Content-Length", length.to_string())
+                    .header("Content-Range", format!("bytes {}-{}/{}", start, end, size))
+                    .header("Accept-Ranges", "bytes")
+                    .header("Access-Control-Allow-Origin", "*")
+                    .header("Access-Control-Expose-Headers", EXPOSE)
+                    .body(body).unwrap();
+                if let Some(mut t) = tr.take() {
+                    t.alloc_ms = alloc_ms; t.seek_ms = seek_ms; t.read_ms = read_ms; t.build_ms = ms_since(t_build);
+                    t.start = start; t.len = length; t.outcome = "206-chunk";
+                    t.finish(ms_since(t_handler), &mut resp);
+                }
+                resp
+            }
         }
     }
 
