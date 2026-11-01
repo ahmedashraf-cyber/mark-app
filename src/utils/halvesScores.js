@@ -1,3 +1,6 @@
+// COPY OF src/utils/sessionScores.js (the Admin Sessions tab). Admin keeps the original, unchanged.
+// A fix to either file belongs in BOTH, except how HR-codes are compared (hrCode.js: My halves only).
+// What differs: see the header comment below. Tests: halvesScores.test.mjs here, sessionScores.test.mjs for the original.
 /**
  * halvesScores.js — the My halves copy of sessionScores.js (the Admin Sessions tab keeps using sessionScores.js, untouched).
  * It differs in: HR-codes are compared with hrCode.js (typographic dashes count as a hyphen), the search also matches an

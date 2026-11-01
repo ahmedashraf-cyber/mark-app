@@ -1,3 +1,6 @@
+// COPY OF src/components/SessionsTable.jsx (the Admin Sessions tab). Admin keeps the original, unchanged.
+// A fix to either file belongs in BOTH. What differs: this one takes columns, row button, hidden filters and a noun
+// as props, and imports halvesScores.js instead of sessionScores.js.
 /**
  * HalvesTable.jsx — the My halves copy of SessionsTable.jsx, made reusable by parameters (columns, row button, hidden filters,
  * noun). The Admin Sessions tab keeps using SessionsTable.jsx, which is byte-identical to the released one.
