@@ -203,7 +203,12 @@ export default function DrillDashboardPage({
                       <td style={{ ...td, fontFamily:'JetBrains Mono,monospace',
                         color:'var(--t-3)' }}>{r.hrCode}</td>
                       <td style={td}>{r.name || '—'}</td>
-                      <td style={{ ...td, textAlign:'right' }}>{r.attempts || '—'}</td>
+                      <td style={{ ...td, textAlign:'right' }}>{r.attempts || '—'}
+                        {r.duplicateAttempts?.length > 0 && (
+                          <div data-testid="dup-attempt" title={`Attempt number ${r.duplicateAttempts.join(', ')} is used by more than one attempt of this trainee. This usually means the same retake was started in two windows at once. Scores and history are unchanged.`}
+                            style={{ fontSize:9, fontWeight:700, color:'#FF9F0A', marginTop:2, whiteSpace:'nowrap' }}>Duplicate attempt number</div>
+                        )}
+                      </td>
                       <td style={{ ...td, textAlign:'right', fontWeight:700,
                         color: r.latestScore == null ? 'var(--t-3)'
                           : r.passed ? '#30D158' : '#FF453A' }}>{pct(r.latestScore)}</td>
