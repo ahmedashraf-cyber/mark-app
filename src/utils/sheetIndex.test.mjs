@@ -45,7 +45,7 @@ console.log('COST: column A is read ONCE per session of the screen, however many
 {
   const f = new Fake(mk(3000, ids60)); const cache = {}
   for (const id of ['sess_7', 'sess_8', 'sess_9', 'sess_7', 'sess_30', 'sess_nobody']) await fetchRowsById(f.io(), 'field_events', id, cache)
-  ok('six fetches (one repeated, one for an id with no rows): ONE column-A read in total', f.calls.colA === 1, J(f.calls))
+  ok('six fetches (one repeated, one for an id with no rows): ONE column-A read, plus ONE re-check for the id with no rows', f.calls.colA === 2, J(f.calls))
   ok('one range request per fetch that has rows (5), none for an id with no rows', f.calls.batch === 5, J(f.calls))
   const g = new Fake(mk(3000, ids60)); await fetchRowsById(g.io(), 't', 'sess_1', {}); await fetchRowsById(g.io(), 't', 'sess_1', {})
   ok('a NEW cache (what Reload makes) reads column A again', g.calls.colA === 2, J(g.calls))
@@ -97,17 +97,35 @@ console.log('it never falls back to reading the whole tab: if it cannot trust th
   ok('and once the sheet stops changing, the next try works', same(got, truth(f.rows, 'sess_3')))
 }
 
-console.log('WHAT IT DOES NOT CATCH (accepted: Reload is the answer). These say so out loud.')
+console.log('AN EMPTY ANSWER IS RE-CHECKED once before it is believed (a collector who has just saved)')
+{
+  const mkSheet = () => new Fake(mk(600, Array.from({ length: 10 }, (_, i) => 'sess_' + i)))
+  let f = mkSheet(); let cache = {}; await fetchRowsById(f.io(), 't', 'sess_1', cache)
+  f.rows.push(...Array.from({ length: 12 }, (_, i) => ['sess_new', String(i), 'pass', 'x']))
+  let before = f.calls.colA, got = await fetchRowsById(f.io(), 't', 'sess_new', cache)
+  ok('a session saved AFTER column A was read: the index said "none", column A is re-read ONCE, and its 12 rows are found', got.length === 12 && same(got, truth(f.rows, 'sess_new')) && f.calls.colA === before + 1, J(f.calls))
+  f = mkSheet(); cache = {}; await fetchRowsById(f.io(), 't', 'sess_1', cache); before = f.calls.colA
+  got = await fetchRowsById(f.io(), 't', 'sess_none', cache)
+  ok('an id that really has no rows: ONE re-check, then the empty answer', got.length === 0 && f.calls.colA === before + 1 && f.calls.batch === 1, J(f.calls))
+  got = await fetchRowsById(f.io(), 't', 'sess_none', cache)
+  ok('...and opening it again costs one more column-A read (the stated cost, not a loop)', got.length === 0 && f.calls.colA === before + 2, J(f.calls))
+  f = mkSheet(); cache = {}; got = await fetchRowsById(f.io(), 't', 'sess_none', cache)
+  ok('the very first fetch of a session (index just built by this call): no double read', got.length === 0 && f.calls.colA === 1, J(f.calls))
+  f = mkSheet(); cache = {}; await fetchRowsById(f.io(), 't', 'sess_1', cache); f.hooks.beforeColA = async s => { s.hooks.beforeColA = null; s.rows.push(...Array.from({ length: 3 }, (_, i) => ['sess_race', String(i), 'pass', 'x'])) }
+  got = await fetchRowsById(f.io(), 't', 'sess_race', cache)
+  ok('rows that appear exactly while column A is being re-read are included', got.length === 3, got.length)
+  f = mkSheet(); cache = {}; await fetchRowsById(f.io(), 't', 'sess_1', cache); f.rows = f.rows.filter((r, i) => i === 0 || r[0] !== 'sess_4')
+  got = await fetchRowsById(f.io(), 't', 'sess_4', cache)
+  ok('a session deleted after indexing is still reported as having nothing, never the old rows', got.length === 0)
+}
+
+console.log('WHAT IT STILL DOES NOT CATCH (accepted: Reload is the answer). This says so out loud.')
 {
   const mkSheet = () => new Fake(mk(600, Array.from({ length: 10 }, (_, i) => 'sess_' + i)))
   let f = mkSheet(); let cache = {}; await fetchRowsById(f.io(), 't', 'sess_9', cache)
   f.rows.push(['sess_9', 'late', 'pass', 'x'], ['sess_9', 'late2', 'pass', 'x'])
   let got = await fetchRowsById(f.io(), 't', 'sess_9', cache)
   gap('rows for the SAME id appended after column A was read are not returned until Reload', got.length === truth(f.rows, 'sess_9').length, `returned ${got.length}, the sheet has ${truth(f.rows, 'sess_9').length}`)
-  f = mkSheet(); cache = {}; await fetchRowsById(f.io(), 't', 'sess_1', cache)
-  f.rows.push(...Array.from({ length: 12 }, (_, i) => ['sess_new', String(i), 'pass', 'x']))
-  got = await fetchRowsById(f.io(), 't', 'sess_new', cache)
-  gap('a session saved after column A was read comes back EMPTY until Reload', got.length === 12, `returned ${got.length}, the sheet has 12`)
 }
 
 console.log('randomised changes: 300 trials, a random edit at a random moment')
@@ -125,7 +143,7 @@ console.log('randomised changes: 300 trials, a random edit at a random moment')
   }
   ok('NEVER returns a row that belongs to another id, in 300 trials', wrongRow === 0, `${wrongRow} wrong rows`)
   ok('never fails any way other than the Reload error', other === 0, `${other} other errors`)
-  console.log(`      outcome of the 300: ${exact} exactly right, ${incomplete} incomplete (rows appended for the same id after column A was read: the documented gap), ${threw} stopped with the Reload error`)
+  console.log(`      outcome of the 300: ${exact} exactly right, ${incomplete} incomplete (rows appended for the same id after column A was read: the one documented gap), ${threw} stopped with the Reload error`)
 }
 console.log('objects')
 ok('rows become objects keyed by the header; a short row is padded', same(rowsToObjects(['a', 'b', 'c'], [['1', '2'], ['x']]), [{ a: '1', b: '2', c: '' }, { a: 'x', b: '', c: '' }]))

@@ -11,9 +11,13 @@
  * three tries in all). If it still does not match, it THROWS an IndexUntrustedError: it never falls back to reading the
  * whole tab. The caller shows "Reload" and the person tries again.
  *
- * WHAT THIS DOES NOT CATCH (accepted, so Reload exists): a change that leaves every fetched row looking right.
- *   - rows for the SAME id added after column A was read (they would only be missing)
- *   - a session saved after column A was read: the index says "no rows" and an empty answer comes back
+ * AN EMPTY ANSWER IS RE-CHECKED: when the index says an id has no rows (a collector who has just saved a half, whose
+ * rows were written after column A was read), column A is read ONCE more before saying "none", and the fetch is tried
+ * again. Only if it is still empty is the empty answer returned. Cost: opening an id that really has no rows costs one
+ * column-A read each time.
+ *
+ * WHAT THIS STILL DOES NOT CATCH (accepted, so Reload exists): rows for the SAME id added after column A was read, when
+ * some of its rows were already indexed: nothing fetched looks wrong, so the new rows are only missing.
  * A re-save writes the session's rows again at the end of the tab and removes the old ones, which shifts the rows
  * below and IS caught by step 3.
  *
@@ -59,12 +63,16 @@ export class IndexUntrustedError extends Error {
 export async function fetchRowsById(io, tab, id, cache = {}) {
   const want = key(id)
   if (!want) return []
+  let readHere = false                                                          // was column A read during THIS call (so it is fresh)?
   for (let attempt = 0; attempt < 3; attempt++) {
-    if (!cache.index) cache.index = buildIdIndex(await io.readColumnA(tab))      // once, then reused by every later fetch
+    if (!cache.index) { cache.index = buildIdIndex(await io.readColumnA(tab)); readHere = true }   // once, then reused by every later fetch
     const segs = cache.index.get(want) || []
     const rows = segs.length ? (await io.batchGetRows(tab, segs)).flat() : []
     const expected = segs.reduce((n, [s, e]) => n + (e - s + 1), 0)
-    if (rows.length === expected && rows.every(r => key(r?.[0]) === want)) return rows
+    if (rows.length === expected && rows.every(r => key(r?.[0]) === want)) {
+      if (rows.length === 0 && !readHere) { cache.index = null; continue }      // "no rows" from an old index: read column A once more before saying so
+      return rows
+    }
     cache.index = null                                                          // a fetched row did not match: re-read column A
   }
   cache.index = null
