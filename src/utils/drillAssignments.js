@@ -19,6 +19,8 @@
 import { db } from '../firebase/config'
 import { collection, addDoc, getDocs, query, where } from 'firebase/firestore'
 import { readTabs, appendRows } from './drillSheet'
+import { setAssignmentReview } from './adminSheet'
+import { flag } from './drillReview'
 import {
   TAB_ASSIGNMENTS, TAB_QUIZZES, TAB_SESSIONS,
   ASSIGNMENTS_COLUMNS, FS_REQUESTS, REQUEST_STATUS,
@@ -103,6 +105,7 @@ export async function assignTrainees({ quizId, quizRow, hrCodes, trainees, assig
       assigned_by: assignedBy || '',
       attempts_granted: 1,
       status: 'assigned',
+      review_allowed: '0',
     })
   })
 
@@ -138,6 +141,21 @@ export async function reassign({ quiz, trainee, attemptsMade, scorePercent, appr
     decided_at: Date.now(),
     trainer_initiated: true,
   })
+
+  // A reassign is a new attempt, and the trainee must not read the key during it. The grant above already SUSPENDS review
+  // access while it is unused or in progress (drillReview.reviewAccess), whatever the flags say. This step goes further for
+  // the per-trainee flag: it is cleared, so access does not come back by itself after the new attempt. The quiz-wide
+  // allow_review_on_fail is NOT touched: it is a setting for everyone on the quiz.
+  // The grant never depends on this succeeding: if it fails the retake is still granted, and the caller is told.
+  try {
+    const r = await setAssignmentReview({
+      quizId: quiz.quiz_id, quizName: quiz.quiz_name, hrCode: trainee.hrCode || trainee.trainee_hr_code,
+      value: '0', changedBy: approvedBy, reason: 'reassign',
+    })
+    return { reviewCleared: r.changed, reviewError: '' }
+  } catch (e) {
+    return { reviewCleared: false, reviewError: e?.message || String(e) }
+  }
 }
 
 /**
@@ -192,6 +210,7 @@ export async function assignmentStatus({ quizId, quizRow, assignedBy }) {
       bestScore: scores.length ? Math.max(...scores) : null,
       lastScore: scores.length ? scores[scores.length - 1] : null,
       passed,
+      reviewAllowed: flag(a.review_allowed),
       // only offer a reassignment when they have actually finished and are not
       // already holding an unused grant
       canReassign: finished.length > 0 && (grants[hr] || 0) <= mine.length - 1,

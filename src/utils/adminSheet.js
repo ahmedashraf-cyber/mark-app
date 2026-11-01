@@ -20,6 +20,7 @@
 import { invoke } from '@tauri-apps/api/core'
 import { PEOPLE_SHEET_ID, PEOPLE_TAB_NAMES } from '../config/drillConfig'
 import { getDrillSheetId } from './drillSheet'
+import { TAB_ASSIGNMENTS } from '../config/drillConfig'
 import { FIELD_SHEET_ID, FIELD_TAB_SESSIONS, FIELD_TAB_EVENTS } from '../config/fieldConfig'
 import { TAB_SCORES } from '../config/comparisonConfig'
 import { capabilities } from '../hooks/useAdmin'
@@ -206,6 +207,8 @@ async function logRoleChange({ changedBy, code, name, field, oldValue, newValue 
 export const QUIZ_LOG_HEADER = [
   'timestamp_iso', 'changed_by', 'quiz_id', 'quiz_name',
   'field', 'old_value', 'new_value',
+  // APPENDED. Who the change was about, for the per-trainee review access. Blank on a quiz-wide change.
+  'trainee_hr_code',
 ]
 
 /** Quiz rows with their sheet row numbers, for the same addressing reason. */
@@ -223,7 +226,9 @@ export async function loadQuizzes() {
       scope_event_ids: norm(r[idx.scope_event_ids]),
       clip_count: norm(r[idx.clip_count]),
       pass_mark_percent: norm(r[idx.pass_mark_percent]),
-      time_limit_min: norm(r[idx.time_limit_min]) }))
+      time_limit_min: norm(r[idx.time_limit_min]),
+      // blank or a column that does not exist yet reads as '' = off
+      allow_review_on_fail: norm(r[idx.allow_review_on_fail]) }))
     .filter(q => q.quiz_id)
   return { sheetId, header, idx, quizzes }
 }
@@ -242,11 +247,17 @@ function colLetter(i) {
  * quiz's status.
  */
 export async function setQuizSetting({ quiz, field, value, changedBy }) {
-  if (!['pass_mark_percent', 'time_limit_min'].includes(field)) {
+  if (!['pass_mark_percent', 'time_limit_min', 'allow_review_on_fail'].includes(field)) {
     throw new Error(`${field} is not editable from the admin page`)
   }
-  const { sheetId, idx } = await loadQuizzes()
-  const colIdx = idx[field]
+  const isReview = field === 'allow_review_on_fail'
+  if (isReview && !['0', '1'].includes(String(value))) throw new Error('allow_review_on_fail is 1 or 0')
+  const { sheetId, idx, header } = await loadQuizzes()
+  let colIdx = idx[field]
+  // a column added after this sheet was set up: syncHeaders adds it the next time Drill opens, but a manager may get
+  // here first, so add the header cell now, at the end, exactly where syncHeaders would put it
+  const addHeader = colIdx == null && isReview
+  if (addHeader) colIdx = header.length
   if (colIdx == null) throw new Error(`Column ${field} not found on the quizzes tab`)
 
   // verify the row still holds this quiz before writing
@@ -256,7 +267,23 @@ export async function setQuizSetting({ quiz, field, value, changedBy }) {
     throw new Error(`Row ${quiz.rowNumber} no longer holds ${quiz.quiz_id}. `
       + 'The sheet changed since it was loaded — nothing was written.')
   }
-  const oldValue = norm(row[colIdx])
+  const oldValue = isReview ? (norm(row[colIdx]) === '1' ? '1' : '0') : norm(row[colIdx])
+
+  if (isReview) {
+    // The setting decides who can read the answer key, so the log comes FIRST: if it cannot be written the setting
+    // does not change, and if the change then fails the log says so.
+    if (oldValue === String(value)) return oldValue
+    await ensureTab(sheetId, QUIZ_LOG, QUIZ_LOG_HEADER); await ensureLogColumn(sheetId)
+    await appendRows(sheetId, QUIZ_LOG, [[new Date().toISOString(), norm(changedBy), quiz.quiz_id, quiz.quiz_name, field, oldValue, String(value), '']])
+    try {
+      if (addHeader) await writeRange(sheetId, `quizzes!${colLetter(colIdx)}1`, [[field]])
+      await writeRange(sheetId, `quizzes!${colLetter(colIdx)}${quiz.rowNumber}`, [[String(value)]])
+    } catch (e) {
+      try { await appendRows(sheetId, QUIZ_LOG, [[new Date().toISOString(), norm(changedBy), quiz.quiz_id, quiz.quiz_name, `${field} (NOT APPLIED)`, oldValue, String(value), '']]) } catch { /* logged in the console below */ }
+      throw new Error(`The setting could not be changed, so nothing changed (${e.message})`)
+    }
+    return oldValue
+  }
   await writeRange(sheetId, `quizzes!${colLetter(colIdx)}${quiz.rowNumber}`, [[String(value)]])
 
   try {
@@ -565,4 +592,62 @@ export async function loadEventCounts() {
     if (id) counts.set(id, (counts.get(id) || 0) + 1)
   }
   return counts
+}
+
+// ── Review access: the log column, and the per-trainee switch ────────────────
+/** quiz_changes gained a trainee_hr_code column. An older tab has 7 header cells: add the 8th, at the end. */
+async function ensureLogColumn(sheetId) {
+  const first = await readRange(sheetId, `${QUIZ_LOG}!A1:Z1`)
+  const h = (first[0] || []).map(norm)
+  if (h.length && !h.includes('trainee_hr_code')) await writeRange(sheetId, `${QUIZ_LOG}!${colLetter(h.length)}1`, [['trainee_hr_code']])
+}
+
+/**
+ * Let ONE trainee see (value '1') or stop seeing (value '0') the answers of their finished attempts on one quiz.
+ * Writes review_allowed on their quiz_assignments row. It changes nothing about a score, the pass mark or the stored
+ * `passed` field: it only decides whether the review is offered, and (through the lock) whether they may retake.
+ *
+ * Same discipline as the other Admin writers: the row is found by quiz and HR-code and re-read immediately before
+ * the write; the log row (who, quiz, trainee, old, new, when) is written FIRST, so a failure to log stops the change;
+ * if the change then fails, a "NOT APPLIED" row says so. `reason` tags the log field, e.g. 'reassign'.
+ * → { changed, old, value }
+ */
+export async function setAssignmentReview({ quizId, quizName = '', hrCode, value, changedBy, reason = '' }) {
+  const v = String(value) === '1' ? '1' : '0'
+  const who = norm(changedBy)
+  if (!who) throw new Error("Couldn't tell who you are signed in as, so nothing was changed.")
+  const sheetId = await getDrillSheetId()
+  if (!sheetId) throw new Error('DRILL sheet is not configured')
+
+  const rows = await readRange(sheetId, `${TAB_ASSIGNMENTS}!A1:Z5000`)
+  const header = (rows[0] || []).map(norm)
+  const iQuiz = header.indexOf('quiz_id'), iHr = header.indexOf('trainee_hr_code')
+  if (iQuiz < 0 || iHr < 0) throw new Error(`${TAB_ASSIGNMENTS} has no quiz_id or trainee_hr_code column`)
+  let col = header.indexOf('review_allowed')
+  const addHeader = col < 0
+  if (addHeader) col = header.length
+
+  const at = rows.findIndex((r, i) => i > 0 && norm(r?.[iQuiz]) === norm(quizId) && normCode(r?.[iHr]) === normCode(hrCode))
+  if (at < 0) throw new Error(`${normCode(hrCode)} is not assigned to this quiz`)
+  const rowNumber = at + 1
+  const old = norm(rows[at][col]) === '1' ? '1' : '0'            // blank reads as 0
+  if (old === v) return { changed: false, old, value: v }
+
+  const check = await readRange(sheetId, `${TAB_ASSIGNMENTS}!A${rowNumber}:Z${rowNumber}`)
+  if (norm(check[0]?.[iQuiz]) !== norm(quizId) || normCode(check[0]?.[iHr]) !== normCode(hrCode)) {
+    throw new Error(`Row ${rowNumber} no longer holds this trainee on this quiz. The sheet changed since it was read, so nothing was changed.`)
+  }
+
+  const field = reason ? `review_allowed (${reason})` : 'review_allowed'
+  await ensureTab(sheetId, QUIZ_LOG, QUIZ_LOG_HEADER); await ensureLogColumn(sheetId)
+  await appendRows(sheetId, QUIZ_LOG, [[new Date().toISOString(), who, quizId, quizName, field, old, v, normCode(hrCode)]])
+  try {
+    if (addHeader) await writeRange(sheetId, `${TAB_ASSIGNMENTS}!${colLetter(col)}1`, [['review_allowed']])
+    await writeRange(sheetId, `${TAB_ASSIGNMENTS}!${colLetter(col)}${rowNumber}`, [[v]])
+  } catch (e) {
+    try { await appendRows(sheetId, QUIZ_LOG, [[new Date().toISOString(), who, quizId, quizName, `${field} (NOT APPLIED)`, old, v, normCode(hrCode)]]) }
+    catch (e2) { console.error('[MARK drill] review change failed AND the failure was not logged:', e2) }
+    throw new Error(`The change could not be written, so nothing changed (${e.message})`)
+  }
+  return { changed: true, old, value: v }
 }
