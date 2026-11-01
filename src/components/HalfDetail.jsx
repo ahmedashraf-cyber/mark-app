@@ -12,7 +12,7 @@ import EventDetailTable from './EventDetailTable'
 import LocalVideoDrop from './LocalVideoDrop'
 import { loadHalfDetail } from '../utils/myHalvesSheet'
 import { buildDetailView, filterDetail, filterOptions, ownEventRows, runCards, collectionDetails } from '../utils/myHalves'
-import { STATE_TEXT } from '../utils/sessionScores'
+import { STATE_TEXT } from '../utils/halvesScores'
 import { msToReadable } from '../utils/fieldSheetSync'
 import { MODULE_LABELS } from '../utils/defectTypes'
 import { sameHr } from '../utils/hrCode'
@@ -23,7 +23,7 @@ const small = { fontSize: 10, color: 'var(--t-3)' }
 const HALF = { '1H': '1st half', '2H': '2nd half', ET1: 'Extra time 1', ET2: 'Extra time 2', PEN: 'Penalties' }
 const note = (c, b, bg) => ({ fontSize: 11, lineHeight: 1.6, padding: '10px 12px', borderRadius: 8, color: c, border: `1px solid ${b}`, background: bg, marginBottom: 12 })
 
-export default function HalfDetail({ row, me, canViewAny, cache, onBack, loadDetail = loadHalfDetail }) {
+export default function HalfDetail({ row, me, canViewAny, cache, onBack, onReload, loadDetail = loadHalfDetail }) {
   const [data, setData] = useState({ status: 'loading' })
   const [f, setF] = useState({ events: [], verdicts: [], modules: [] })
   const [videoReady, setVideoReady] = useState(false)
@@ -34,7 +34,7 @@ export default function HalfDetail({ row, me, canViewAny, cache, onBack, loadDet
   const load = useCallback(async () => {
     setData({ status: 'loading' })
     try { setData({ status: 'ready', ...(await loadDetail(row, { cache, me, canViewAny })) }) }
-    catch (e) { setData({ status: 'error', error: e?.message || String(e) }) }
+    catch (e) { setData({ status: 'error', error: e?.message || String(e), untrusted: !!e?.untrusted }) }
   }, [row, cache, me, canViewAny, loadDetail])
   useEffect(() => { load() }, [load])
 
@@ -74,7 +74,7 @@ export default function HalfDetail({ row, me, canViewAny, cache, onBack, loadDet
           {data.status === 'loading' && <div data-testid="detail-loading" style={{ ...small, fontSize: 12, padding: '14px 0' }}>Reading this half from the sheet…</div>}
           {data.status === 'error' && (
             <div data-testid="detail-error" style={note('#FF453A', 'rgba(255,69,58,0.3)', 'rgba(255,69,58,0.08)')}>
-              Couldn&rsquo;t read this half: {data.error}<div style={{ marginTop: 8 }}><button onClick={load} style={{ background: 'transparent', border: '1px solid var(--b-1)', borderRadius: 6, color: 'var(--t-2)', fontSize: 11, padding: '4px 10px', cursor: 'pointer' }}>Try again</button></div>
+              Couldn&rsquo;t read this half: {data.error}<div style={{ marginTop: 8 }}><button onClick={load} style={{ background: 'transparent', border: '1px solid var(--b-1)', borderRadius: 6, color: 'var(--t-2)', fontSize: 11, padding: '4px 10px', cursor: 'pointer' }}>Try again</button>{data.untrusted && onReload && <button data-testid="detail-reload" onClick={onReload} style={{ marginLeft: 8, background: 'rgba(232,89,12,0.14)', border: '1px solid var(--p2)', borderRadius: 6, color: 'var(--t-1)', fontSize: 11, padding: '4px 10px', cursor: 'pointer' }}>Reload sheets</button>}</div>
             </div>)}
           {data.status === 'ready' && data.warning && <div style={note('#FF9F0A', 'rgba(255,159,10,0.4)', 'rgba(255,159,10,0.08)')}>{data.warning}</div>}
 

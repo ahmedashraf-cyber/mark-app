@@ -10,12 +10,12 @@
  * enforced here, in the client. A collector's rows are cut down to their own before they are stored, and a half that is
  * not theirs is refused before anything is read. It is not a server-side wall.
  */
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useAuth } from '../hooks/useAuth'
-import SessionsTable from '../components/SessionsTable'
+import SessionsTable from '../components/HalvesTable'
 import HalfDetail from '../components/HalfDetail'
-import { loadHalvesDataset } from '../utils/myHalvesSheet'
-import { buildSessionRows, averages, MODULES } from '../utils/sessionScores'
+import { loadHalvesDataset, loadEventCounts } from '../utils/myHalvesSheet'
+import { buildSessionRows, averages, MODULES } from '../utils/halvesScores'
 import { HALF_COLUMNS, OWN_DEFAULT_COLUMNS, ANY_DEFAULT_COLUMNS, profileOf } from '../utils/myHalves'
 import { canonHr, sameHr } from '../utils/hrCode'
 
@@ -53,24 +53,37 @@ export default function MyHalvesPage({ onBack }) {
   const [load, setLoad] = useState({ status: 'loading', error: '' })
   const [ds, setDs] = useState(null)
   const [open, setOpen] = useState(null)
+  const [prog, setProg] = useState({})                                       // which small tab has been read: id -> { state, error }
+  const [counts, setCounts] = useState({ status: 'loading', map: null, error: '' })   // event counts arrive AFTER the list
+  const run = useRef(0)                                                      // a Reload makes any answer still on its way stale
 
   const reload = useCallback(async () => {
-    setLoad(l => ({ status: l.status === 'ready' ? 'reloading' : 'loading', error: '' }))
-    try { setDs(await loadHalvesDataset({ me, canViewAny: canAny })); setLoad({ status: 'ready', error: '' }); setOpen(null) }
-    catch (e) { setLoad({ status: 'error', error: e?.message || String(e) }) }
+    const mine = ++run.current
+    const current = () => run.current === mine
+    setLoad(l => ({ status: l.status === 'ready' ? 'reloading' : 'loading', error: '' })); setProg({})
+    try {
+      // phase 1: the list. As soon as sessions, scores and the edit log (and the roster, for a reviewer) are read it is shown
+      const next = await loadHalvesDataset({ me, canViewAny: canAny, onProgress: p => { if (current()) setProg(x => ({ ...x, [p.id]: p })) } })
+      if (!current()) return
+      setDs(next); setLoad({ status: 'ready', error: '' }); setOpen(null); setCounts({ status: 'loading', map: null, error: '' })
+      // phase 2: the event counts (column A of field_events, once; the index is kept for opening halves)
+      loadEventCounts(next).then(
+        map => { if (current()) setCounts({ status: 'ready', map, error: '' }) },
+        e => { if (current()) setCounts({ status: 'error', map: null, error: e?.message || String(e) }) })
+    } catch (e) { if (current()) setLoad({ status: 'error', error: e?.message || String(e) }) }
   }, [me, canAny])
   useEffect(() => { if (allowed && (canAny || hasCode)) reload() }, [allowed, canAny, hasCode, reload])
 
   const built = useMemo(() => {
     if (!ds) return null
-    const b = buildSessionRows(ds.raw, ds.eventCounts)
+    const b = buildSessionRows(ds.raw, counts.map)
     // a session row does not always carry the collector's email; the roster does, so searching by email finds all their halves
     const email = new Map((ds.raw.roster?.list || []).map(p => [canonHr(p.code), p.email]))
     b.rows = b.rows.map(r => (r.collector_email ? r : { ...r, collector_email: email.get(canonHr(r.collector_hr_code)) || '' }))
     // belt and braces: a collector's list is filtered to their own once more here, so even a bug upstream cannot show another person's half
     return canAny ? b : { ...b, rows: b.rows.filter(r => sameHr(r.collector_hr_code, me.hrCode) && !r.isModel) }
-  }, [ds, canAny, me.hrCode])
-  const eventsState = !ds ? { status: 'loading' } : ds.eventCounts ? { status: 'ready' } : { status: 'error', error: ds.eventsError }
+  }, [ds, counts.map, canAny, me.hrCode])
+  const eventsState = !ds || counts.status === 'loading' ? { status: 'loading' } : counts.status === 'ready' ? { status: 'ready' } : { status: 'error', error: counts.error }
 
   const shell = children => (
     <div style={{ height: '100vh', display: 'flex', flexDirection: 'column', background: 'var(--bg)', overflow: 'hidden' }}>
@@ -91,7 +104,17 @@ export default function MyHalvesPage({ onBack }) {
 
   return shell(
     <>
-      {load.status === 'loading' && <div data-testid="halves-loading" style={{ fontSize: 12, color: 'var(--t-3)', padding: '18px 0' }}>Reading the sheets…</div>}
+      {load.status === 'loading' && (
+        <div data-testid="halves-loading" style={{ fontSize: 12, color: 'var(--t-3)', padding: '18px 0', lineHeight: 1.9 }}>
+          Reading the sheets…
+          {[['sessions', 'Sessions'], ['scores', 'Scores'], ['edits', 'Edit log (to tell a current score from a stale one)'], ...(canAny ? [['roster', 'Names and roles']] : [])].map(([id, label]) => {
+            const st = prog[id]
+            return (
+              <div key={id} data-testid={`progress-${id}`} style={{ color: st?.state === 'error' ? '#FF453A' : st?.state === 'done' ? 'var(--t-2)' : 'var(--t-3)' }}>
+                {st?.state === 'done' ? '✓' : st?.state === 'error' ? '✗' : '…'} {label}{st?.state === 'error' ? `: ${st.error}` : ''}
+              </div>)
+          })}
+        </div>)}
       {load.status === 'error' && (
         <div data-testid="halves-load-error" style={{ fontSize: 12, padding: '10px 12px', borderRadius: 8, color: '#FF453A', border: '1px solid rgba(255,69,58,0.3)', background: 'rgba(255,69,58,0.08)' }}>
           Couldn&rsquo;t load the halves: {load.error}
@@ -107,7 +130,7 @@ export default function MyHalvesPage({ onBack }) {
               actionLabel="Open" canExport={canAny} hide={canAny ? [] : ['hr', 'roles', 'types']} noun="halves"
               above={rows => <Profile rows={rows}/>}/>
           </div>
-          {open && <HalfDetail row={open} me={me} canViewAny={canAny} cache={ds.cache} onBack={() => setOpen(null)}/>}
+          {open && <HalfDetail row={open} me={me} canViewAny={canAny} cache={ds.cache} onBack={() => setOpen(null)} onReload={reload}/>}
         </>
       )}
     </>

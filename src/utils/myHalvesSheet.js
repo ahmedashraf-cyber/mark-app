@@ -31,10 +31,9 @@ async function getJson(url) {
 }
 const readRange = async (sheetId, a1) => (await getJson(`${BASE}/${sheetId}/values/${enc(a1)}`)).values || []
 
-/** The three calls sheetIndex.js needs, against the FIELD spreadsheet. */
+/** The two calls sheetIndex.js needs, against the FIELD spreadsheet. There is no "read the whole tab" for the big ones. */
 export const fieldIo = {
   readColumnA: tab => readRange(FIELD_SHEET_ID, `${tab}!A:A`),
-  readAll: tab => readRange(FIELD_SHEET_ID, `${tab}!A:ZZ`),
   async batchGetRows(tab, segs) {
     const out = []
     for (let i = 0; i < segs.length; i += 40) {          // keep the URL short
@@ -64,17 +63,22 @@ async function loadRoster() {
 }
 
 /**
- * Everything the list needs, read once. For a collector the result has ALREADY been cut down to their own halves,
- * so no other collector's row is ever kept in the screen's state.
+ * PHASE 1: what the list needs, read once and in parallel: field_sessions, scores, session_edits (the edit log is what
+ * tells a stale score from a current one, so the list is not shown without it) and, for a reviewer, the roster. These
+ * are small tabs. `onProgress({ id, state: 'done' | 'error', error? })` is called as each one finishes.
+ * It does NOT read field_events: the list appears first and the event counts follow (loadEventCounts).
+ *
+ * For a collector the result has ALREADY been cut down to their own halves, so no other collector's row is ever kept in
+ * the screen's state.
  *   me: { hrCode, name, role, email }   canViewAny: may see any collector's halves
  */
-export async function loadHalvesDataset({ me, canViewAny }) {
-  const [fs, sc, ed, ro, ev] = await Promise.all([
-    settle(readRange(FIELD_SHEET_ID, `${FIELD_TAB_SESSIONS}!A:ZZ`)),
-    settle(readRange(FIELD_SHEET_ID, `${TAB_SCORES}!A:ZZ`)),
-    settle(readRange(FIELD_SHEET_ID, `${EDIT_LOG_TAB}!A:ZZ`)),
-    canViewAny ? settle(loadRoster()) : Promise.resolve({ ok: true, v: null }),
-    settle(fieldIo.readColumnA(FIELD_TAB_EVENTS)),
+export async function loadHalvesDataset({ me, canViewAny, onProgress = () => {} }) {
+  const track = (id, p) => settle(p).then(r => { onProgress(r.ok ? { id, state: 'done' } : { id, state: 'error', error: r.error }); return r })
+  const [fs, sc, ed, ro] = await Promise.all([
+    track('sessions', readRange(FIELD_SHEET_ID, `${FIELD_TAB_SESSIONS}!A:ZZ`)),
+    track('scores', readRange(FIELD_SHEET_ID, `${TAB_SCORES}!A:ZZ`)),
+    track('edits', readRange(FIELD_SHEET_ID, `${EDIT_LOG_TAB}!A:ZZ`)),
+    canViewAny ? track('roster', loadRoster()) : Promise.resolve({ ok: true, v: null }),
   ])
   if (!fs.ok) throw new Error(`Could not read ${FIELD_TAB_SESSIONS}: ${fs.error}`)
   const header = (fs.v[0] || []).map(norm)
@@ -88,18 +92,27 @@ export async function loadHalvesDataset({ me, canViewAny }) {
       : ro.ok ? { ok: true, list: ro.v } : { ok: false, error: ro.error },
   }
   if (!canViewAny) raw = scopeToCollector(raw, me.hrCode)     // before anything is stored
-  const eventIndex = ev.ok ? buildIdIndex(ev.v) : null
-  let eventCounts = null
-  if (eventIndex) {
-    eventCounts = new Map()
-    const si = header.indexOf('session_id')
-    raw.sessions.slice(1).forEach(r => { const id = norm(r?.[si]); if (id && !eventCounts.has(id)) eventCounts.set(id, (eventIndex.get(id) || []).reduce((n, [a, b]) => n + (b - a + 1), 0)) })
-  }
   return {
-    raw, eventCounts, eventsError: ev.ok ? '' : ev.error, loadedAt: new Date().toISOString(),
-    // reused by the detail view, so the big tabs' column A is not fetched afresh for every half
-    cache: { events: { index: eventIndex }, detail: {}, headers: {} },
+    raw, loadedAt: new Date().toISOString(),
+    // kept for the whole session of the screen; a Reload makes a new dataset and so a new, empty cache. `events.index` is
+    // filled by loadEventCounts, `detail.index` the first time a half with a run is opened, so each big tab's column A is
+    // read once.
+    cache: { events: { index: null }, detail: { index: null }, headers: {} },
   }
+}
+
+/**
+ * PHASE 2: the number of events of each listed session, from column A of field_events (one read, and the index it builds
+ * is kept in the cache for opening halves). Returns a Map(session_id → count). Throws if the tab cannot be read; the list
+ * stays usable and says the counts failed.
+ */
+export async function loadEventCounts(ds) {
+  const index = buildIdIndex(await fieldIo.readColumnA(FIELD_TAB_EVENTS))
+  ds.cache.events.index = index
+  const header = (ds.raw.sessions[0] || []).map(norm), si = header.indexOf('session_id')
+  const counts = new Map()
+  ds.raw.sessions.slice(1).forEach(r => { const id = norm(r?.[si]); if (id && !counts.has(id)) counts.set(id, (index.get(id) || []).reduce((n, [a, b]) => n + (b - a + 1), 0)) })
+  return counts
 }
 
 // header only: a one-row read, not the whole tab
