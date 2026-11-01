@@ -9,6 +9,7 @@ import AdminPage from './AdminPage.jsx'
 import TagEditorPage from './TagEditorPage.jsx'
 import InsightsPage from './InsightsPage.jsx'
 import CollectorSelfReviewPage from './CollectorSelfReviewPage.jsx'
+import MyHalvesPage from './MyHalvesPage.jsx'
 import { CURRENT_VERSION, getRuntimeVersion } from '../hooks/useUpdateCheck'
 import { HALVES, formatHalf } from '../utils/half.js'
 
@@ -190,6 +191,8 @@ export default function SessionSetupPage({ onSessionStart, lastResult, onShowHis
       case 'comparison': return !!caps.comparison
       case 'insights':    return !!caps.insights
       case 'selfreview':  return !!caps.selfReview
+      // read-only: a collector's own halves, or any collector's. Hidden entirely (no locked card) without either.
+      case 'myhalves':    return !!(caps.viewOwnHalves || caps.viewAnyHalves)
       // a card added later with no permission mapped stays hidden rather than
       // appearing for everyone by default
       default:           return false
@@ -197,7 +200,7 @@ export default function SessionSetupPage({ onSessionStart, lastResult, onShowHis
   }
   // the Tag slot is one tile whose mode flips on tagEditor, so count it once
   const visibleCardCount = ['scout', 'audit',
-    caps.tagEditor ? 'tageditor' : 'field', 'drill', 'comparison', 'insights', 'selfreview']
+    caps.tagEditor ? 'tageditor' : 'field', 'drill', 'comparison', 'insights', 'selfreview', 'myhalves']
     .filter(cardVisible).length
 
   // Log access level once when profile resolves
@@ -212,6 +215,7 @@ export default function SessionSetupPage({ onSessionStart, lastResult, onShowHis
   const [showTagEditor, setShowTagEditor] = useState(false)
   const [showInsights,    setShowInsights]    = useState(false)
   const [showSelfReview,     setShowSelfReview]     = useState(false)
+  const [showMyHalves,       setShowMyHalves]       = useState(false)
   const [selfReviewDirty,    setSelfReviewDirty]    = useState(false)
 
   async function handleRosterImport(file) {
@@ -461,6 +465,8 @@ export default function SessionSetupPage({ onSessionStart, lastResult, onShowHis
     />
   )
 
+  if (showMyHalves) return <MyHalvesPage onBack={() => setShowMyHalves(false)}/>
+
   if (showInsights) return (
     <InsightsPage role={role} onBack={() => setShowInsights(false)} roleInfo={roleInfo}/>
   )
@@ -705,6 +711,23 @@ export default function SessionSetupPage({ onSessionStart, lastResult, onShowHis
                   steps:['Choose a half you collected','Enter what errors you think you made','See how it matches the trainer review'],
                 },
                 {
+                  mode:'myhalves',
+                  color:'#30D158',
+                  glyph: (
+                    <svg width="32" height="32" viewBox="0 0 32 32" fill="none">
+                      <rect x="5" y="6" width="22" height="16" rx="2.5" stroke="#30D158" strokeWidth="1.8"/>
+                      <path d="M13 11.5v5l4.5-2.5-4.5-2.5z" fill="#30D158"/>
+                      <path d="M9 26h14" stroke="#30D158" strokeWidth="1.8" strokeLinecap="round"/>
+                    </svg>
+                  ),
+                  title: caps.viewAnyHalves ? 'Halves' : 'My halves',
+                  sub: caps.viewAnyHalves ? 'Review any collector\'s halves' : 'Rewatch your own halves',
+                  desc: caps.viewAnyHalves
+                    ? 'Search a collector by HR-code, name, email or match, see every half with its score, and watch it against the model answer.'
+                    : 'See your saved halves with their scores, then rewatch one with your own video and see exactly where you differed from the model answer.',
+                  steps:['Pick one of your halves','See your score and every event','Load your video and jump to any moment'],
+                },
+                {
                   mode:'insights',
                   color:'#FF9F0A',
                   glyph: (
@@ -738,6 +761,10 @@ export default function SessionSetupPage({ onSessionStart, lastResult, onShowHis
                     }
                     if (m.mode === 'selfreview') {
                       setShowSelfReview(true)
+                      return
+                    }
+                    if (m.mode === 'myhalves') {
+                      setShowMyHalves(true)
                       return
                     }
                     if (m.mode === 'tageditor') {
