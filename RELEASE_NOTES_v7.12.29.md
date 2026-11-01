@@ -17,6 +17,11 @@ Download the `.msi` or `.exe` installer below. Requirements: Windows 10+.
 - Removing access lifts the lock; a trainee can then retake only if a trainer has approved a retake that has not been used.
 - Every grant and removal is recorded in the `quiz_changes` tab (who, quiz, trainee, old and new value, when).
 
+**Fixed (important): Review showed other trainees' attempts**
+- The Drill **Review** page listed *every* trainee's attempts for a quiz, not just the signed-in trainee's. Opening one showed its clip-by-clip answers, and **Download CSV** included that trainee's HR-code. This was in every release since v7.8.89 (16 Sep 2026), including v7.12.27.
+- Review now lists and opens **only the signed-in trainee's own attempts**; a trainer or Batch Manager still sees everyone's. Attempts and answers belonging to other people are no longer even loaded into a trainee's screen, and an attempt that is not yours cannot be opened: you get "You can only review your own attempts."
+- Like the other checks in this release, this one is made by the app on the computer (client-side), not by a server.
+
 **Fixed: the start check**
 - Pressing **Start** (and again on the intro screen of a new attempt) now re-reads the quiz, the trainee's assignment, their attempts and their retake grants **at that moment**, instead of using the list loaded earlier. A change a trainer made a minute ago counts immediately. If it cannot check, it does not start and says why.
 - A pass on a **lowered pass mark** is now treated the same way in the start check as in the quiz list, so the Review button and the lock agree.
