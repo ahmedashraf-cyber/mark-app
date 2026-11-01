@@ -24,6 +24,7 @@ import { createSession, loadSession, clearSession, toScoringInput } from '../uti
 import { scoreAttempt, toAnswerGivenRows } from '../utils/drillScoring'
 import { canStartFresh, requestRetake, watchMyRequests } from '../utils/drillRetakes'
 import { reviewAccess, attemptsOf, approvedCount, startRefusal, REVIEW_LOCK_MESSAGE } from '../utils/drillReview'
+import { visibleAttempts, visibleAnswerRows, visibleAssignments } from '../utils/drillAccess'
 import DrillBuilderPage from './DrillBuilderPage'
 import DrillSessionPage from './DrillSessionPage'
 import DrillResultsPage from './DrillResultsPage'
@@ -158,7 +159,9 @@ export default function DrillPage({ onBack }) {
         setQuizzes(qs.filter(q =>
           q.status === QUIZ_STATUS.PUBLISHED && mineIds.has(q.quiz_id)))
       }
-      setSessions(ss)
+      // A trainee's screen holds only THEIR OWN attempts (a trainer's holds everyone's, as before). Everything built from
+      // `sessions` (the quiz list, Review, My progress) is therefore own-only by construction. See drillAccess.js.
+      setSessions(role === 'creator' ? ss : visibleAttempts(ss, { hrCode: person?.hrCode }))
     } catch (e) { setError(e.message) }
     finally { setLoading(false) }
   }, [role, person?.hrCode])
@@ -227,12 +230,17 @@ export default function DrillPage({ onBack }) {
   async function openWithData(view, opts = {}) {
     setBusyNav(view); setError('')
     try {
-      const d = await readTabs([TAB_CLIPS, TAB_ANSWERS, TAB_ANSWERS_GIVEN, TAB_ASSIGNMENTS])
+      // For a trainee the sessions are read FRESH here too, to know which answer rows are theirs: every other person's rows
+      // are dropped before they reach the screen (a trainer keeps everyone's, as before).
+      const trainer = role === 'creator'
+      const viewer = { hrCode: person?.hrCode, canSeeAll: trainer }
+      const d = await readTabs(trainer ? [TAB_CLIPS, TAB_ANSWERS, TAB_ANSWERS_GIVEN, TAB_ASSIGNMENTS]
+                                       : [TAB_CLIPS, TAB_ANSWERS, TAB_ANSWERS_GIVEN, TAB_ASSIGNMENTS, TAB_SESSIONS])
       setBundle({
         clips:        d[TAB_CLIPS] || [],
         answers:      d[TAB_ANSWERS] || [],
-        answersGiven: d[TAB_ANSWERS_GIVEN] || [],
-        assignments:  d[TAB_ASSIGNMENTS] || [],
+        answersGiven: visibleAnswerRows(d[TAB_ANSWERS_GIVEN], d[TAB_SESSIONS], viewer),
+        assignments:  visibleAssignments(d[TAB_ASSIGNMENTS], viewer),
       })
       setTarget({ view, ...opts })
     } catch (e) {
@@ -377,6 +385,7 @@ export default function DrillPage({ onBack }) {
     const back = () => { setTarget(null) }
     if (target.view === 'review') return (
       <DrillReviewPage quiz={target.quiz} sessions={sessions}
+        viewer={{ hrCode: person?.hrCode, canSeeAll: role === 'creator' }}
         answersGiven={bundle.answersGiven} clips={bundle.clips} onBack={back}/>
     )
     if (target.view === 'dashboard') return (
