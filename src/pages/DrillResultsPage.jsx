@@ -14,6 +14,7 @@
  */
 import { useState } from 'react'
 import { effectivePassed } from '../config/drillConfig'
+import { REVIEW_LOCK_MESSAGE } from '../utils/drillReview'
 import { clipUrl as driveClipUrl } from '../utils/drillDrive'
 import { EVENT_BY_ID } from '../utils/fieldExtras'
 import { fmtTime } from '../components/ClipTagger'
@@ -41,7 +42,7 @@ function EventLine({ code, team, ms, attrs }) {
   )
 }
 
-export default function DrillResultsPage({ result, quiz, clipRows, onDone, onRequestRetake }) {
+export default function DrillResultsPage({ result, quiz, clipRows, onDone, onRequestRetake, canReview = false }) {
   const [openClip, setOpenClip] = useState(null)
   const [clipSrc,  setClipSrc]  = useState('')
 
@@ -114,9 +115,16 @@ export default function DrillResultsPage({ result, quiz, clipRows, onDone, onReq
           </div>
         </div>
 
-        {/* breakdown, pass only */}
-        {passed ? (
+        {/* The breakdown: a pass, or a failed trainee who has review access (the quiz's allow_review_on_fail, or a trainer
+            allowed them). It is the SAME breakdown, with the same video, not a second copy. A trainee without access sees
+            the hidden-answers card below, unchanged. Review access never changes the verdict above: that stays "Not passed". */}
+        {(passed || canReview) ? (
           <>
+            {!passed && (
+              <div data-testid="review-lock" style={{ fontSize:11, color:'var(--t-3)', textAlign:'center', marginBottom:12 }}>
+                {REVIEW_LOCK_MESSAGE}
+              </div>
+            )}
             <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:8, marginBottom:14 }}>
               {['correct','missed','wrong_event','wrong_extra'].map(v => (
                 <div key={v} className="card" style={{ padding:12, textAlign:'center' }}>

@@ -331,6 +331,23 @@ function QuizzesSection({ changedBy, canEdit }) {
   }
   useEffect(() => { refresh() }, [])
 
+  // The quiz-wide "let failed trainees see their answers" switch. Unlike pass mark and time limit it applies to EXISTING
+  // attempts at once (it only decides what is shown), and it saves on its own with a confirmation, not with Save.
+  async function toggleReview(q) {
+    const next = q.allow_review_on_fail === '1' ? '0' : '1'
+    const ask = next === '1'
+      ? `Let trainees who failed "${q.quiz_name}" see their answers?\n\nThis applies to every trainee on this quiz and to attempts already made. Once they can read the answers they cannot start another attempt unless a trainer reassigns the quiz.`
+      : `Stop letting trainees who failed "${q.quiz_name}" see their answers?\n\nThey can retake again if a retake was approved for them and not used.`
+    if (!window.confirm(ask)) return
+    setBusy(q.quiz_id)
+    try {
+      await setQuizSetting({ quiz: q, field: 'allow_review_on_fail', value: next, changedBy })
+      showToast(`${q.quiz_name}: failed trainees ${next === '1' ? 'can' : 'can no longer'} see their answers`)
+      await refresh()
+    } catch (e) { showToast(e?.message || String(e), 'error') }
+    finally { setBusy('') }
+  }
+
   async function save(q) {
     const d = draft[q.quiz_id] || {}
     const jobs = []
@@ -364,9 +381,10 @@ function QuizzesSection({ changedBy, canEdit }) {
           </button>
         </div>
         <div style={{ fontSize:10, color:'var(--t-3)', marginTop:8, lineHeight:1.6 }}>
-          Changes apply to NEW attempts only. Each completed attempt stores the
+          Pass mark and time limit apply to NEW attempts only. Each completed attempt stores the
           pass mark that was in force when it was taken, so raising the mark
           cannot retroactively fail anyone — an earlier pass stays a pass.
+          <br/>&ldquo;Let trainees who failed see their answers&rdquo; is different: it applies at once, to attempts already made. It never changes a result, the pass mark or whether anyone passed.
           {!canEdit && <><br/><b style={{ color:'#FF9500' }}>
             Read-only: only a Batch Manager can change these.</b></>}
         </div>
@@ -385,6 +403,7 @@ function QuizzesSection({ changedBy, canEdit }) {
               <th style={{ ...th, textAlign:'right' }}>Clips</th>
               <th style={{ ...th, width:110 }}>Pass mark %</th>
               <th style={{ ...th, width:110 }}>Time limit (min)</th>
+              <th style={{ ...th, width:150 }} title="Applies to attempts already made, immediately">Failed trainees see answers</th>
               <th style={th}>Status</th><th style={th}/>
             </tr></thead>
             <tbody>
@@ -418,6 +437,15 @@ function QuizzesSection({ changedBy, canEdit }) {
                           style={{ ...inputStyle, width:'100%' }}/>
                       ) : <span>{q.time_limit_min}</span>}
                     </td>
+                    <td style={td}>
+                      <label style={{ display:'flex', gap:6, alignItems:'center', fontSize:10,
+                        cursor: canEdit ? 'pointer' : 'default', color:'var(--t-2)' }}
+                        title="Let trainees who failed see their answers">
+                        <input type="checkbox" data-testid="allow-review" checked={q.allow_review_on_fail === '1'}
+                          disabled={!canEdit || busy === q.quiz_id} onChange={() => toggleReview(q)}/>
+                        Let trainees who failed see their answers
+                      </label>
+                    </td>
                     <td style={{ ...td, fontSize:10, fontWeight:700,
                       color: q.status === 'published' ? '#30D158' : '#FFD60A' }}>
                       {q.status}</td>
@@ -435,7 +463,7 @@ function QuizzesSection({ changedBy, canEdit }) {
                 )
               })}
               {!quizzes.length && !loading && (
-                <tr><td colSpan={7} style={{ ...td, textAlign:'center', padding:20,
+                <tr><td colSpan={8} style={{ ...td, textAlign:'center', padding:20,
                   color:'var(--t-3)' }}>No quizzes found.</td></tr>
               )}
             </tbody>
