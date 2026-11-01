@@ -1,5 +1,5 @@
 import { scopeToCollector, buildDetailView, filterDetail, filterOptions, ownEventRows, runCards, collectionDetails, profileOf, fmtDuration, isGkSaveGap, HALF_COLUMNS, OWN_DEFAULT_COLUMNS, ANY_DEFAULT_COLUMNS } from './myHalves.js'
-import { buildSessionRows, parseRun, sortRows, scoreCell } from './sessionScores.js'
+import { buildSessionRows, parseRun, sortRows, scoreCell } from './halvesScores.js'
 import { SESSION_COLUMNS, EVENT_COLUMNS } from '../config/fieldConfig.js'
 import { SCORES_COLUMNS, DETAIL_COLUMNS } from '../config/comparisonConfig.js'
 import { EDIT_LOG_HEADER } from './sessionEdit.js'

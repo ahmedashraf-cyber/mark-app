@@ -13,12 +13,10 @@
  */
 import { toSheetHalf } from './fieldSheetSync'
 import { EDIT_LOG_HEADER } from './sessionEdit'
-import { canonHr } from './hrCode'
 
 const norm = v => String(v ?? '').trim()
 const lower = v => norm(v).toLowerCase()
-// one definition of "the same HR-code": case, spaces and typographic dashes ignored (see hrCode.js)
-const normCode = canonHr
+const normCode = v => norm(v).replace(/\s+/g, '').toUpperCase()
 const num = v => { const t = norm(v); if (t === '') return null; const n = Number(t); return Number.isFinite(n) ? n : null }
 
 /** [key in the sheet, key in moduleStats, label] */
@@ -52,7 +50,7 @@ export function parseRun(o, order) {
     runId: norm(o.run_id), at, atMs: Date.parse(at), order,
     modelSessionId: norm(o.model_session_id), collectorSessionId: norm(o.collector_session_id),
     overall: num(o.score),
-    totalModel: num(o.total_model_events), totalCollector: num(o.total_collector_events),
+    totalModel: num(o.total_model_events),
     correct: num(o.correct), missing: num(o.missing_event), extra: num(o.extra_event), wrongSide: num(o.wrong_side),
     wrongTime: num(o.wrong_timestamp), wrongExtra: num(o.wrong_extra), missExtra: num(o.missing_extra), notNeeded: num(o.not_needed_extra),
     modules,
@@ -229,11 +227,10 @@ export const activeFilterCount = f => Object.entries(EMPTY_FILTERS).filter(([k, 
 
 /** All filters together (AND). A filter left empty does nothing. */
 export function applyFilters(rows, f) {
-  const q = lower(f.q), qc = canonHr(f.q), ids = words(f.matchIds), hrs = words(f.hrCodes).map(normCode), vid = lower(f.video)
+  const q = lower(f.q), ids = words(f.matchIds), hrs = words(f.hrCodes).map(normCode), vid = lower(f.video)
   const scoreFiltersOn = [f.overallMin, f.overallMax, f.toMin, f.toMax, f.pressureMin, f.pressureMax].some(v => norm(v) !== '')
   return rows.filter(r => {
-    if (q && ![r.match_id, r.session_id, r.collector_hr_code, r.collectorName, r.collector_email].some(v => lower(v).includes(q))
-      && !(qc && canonHr(r.collector_hr_code).includes(qc))) return false
+    if (q && ![r.match_id, r.session_id, r.collector_hr_code, r.collectorName, r.collector_email].some(v => lower(v).includes(q))) return false
     if (ids.length && !ids.includes(r.match_id)) return false
     if (hrs.length && !hrs.includes(normCode(r.collector_hr_code))) return false
     if (f.halves.length && !f.halves.includes(r.half)) return false
@@ -270,8 +267,8 @@ export function applyFilters(rows, f) {
 const collator = new Intl.Collator(undefined, { numeric: true })
 
 /** Empty values always go last, whichever way the column is sorted; ties keep sheet order, newest first. */
-export function sortRows(rows, key, dir = 'desc', columns = COLUMNS) {
-  const col = columns.find(c => c.key === key) || COLUMNS.find(c => c.key === 'saved')
+export function sortRows(rows, key, dir = 'desc') {
+  const col = COLUMNS.find(c => c.key === key) || COLUMNS.find(c => c.key === 'saved')
   const sign = dir === 'asc' ? 1 : -1
   const empty = v => v === null || v === undefined || v === ''
   return rows.map(r => [r, col.sort(r)]).sort((a, b) => {

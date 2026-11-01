@@ -1,22 +1,26 @@
 /**
- * sheetIndex.js — read only the rows of ONE id from a very large tab, and get exactly what a full read would give.
+ * sheetIndex.js — read only the rows of ONE id from a very large tab, without ever reading the whole tab.
  *
- * field_events (39 columns, every event of every session) and comparison_detail are far too big to read whole each
- * time a screen opens (a Google file is capped at 10 million cells). Rows of one session or one run are written
- * together, so:
- *   1. read column A only (one cheap read), and note which rows hold each id
- *   2. fetch just those rows
- *   3. CHECK every row that came back really has that id in column A, and that the count is what the index said
- * It then reads column A AGAIN and requires this id to sit on exactly the same rows (a row added for the same id in
- * between would not look wrong, only missing). If either check fails the index is rebuilt and it is tried again, and
- * after three attempts the whole tab is read and filtered. So the result is always
- * what filtering a full read would give, never a guess; the check is what makes that true, and sheetIndex.test.mjs
- * proves it against a full read on randomised sheets, including ones that change mid-way.
+ * field_events (39 columns, every event of every session) and comparison_detail are far too big to read whole (a Google
+ * file is capped at 10 million cells). Rows of one session or one run are written together, so:
+ *   1. read column A of the tab ONCE per session of the screen and keep the index in memory (`cache.index`); Reload
+ *      builds a new cache, which is what clears it
+ *   2. fetch just the rows the index gives for the id
+ *   3. check what came back: the row count is what the index said and every row has this id in column A
+ * Only when a fetched row does NOT match is the index thrown away, column A read again, and the fetch retried (up to
+ * three tries in all). If it still does not match, it THROWS an IndexUntrustedError: it never falls back to reading the
+ * whole tab. The caller shows "Reload" and the person tries again.
+ *
+ * WHAT THIS DOES NOT CATCH (accepted, so Reload exists): a change that leaves every fetched row looking right.
+ *   - rows for the SAME id added after column A was read (they would only be missing)
+ *   - a session saved after column A was read: the index says "no rows" and an empty answer comes back
+ * A re-save writes the session's rows again at the end of the tab and removes the old ones, which shifts the rows
+ * below and IS caught by step 3.
  *
  * Pure: all sheet access goes through `io`, so it can be tested without a network.
  *   io.readColumnA(tab)            → [[cell], …]              row 1 is the header
  *   io.batchGetRows(tab, segments) → [[row, …], …]            one array of rows per [start, end] (1-based, inclusive)
- *   io.readAll(tab)                → [[cell, …], …]           row 1 is the header
+ * There is deliberately no "read everything" in the interface.
  */
 const key = v => String(v ?? '').trim()
 
@@ -39,34 +43,32 @@ export function buildIdIndex(colA) {
 /** How many rows an id has, according to the index. */
 export const indexedCount = (index, id) => (index.get(key(id)) || []).reduce((n, [s, e]) => n + (e - s + 1), 0)
 
-const sameSegs = (x, y) => x.length === y.length && x.every((s, i) => s[0] === y[i][0] && s[1] === y[i][1])
+/** Thrown when the rows fetched keep disagreeing with column A: the sheet is changing faster than it can be read. */
+export class IndexUntrustedError extends Error {
+  constructor(tab) {
+    super(`The ${tab} sheet changed while it was being read, so these rows cannot be trusted. Press Reload and open the half again.`)
+    this.name = 'IndexUntrustedError'
+    this.untrusted = true
+  }
+}
 
 /**
- * Rows for `id`, as arrays of cells in sheet order. `cache` ({ index }) is reused between calls.
- *
- * The answer is accepted only when BOTH of these hold:
- *   - what came back is right: the row count is what the index said and every row has this id in column A
- *   - nothing moved: column A, read again AFTER the fetch, puts this id on exactly the same rows
- * The second check is what catches a row added for the same id between the two reads (it would not look wrong, it
- * would just be missing). Otherwise the index is replaced with the fresh one and it is tried again, and after three
- * attempts the whole tab is read and filtered (slow, and right by definition).
+ * Rows for `id`, as arrays of cells in sheet order. `cache` ({ index }) belongs to one tab and is kept by the caller for
+ * the whole session of the screen.
  */
 export async function fetchRowsById(io, tab, id, cache = {}) {
   const want = key(id)
   if (!want) return []
   for (let attempt = 0; attempt < 3; attempt++) {
-    if (!cache.index) cache.index = buildIdIndex(await io.readColumnA(tab))
+    if (!cache.index) cache.index = buildIdIndex(await io.readColumnA(tab))      // once, then reused by every later fetch
     const segs = cache.index.get(want) || []
     const rows = segs.length ? (await io.batchGetRows(tab, segs)).flat() : []
-    const after = buildIdIndex(await io.readColumnA(tab))
     const expected = segs.reduce((n, [s, e]) => n + (e - s + 1), 0)
-    const valid = rows.length === expected && rows.every(r => key(r?.[0]) === want)
-    const stable = sameSegs(segs, after.get(want) || [])
-    cache.index = after                                      // the fresher index is the one to keep
-    if (valid && stable) return rows
+    if (rows.length === expected && rows.every(r => key(r?.[0]) === want)) return rows
+    cache.index = null                                                          // a fetched row did not match: re-read column A
   }
-  const all = await io.readAll(tab)
-  return all.slice(1).filter(r => key(r?.[0]) === want)
+  cache.index = null
+  throw new IndexUntrustedError(tab)
 }
 
 /** Cells → objects keyed by the header row. A short row is padded with ''. */

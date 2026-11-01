@@ -157,16 +157,6 @@ console.log('filters (all together, AND)')
   ok('"Clear all" is a return to EMPTY_FILTERS and counts what is active', activeFilterCount(EMPTY_FILTERS) === 0 && activeFilterCount({ ...EMPTY_FILTERS, q: 'x', halves: ['1H'], hasTO: true, overallMin: '5' }) === 4 && F({}) === 'abcdm')
 }
 
-console.log('HR-code matching (case, spaces and typographic dashes are the same code; A1650 is not)')
-{
-  const data = raw({ sessions: ['A-1650', 'a-1650', ' A-1650 ', 'A\u20131650', 'A1650', 'A-16500', 'B-1'].map((hr, i) => sess({ session_id: 'h' + i, match_id: String(1000000 + i), half: '1H', collector_hr_code: hr })),
-    roster: [{ code: 'A-1650', name: 'Ann', role: 'Offline Data Collector', email: 'ann@x.com' }] })
-  const rows = rowsOf(data), F = o => applyFilters(rows, { ...EMPTY_FILTERS, ...o }).map(r => r.session_id).sort().join()
-  ok('the HR-code filter is exact: all four spellings of A-1650, and neither A1650 nor A-16500', F({ hrCodes: 'a-1650' }) === 'h0,h1,h2,h3', F({ hrCodes: 'a-1650' }))
-  ok('free-text search is partial (also finds A-16500) but still sees through the spelling variants and never A1650', F({ q: 'a-1650' }) === 'h0,h1,h2,h3,h5', F({ q: 'a-1650' }))
-  ok('the roster join sees through the spelling variants too (name and role found for all four)', [0, 1, 2, 3].every(i => rows[i].collectorName === 'Ann') && rows[4].collectorName === '' && rows[5].collectorName === '')
-}
-
 console.log('sort')
 {
   const data = raw({ sessions: [

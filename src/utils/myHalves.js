@@ -12,7 +12,7 @@
 import { sameHr } from './hrCode'
 import { attrSummary } from './eventAttrs'
 import { toSheetHalf, msToReadable } from './fieldSheetSync'
-import { COLUMNS, STATE_TEXT } from './sessionScores'
+import { COLUMNS, STATE_TEXT } from './halvesScores'
 import { MODULES_SPLIT, classifyEventModuleSplit } from './defectTypes'
 
 const norm = v => String(v ?? '').trim()
