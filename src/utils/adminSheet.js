@@ -300,6 +300,8 @@ export const PERMISSIONS = [
   // appended last, so every existing role_access column keeps its position
   { key:'insights',         label:'Insights' },
   { key:'selfReview',       label:'Self-Review' },
+  { key:'viewOwnHalves',    label:'My halves (own)' },
+  { key:'viewAnyHalves',    label:'My halves (any collector)' },
 ]
 
 export const ACCESS_HEADER = ['role', ...PERMISSIONS.map(p => p.key)]
