@@ -108,6 +108,10 @@ export const QUIZZES_COLUMNS = [
   'quiz_id', 'quiz_name', 'drive_folder_id', 'scope_event_ids',
   'time_limit_min', 'pass_mark_percent', 'clip_count', 'assigned_hr_codes',
   'quiz_version', 'status', 'created_by', 'created_at', 'updated_at',
+  // APPENDED. 1 = a trainee who FAILED may see the answers of their finished attempts (and, because they can then read
+  // the key, may not retake unless a trainer grants it). Blank or missing = 0. This list also drives replaceTabRows
+  // (publishing a draft rewrites the quizzes tab from it), so the column must be listed here or it would be erased.
+  'allow_review_on_fail',
 ]
 
 export const CLIPS_COLUMNS = [
@@ -162,6 +166,8 @@ export const ANSWERS_GIVEN_COLUMNS = [
 export const ASSIGNMENTS_COLUMNS = [
   'quiz_id', 'trainee_hr_code', 'trainee_name', 'assigned_at', 'assigned_by',
   'attempts_granted', 'status',
+  // APPENDED. 1 = a trainer let THIS trainee see the answers of their finished attempts. Blank or missing = 0.
+  'review_allowed',
 ]
 
 export const TRAINEE_LOG_COLUMNS = [
