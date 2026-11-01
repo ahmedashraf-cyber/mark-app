@@ -116,7 +116,7 @@ export async function canStart({ quiz, trainee, sessions, assignment = null, inP
  * stale screen, not a determined person. If a read fails this throws instead of guessing: a lock that fails open is
  * no lock.
  */
-export async function canStartFresh({ quizId, trainee }) {
+export async function canStartFresh({ quizId, trainee, ignoreResultId = '' }) {
   const d = await readTabs([TAB_QUIZZES, TAB_ASSIGNMENTS, TAB_SESSIONS])
   const quiz = (d[TAB_QUIZZES] || []).find(q => q.quiz_id === quizId)
   if (!quiz) throw new Error('This quiz is no longer available.')
@@ -124,8 +124,11 @@ export async function canStartFresh({ quizId, trainee }) {
   const assignment = (d[TAB_ASSIGNMENTS] || []).find(a => a.quiz_id === quizId && normCode(a.trainee_hr_code) === hr) || null
   const attempts = attemptsOf(d[TAB_SESSIONS], quizId, trainee?.hrCode)
   const requests = attempts.length ? await readRequests(trainee?.hrCode, quizId) : []
-  // an attempt already begun on this device (resuming it is not a start, but it suspends a granted attempt's review)
+  // an attempt already begun on this device (resuming it is not a start, but it suspends a granted attempt's review).
+  // `ignoreResultId` is the attempt being CHECKED: the intro screen saves it locally as soon as it opens, so without
+  // this the check would count the very attempt it is deciding about as "already in progress".
   const found = loadSession()
-  const inProgress = !!(found?.session && found.session.quiz_id === quizId && normCode(found.session.trainee_hr_code) === hr)
+  const inProgress = !!(found?.session && found.session.quiz_id === quizId && normCode(found.session.trainee_hr_code) === hr
+    && (!ignoreResultId || found.session.result_id !== ignoreResultId))
   return { ...decideStart({ quiz, assignment, attempts, requests, inProgress }), quiz, assignment, fresh: true }
 }

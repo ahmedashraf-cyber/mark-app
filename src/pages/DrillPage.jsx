@@ -277,7 +277,7 @@ export default function DrillPage({ onBack }) {
 
   /** Called by the intro screen's Start button for a new attempt. Fails closed: if it cannot decide, it does not start. */
   async function checkBeforeStart() {
-    const gate = await canStartFresh({ quizId: active.quiz.quiz_id, trainee: person })
+    const gate = await canStartFresh({ quizId: active.quiz.quiz_id, trainee: person, ignoreResultId: active.session.result_id })
     return gate.allowed ? { ok: true } : { ok: false, message: startRefusal(gate) }
   }
 
