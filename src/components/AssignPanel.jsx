@@ -13,6 +13,7 @@
  */
 import { useState, useEffect } from 'react'
 import { assignmentStatus, assignTrainees, reassign } from '../utils/drillAssignments'
+import { setAssignmentReview } from '../utils/adminSheet'
 import { loadTrainees } from '../utils/drillPeople'
 
 const STATUS = {
@@ -76,15 +77,34 @@ export default function AssignPanel({ quiz, assignedBy, onClose }) {
   async function doReassign(row) {
     setBusy(true); setErr(''); setMsg('')
     try {
-      await reassign({
+      const r = await reassign({
         quiz,
         trainee: { hrCode: row.hrCode, name: row.name },
         attemptsMade: row.attempts,
         scorePercent: row.lastScore,
         approvedBy: assignedBy,
       })
-      setMsg(`${row.hrCode} can retake this quiz. Their previous result is kept.`)
+      setMsg(`${row.hrCode} can retake this quiz. Their previous result is kept.`
+        + (r?.reviewCleared ? ' Their review access was switched off, so they cannot see the answers during the new attempt.' : ''))
+      // the retake IS granted either way; this only says if the per-trainee flag could not be cleared
+      if (r?.reviewError) setErr(`The retake was granted, but ${row.hrCode}'s review access could not be switched off (${r.reviewError}). They still cannot see the answers during the new attempt, but it would return afterwards.`)
       setConfirm(null)
+      await refresh()
+    } catch (e) { setErr(e.message) }
+    finally { setBusy(false) }
+  }
+
+  // Allow / remove ONE trainee's access to the answers. Allowing it closes their retakes (they can read the key), so say so.
+  async function doToggleReview(row) {
+    const next = row.reviewAllowed ? '0' : '1'
+    const ask = next === '1'
+      ? `Let ${row.name || row.hrCode} see the answers of their attempts on "${quiz.quiz_name}"?\n\nOnce they can read the answers they cannot start another attempt. To give them one, use Reassign.`
+      : `Stop ${row.name || row.hrCode} seeing the answers on "${quiz.quiz_name}"?\n\nThey can retake again if a retake was approved for them and not used.`
+    if (!window.confirm(ask)) return
+    setBusy(true); setErr(''); setMsg('')
+    try {
+      await setAssignmentReview({ quizId: quiz.quiz_id, quizName: quiz.quiz_name, hrCode: row.hrCode, value: next, changedBy: assignedBy })
+      setMsg(next === '1' ? `${row.hrCode} can now see the answers. Retakes are closed for them.` : `${row.hrCode} can no longer see the answers.`)
       await refresh()
     } catch (e) { setErr(e.message) }
     finally { setBusy(false) }
@@ -154,6 +174,15 @@ export default function AssignPanel({ quiz, assignedBy, onClose }) {
                     <button onClick={() => setConfirm(r.hrCode)} style={{ ...ghost, padding:'4px 9px' }}>
                       Reassign
                     </button>
+                  )}
+                  {/* nothing to review until they have finished an attempt, and a pass already sees the answers */}
+                  {r.attempts > 0 && !r.passed && (
+                    <button data-testid="review-toggle" disabled={busy} onClick={() => doToggleReview(r)} style={{ ...ghost, padding:'4px 9px' }}>
+                      {r.reviewAllowed ? 'Remove review' : 'Allow review'}
+                    </button>
+                  )}
+                  {r.reviewAllowed && !r.passed && (
+                    <span style={{ fontSize:9, color:'#64D2FF' }}>can see answers</span>
                   )}
                   {r.grantsHeld > r.attempts - 1 && !r.canReassign && r.attempts > 0 && (
                     <span style={{ fontSize:9, color:'#30D158' }}>retake open</span>

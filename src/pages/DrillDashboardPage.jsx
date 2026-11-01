@@ -10,6 +10,9 @@
  * problem, different fix.
  */
 import { useState, useMemo } from 'react'
+import { setAssignmentReview } from '../utils/adminSheet'
+import { flag } from '../utils/drillReview'
+import { showToast } from '../utils/toast'
 import {
   quizSummary, traineeRows, clipAnalysis, scoreByClipType,
 } from '../utils/drillAnalytics'
@@ -43,15 +46,36 @@ function Stat({ label, value, sub, color }) {
 }
 
 export default function DrillDashboardPage({
-  quiz, sessions, answersGiven, assignments, clips, onBack, onOpenTrainee,
+  quiz, sessions, answersGiven, assignments, clips, onBack, onOpenTrainee, changedBy,
 }) {
   const [tab, setTab] = useState('trainees')
   const [sortBy, setSortBy] = useState('hrCode')
   const [sortDir, setSortDir] = useState(1)
   const [statusFilter, setStatusFilter] = useState('all')
   const [openClip, setOpenClip] = useState(null)
+  // Review access (may this trainee see the answers?). `reviewSet` holds what was just changed from this screen, so the
+  // button reflects it at once; otherwise it reads the assignment row this page was opened with.
+  const [reviewSet, setReviewSet] = useState({})
+  const [reviewBusy, setReviewBusy] = useState('')
+  const nrm = c => String(c ?? '').replace(/\s+/g, '').trim().toUpperCase()
 
   const quizId = quiz.quiz_id
+  const reviewOf = hr => (hr in reviewSet) ? reviewSet[hr] === '1'
+    : flag((assignments || []).find(a => a.quiz_id === quizId && nrm(a.trainee_hr_code) === nrm(hr))?.review_allowed)
+  async function toggleReview(r) {
+    const next = reviewOf(r.hrCode) ? '0' : '1'
+    const ask = next === '1'
+      ? `Let ${r.name || r.hrCode} see the answers of their attempts on "${quiz.quiz_name}"?\n\nOnce they can read the answers they cannot start another attempt. To give them one, use Reassign.`
+      : `Stop ${r.name || r.hrCode} seeing the answers on "${quiz.quiz_name}"?`
+    if (!window.confirm(ask)) return
+    setReviewBusy(r.hrCode)
+    try {
+      await setAssignmentReview({ quizId, quizName: quiz.quiz_name, hrCode: r.hrCode, value: next, changedBy })
+      setReviewSet(m => ({ ...m, [r.hrCode]: next }))
+      showToast(next === '1' ? `${r.hrCode} can now see the answers. Retakes are closed for them.` : `${r.hrCode} can no longer see the answers.`)
+    } catch (e) { showToast(e?.message || String(e), 'error') }
+    finally { setReviewBusy('') }
+  }
   const summary = useMemo(() => quizSummary({ assignments, sessions, quizId }),
     [assignments, sessions, quizId])
   const rows = useMemo(() => traineeRows({ assignments, sessions, quizId }),
@@ -179,7 +203,12 @@ export default function DrillDashboardPage({
                       <td style={{ ...td, fontFamily:'JetBrains Mono,monospace',
                         color:'var(--t-3)' }}>{r.hrCode}</td>
                       <td style={td}>{r.name || '—'}</td>
-                      <td style={{ ...td, textAlign:'right' }}>{r.attempts || '—'}</td>
+                      <td style={{ ...td, textAlign:'right' }}>{r.attempts || '—'}
+                        {r.duplicateAttempts?.length > 0 && (
+                          <div data-testid="dup-attempt" title={`Attempt number ${r.duplicateAttempts.join(', ')} is used by more than one attempt of this trainee. This usually means the same retake was started in two windows at once. Scores and history are unchanged.`}
+                            style={{ fontSize:9, fontWeight:700, color:'#FF9F0A', marginTop:2, whiteSpace:'nowrap' }}>Duplicate attempt number</div>
+                        )}
+                      </td>
                       <td style={{ ...td, textAlign:'right', fontWeight:700,
                         color: r.latestScore == null ? 'var(--t-3)'
                           : r.passed ? '#30D158' : '#FF453A' }}>{pct(r.latestScore)}</td>
@@ -191,6 +220,13 @@ export default function DrillDashboardPage({
                       <td style={{ ...td, color:STATUS_COLOR[r.status], fontSize:10,
                         fontWeight:700 }}>{r.status}</td>
                       <td style={{ ...td, textAlign:'right' }}>
+                        {r.attempts > 0 && !r.passed && (
+                          <button data-testid="review-toggle" disabled={reviewBusy === r.hrCode}
+                            style={{ ...btn, padding:'3px 8px', fontSize:10, marginRight:6,
+                              color: reviewOf(r.hrCode) ? '#64D2FF' : undefined }}
+                            onClick={() => toggleReview(r)}>
+                            {reviewOf(r.hrCode) ? 'Remove review' : 'Allow review'}</button>
+                        )}
                         {r.attempts > 0 && (
                           <button style={{ ...btn, padding:'3px 8px', fontSize:10 }}
                             onClick={() => onOpenTrainee?.(r.hrCode)}>History</button>

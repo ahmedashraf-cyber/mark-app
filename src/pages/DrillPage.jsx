@@ -22,7 +22,9 @@ import {
 import { msToReadable } from '../utils/fieldSheetSync'
 import { createSession, loadSession, clearSession, toScoringInput } from '../utils/drillSession'
 import { scoreAttempt, toAnswerGivenRows } from '../utils/drillScoring'
-import { canStart, requestRetake, watchMyRequests } from '../utils/drillRetakes'
+import { canStartFresh, requestRetake, watchMyRequests } from '../utils/drillRetakes'
+import { reviewAccess, attemptsOf, approvedCount, startRefusal, REVIEW_LOCK_MESSAGE } from '../utils/drillReview'
+import { visibleAttempts, visibleAnswerRows, visibleAssignments } from '../utils/drillAccess'
 import DrillBuilderPage from './DrillBuilderPage'
 import DrillSessionPage from './DrillSessionPage'
 import DrillResultsPage from './DrillResultsPage'
@@ -43,6 +45,8 @@ import { quizIdsForTrainee } from '../utils/drillAssignments'
  *
  * Everything it previously closed over is now a prop.
  */
+const normHr = c => String(c ?? '').replace(/\s+/g, '').trim().toUpperCase()
+
 function DrillShell({ onBack, role, person, busyNav, onOpenTrainee, onNewQuiz, children }) {
   return (
     <div style={{ height:'100vh', display:'flex', flexDirection:'column',
@@ -88,6 +92,7 @@ export default function DrillPage({ onBack }) {
   const [person,  setPerson]  = useState(null)
   const [quizzes, setQuizzes] = useState([])
   const [sessions,setSessions]= useState([])
+  const [myAssignments, setMyAssignments] = useState([])   // quiz_assignments rows, for review_allowed
   const [loading, setLoading] = useState(true)
   const [error,   setError]   = useState('')
   const [view,    setView]    = useState('list')
@@ -142,8 +147,9 @@ export default function DrillPage({ onBack }) {
   const refresh = useCallback(async () => {
     if (!role || role === 'none') { setLoading(false); return }
     try {
-      const { [TAB_QUIZZES]: qs, [TAB_SESSIONS]: ss } =
-        await readTabs([TAB_QUIZZES, TAB_SESSIONS])
+      const { [TAB_QUIZZES]: qs, [TAB_SESSIONS]: ss, [TAB_ASSIGNMENTS]: asg } =
+        await readTabs([TAB_QUIZZES, TAB_SESSIONS, TAB_ASSIGNMENTS])
+      setMyAssignments(asg || [])
       if (role === 'creator') {
         setQuizzes(qs)
       } else {
@@ -153,7 +159,9 @@ export default function DrillPage({ onBack }) {
         setQuizzes(qs.filter(q =>
           q.status === QUIZ_STATUS.PUBLISHED && mineIds.has(q.quiz_id)))
       }
-      setSessions(ss)
+      // A trainee's screen holds only THEIR OWN attempts (a trainer's holds everyone's, as before). Everything built from
+      // `sessions` (the quiz list, Review, My progress) is therefore own-only by construction. See drillAccess.js.
+      setSessions(role === 'creator' ? ss : visibleAttempts(ss, { hrCode: person?.hrCode }))
     } catch (e) { setError(e.message) }
     finally { setLoading(false) }
   }, [role, person?.hrCode])
@@ -222,12 +230,17 @@ export default function DrillPage({ onBack }) {
   async function openWithData(view, opts = {}) {
     setBusyNav(view); setError('')
     try {
-      const d = await readTabs([TAB_CLIPS, TAB_ANSWERS, TAB_ANSWERS_GIVEN, TAB_ASSIGNMENTS])
+      // For a trainee the sessions are read FRESH here too, to know which answer rows are theirs: every other person's rows
+      // are dropped before they reach the screen (a trainer keeps everyone's, as before).
+      const trainer = role === 'creator'
+      const viewer = { hrCode: person?.hrCode, canSeeAll: trainer }
+      const d = await readTabs(trainer ? [TAB_CLIPS, TAB_ANSWERS, TAB_ANSWERS_GIVEN, TAB_ASSIGNMENTS]
+                                       : [TAB_CLIPS, TAB_ANSWERS, TAB_ANSWERS_GIVEN, TAB_ASSIGNMENTS, TAB_SESSIONS])
       setBundle({
         clips:        d[TAB_CLIPS] || [],
         answers:      d[TAB_ANSWERS] || [],
-        answersGiven: d[TAB_ANSWERS_GIVEN] || [],
-        assignments:  d[TAB_ASSIGNMENTS] || [],
+        answersGiven: visibleAnswerRows(d[TAB_ANSWERS_GIVEN], d[TAB_SESSIONS], viewer),
+        assignments:  visibleAssignments(d[TAB_ASSIGNMENTS], viewer),
       })
       setTarget({ view, ...opts })
     } catch (e) {
@@ -239,13 +252,13 @@ export default function DrillPage({ onBack }) {
     setBusy(quiz.quiz_id); setError('')
     try {
       if (!asTestRun) {
-        const gate = await canStart({ quiz, trainee: person, sessions })
+        // Read the quiz, the assignment, the attempts and the retake grants NOW, not from the list loaded earlier: a
+        // setting a trainer changed since (access granted, the quiz-wide flag, a reassign) must count the moment the
+        // trainee presses Start. Client-side only (see drillRetakes.canStartFresh).
+        const gate = await canStartFresh({ quizId: quiz.quiz_id, trainee: person })
         if (!gate.allowed) {
-          setError(
-            gate.reason === 'passed'   ? 'You have already passed this quiz.' :
-            gate.reason === 'pending'  ? 'Your retake request is waiting for a trainer.' :
-            gate.reason === 'rejected' ? `Retake refused: ${gate.rejectionReason}` :
-            'You need a trainer to approve a retake before trying again.')
+          setError(startRefusal(gate))
+          refresh()                  // the list may be showing a button this decision just took away
           return
         }
       }
@@ -262,10 +275,18 @@ export default function DrillPage({ onBack }) {
         quiz, clips: clipRows, trainee: person, attemptNumber: mine.length + 1,
       })
       session.is_test_run = asTestRun ? 1 : 0
-      setActive({ session, quiz, clipRows, keyRows: allKeys.filter(a => a.quiz_id === quiz.quiz_id) })
+      // fresh: this is a NEW attempt, so pressing Start on the intro screen checks the rule once more. A resumed attempt
+      // (the effect above) has no such flag: resuming is not a start, and a trainee mid-attempt may always finish.
+      setActive({ session, quiz, clipRows, keyRows: allKeys.filter(a => a.quiz_id === quiz.quiz_id), fresh: !asTestRun })
       setView('take')
     } catch (e) { setError(e.message) }
     finally { setBusy('') }
+  }
+
+  /** Called by the intro screen's Start button for a new attempt. Fails closed: if it cannot decide, it does not start. */
+  async function checkBeforeStart() {
+    const gate = await canStartFresh({ quizId: active.quiz.quiz_id, trainee: person, ignoreResultId: active.session.result_id })
+    return gate.allowed ? { ok: true } : { ok: false, message: startRefusal(gate) }
   }
 
   /** Score, persist, show. Firestore-less: the sheet is the store, queued on failure. */
@@ -275,8 +296,21 @@ export default function DrillPage({ onBack }) {
     const scored = scoreAttempt({ ...input, passMarkPercent: quiz.pass_mark_percent })
     const timeTakenMs = Number(finished.elapsed_ms || 0)
 
+    // Can this trainee review their answers now that this attempt is in? Decided with the attempt counted, on the quiz row
+    // and assignment already in hand. Only a hint for what the page offers; the lock is enforced when a start is attempted.
+    let canReview = false
+    if (String(finished.is_test_run) !== '1') {
+      const prior = attemptsOf(sessions, quiz.quiz_id, person?.hrCode)
+      const thisOne = { quiz_id: quiz.quiz_id, trainee_hr_code: person?.hrCode, passed: scored.passed ? 1 : 0,
+        score_percent: scored.scorePercent, is_test_run: 0 }
+      canReview = reviewAccess({
+        quiz, attempts: [...prior, thisOne], inProgress: false,
+        assignment: myAssignments.find(a => a.quiz_id === quiz.quiz_id && normHr(a.trainee_hr_code) === normHr(person?.hrCode)),
+        approved: approvedCount(myReqs.filter(r => r.quiz_id === quiz.quiz_id)),
+      }).access
+    }
     setResult({ ...scored, attemptNumber: finished.attempt_number,
-                status: finished.status, timeTakenMs })
+                status: finished.status, timeTakenMs, canReview })
     setView('results')
     clearSession()
 
@@ -351,10 +385,11 @@ export default function DrillPage({ onBack }) {
     const back = () => { setTarget(null) }
     if (target.view === 'review') return (
       <DrillReviewPage quiz={target.quiz} sessions={sessions}
+        viewer={{ hrCode: person?.hrCode, canSeeAll: role === 'creator' }}
         answersGiven={bundle.answersGiven} clips={bundle.clips} onBack={back}/>
     )
     if (target.view === 'dashboard') return (
-      <DrillDashboardPage quiz={target.quiz} sessions={sessions}
+      <DrillDashboardPage quiz={target.quiz} sessions={sessions} changedBy={person?.email}
         answersGiven={bundle.answersGiven} assignments={bundle.assignments}
         clips={bundle.clips} onBack={back}
         onOpenTrainee={hr => setTarget({ view:'trainee', hrCode: hr })}/>
@@ -375,6 +410,7 @@ export default function DrillPage({ onBack }) {
 
   if (view === 'take' && active) return (
     <DrillSessionPage session={active.session} clipRows={active.clipRows}
+      onBeforeStart={active.fresh ? checkBeforeStart : undefined}
       onFinish={handleFinish}
       onAbandon={() => { clearSession(); setActive(null); setView('list') }}/>
   )
@@ -382,7 +418,8 @@ export default function DrillPage({ onBack }) {
   if (view === 'results' && result) return (
     <DrillResultsPage result={result} quiz={active?.quiz} clipRows={active?.clipRows || []}
       onDone={() => { setResult(null); setActive(null); setView('list') }}
-      onRequestRetake={handleRequestRetake}/>
+      onRequestRetake={handleRequestRetake}
+      canReview={!!result.canReview}/>
   )
 
   if (view === 'request') return (
@@ -428,6 +465,8 @@ export default function DrillPage({ onBack }) {
     </DrillShell>
   )
 
+  // an attempt begun on this device and not finished (read once per render; it has no side effects)
+  const localFound = person?.hrCode ? loadSession() : null
   const pendingReq = myReqs.find(r => r.status === 'pending')
   const rejected   = myReqs.find(r => r.status === 'rejected')
   const approved   = myReqs.find(r => r.status === 'approved')
@@ -484,6 +523,15 @@ export default function DrillPage({ onBack }) {
             // true when access came from the mark being lowered, so the UI can
             // say so rather than implying they passed on the day
             const passedByLoweredMark = !mine.some(s => String(s.passed) === '1') && hasPassed
+            // Seeing the answers (the quiz-wide setting, or this trainee's own) closes the retake. Read from the page's
+            // loaded copy for DISPLAY; the real check is canStartFresh, made when Start is pressed.
+            const review = role === 'trainee' ? reviewAccess({
+              quiz: q, attempts: mine,
+              assignment: myAssignments.find(a => a.quiz_id === q.quiz_id && normHr(a.trainee_hr_code) === normHr(person?.hrCode)),
+              approved: approvedCount(myReqs.filter(r => r.quiz_id === q.quiz_id)),
+              inProgress: !!(localFound?.session && localFound.session.quiz_id === q.quiz_id),
+            }) : null
+            const locked = !!review && !hasPassed && review.access
             return (
               <div key={q.quiz_id} className="card" style={{ padding:16,
                 display:'flex', alignItems:'center', gap:14 }}>
@@ -496,6 +544,11 @@ export default function DrillPage({ onBack }) {
                     pass {q.pass_mark_percent || '—'}%
                     {mine.length > 0 && ` · ${mine.length} attempt${mine.length === 1 ? '' : 's'}, best ${best}%`}
                   </div>
+                  {locked && (
+                    <div data-testid="review-lock" style={{ fontSize:11, color:'var(--t-3)', marginTop:6 }}>
+                      {REVIEW_LOCK_MESSAGE}
+                    </div>
+                  )}
                 </div>
                 {hasPassed && (
                   <span style={{ fontSize:9, fontWeight:800, letterSpacing:1, padding:'3px 8px',
@@ -511,8 +564,8 @@ export default function DrillPage({ onBack }) {
                 )}
                 {/* Review is gated on PASSING — a failing trainee must not see
                     the answers or the retake is meaningless. */}
-                {role !== 'creator' && hasPassed && (
-                  <button style={{ padding:'7px 13px', fontSize:12, background:'transparent',
+                {role !== 'creator' && (hasPassed || locked) && (
+                  <button data-testid="review-btn" style={{ padding:'7px 13px', fontSize:12, background:'transparent',
                     border:'1px solid var(--b-1)', borderRadius:7, color:'var(--t-2)',
                     cursor:'pointer' }}
                     disabled={busyNav === 'review'}
@@ -557,7 +610,7 @@ export default function DrillPage({ onBack }) {
                     </button>
                   </>
                 )}
-                {q.status === QUIZ_STATUS.PUBLISHED && !hasPassed && (
+                {q.status === QUIZ_STATUS.PUBLISHED && !hasPassed && !locked && (
                   <button className="btn-orange" style={{ padding:'7px 14px', fontSize:12 }}
                     disabled={busy === q.quiz_id}
                     onClick={() => startQuiz(q, role === 'creator')}>

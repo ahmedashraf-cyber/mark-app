@@ -35,6 +35,24 @@ export function mean(list) {
 }
 
 /**
+ * Attempt numbers used by MORE THAN ONE attempt of the same trainee on the same quiz.
+ *
+ * A detector, nothing more: it changes no score, no count and no history. Two attempts normally never share a number.
+ * They can when one trainee starts the last allowed attempt in two MARK windows at once (the start check is made in
+ * the app, and nothing records "started" until an attempt finishes), or when a queued write is replayed.
+ * Blank or non-numeric attempt numbers are ignored: an old row with no number is "unknown", not a duplicate.
+ * → ascending, e.g. [2]; [] when there are none.
+ */
+export function duplicateAttemptNumbers(attempts) {
+  const seen = new Map()
+  ;(attempts || []).forEach(s => {
+    const n = num(s.attempt_number)
+    if (n != null && String(s.attempt_number).trim() !== '') seen.set(n, (seen.get(n) || 0) + 1)
+  })
+  return [...seen].filter(([, c]) => c > 1).map(([n]) => n).sort((a, b) => a - b)
+}
+
+/**
  * One row per assigned trainee for a quiz.
  * Assignments drive the list, not sessions — someone assigned who never
  * started must still appear, as "not started".
@@ -77,6 +95,8 @@ export function traineeRows({ assignments, sessions, quizId }) {
       firstAttemptPassed: att.length ? isTrue(att[0].passed) : null,
       avgScore: mean(scores),
       sessions: att,
+      // see duplicateAttemptNumbers: a flag for the dashboard, never used in a score
+      duplicateAttempts: duplicateAttemptNumbers(att),
     }
   }).sort((a, b) => a.hrCode.localeCompare(b.hrCode))
 }

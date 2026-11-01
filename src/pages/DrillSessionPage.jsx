@@ -74,12 +74,15 @@ function ProgressDial({ total, done, remainingMs: rem, limitMs, warning }) {
 }
 
 export default function DrillSessionPage({
-  session: initial, clipRows, onFinish, onAbandon,
+  session: initial, clipRows, onFinish, onAbandon, onBeforeStart,
 }) {
   const [session, setSession] = useState(initial)
   const [urls,    setUrls]    = useState({})   // clip_index -> proxy url
   const [ready,   setReady]   = useState(false)
   const [started, setStarted] = useState(false)
+  // a NEW attempt is checked once more when Start is pressed (a setting may have changed while the clip buffered)
+  const [checking, setChecking] = useState(false)
+  const [startErr, setStartErr] = useState('')
   const [warned,  setWarned]  = useState(false)
   const tickRef     = useRef(null)
   const clipStartRef = useRef(null)
@@ -227,10 +230,28 @@ export default function DrillSessionPage({
           If a clip has no event, leave it empty and move on — that is an answer.<br/>
           You have 24 hours to finish if you close MARK part way.
         </div>
+        {startErr && (
+          <div data-testid="start-refused" style={{ fontSize:12, color:'#FF453A', lineHeight:1.6, marginBottom:12,
+            background:'rgba(255,69,58,0.08)', border:'1px solid rgba(255,69,58,0.3)', borderRadius:8, padding:'10px 12px' }}>
+            {startErr}
+          </div>
+        )}
         <button className="btn-orange" style={{ width:'100%', padding:'12px 0', fontSize:13 }}
-          disabled={!ready}
-          onClick={() => { setStarted(true); clipStartRef.current = Date.now() }}>
-          {ready ? 'Start' : 'Buffering the first clip…'}
+          disabled={!ready || checking}
+          onClick={async () => {
+            if (onBeforeStart) {
+              setChecking(true); setStartErr('')
+              try {
+                const r = await onBeforeStart()
+                if (!r.ok) { setStartErr(r.message); return }
+              } catch (e) {
+                // could not decide: do not start (a lock that fails open is no lock)
+                setStartErr(`Couldn't check whether you can start: ${e?.message || e}`); return
+              } finally { setChecking(false) }
+            }
+            setStarted(true); clipStartRef.current = Date.now()
+          }}>
+          {checking ? 'Checking…' : ready ? 'Start' : 'Buffering the first clip…'}
         </button>
         <button onClick={onAbandon} style={{ background:'none', border:'none',
           color:'var(--t-3)', fontSize:11, cursor:'pointer', marginTop:12 }}>

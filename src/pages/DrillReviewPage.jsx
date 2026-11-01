@@ -1,10 +1,15 @@
 /**
  * DrillReviewPage.jsx — a trainee reviewing their own attempts
  * ============================================================================
- * DRILL only. Reachable ONLY once the trainee has passed the quiz — before
+ * DRILL only. Reachable ONLY once the trainee has review access (a pass, or the review-access settings) — before
  * that the answers stay hidden, or a failing trainee could read the key and
- * ace the retake. Once passed, every attempt is reviewable including the
- * failed ones, which is where the learning is.
+ * ace the retake. Once allowed, every attempt of THAT TRAINEE is reviewable including the
+ * failed ones, which is where the learning.
+ *
+ * OWN ATTEMPTS ONLY. `viewer` = { hrCode, canSeeAll }: a trainee sees and can open only attempts whose trainee HR-code is
+ * theirs; a trainer (canSeeAll) sees everyone's. This used to filter by quiz alone, so a trainee saw every collector's
+ * attempts, could open them, and could download their CSV (with their HR-code). It is checked here AND where the data is
+ * read (DrillPage), see drillAccess.js. `openResultId` opens a given attempt, if the viewer may.
  *
  * Playback is a plain <video controls loop> rather than ClipTagger: review
  * needs watching, not tagging, and rendering a tagger the trainee must not
@@ -14,6 +19,7 @@ import { useState, useEffect, useMemo } from 'react'
 import { clipUrl as driveClipUrl } from '../utils/drillDrive'
 import { DRILL_ATTR_COLUMNS } from '../config/drillConfig'
 import { attemptCsv, download } from '../utils/drillExport'
+import { canOpenAttempt, REVIEW_REFUSAL } from '../utils/drillAccess'
 
 const V = {
   correct:          { c:'#30D158', label:'Correct' },
@@ -37,17 +43,24 @@ function Attrs({ row, prefix }) {
   )
 }
 
-export default function DrillReviewPage({ quiz, sessions, answersGiven, clips, onBack }) {
+export default function DrillReviewPage({ quiz, sessions, answersGiven, clips, onBack, viewer, openResultId }) {
   // newest attempt first in the picker, but numbered as the trainee knows them
-  const attempts = useMemo(() => (sessions || [])
-    .filter(s => s.quiz_id === quiz.quiz_id && String(s.is_test_run) !== '1')
-    .sort((a, b) => Number(b.attempt_number || 0) - Number(a.attempt_number || 0)), [sessions, quiz])
+  const forQuiz = useMemo(() => (sessions || [])
+    .filter(s => s.quiz_id === quiz.quiz_id && String(s.is_test_run) !== '1'), [sessions, quiz])
+  // only the attempts this viewer may open: nobody else's card is ever drawn
+  const attempts = useMemo(() => forQuiz
+    .filter(s => canOpenAttempt(s, viewer))
+    .sort((a, b) => Number(b.attempt_number || 0) - Number(a.attempt_number || 0)), [forQuiz, viewer?.hrCode, viewer?.canSeeAll])
+  // asked to open a specific attempt (by id) that this viewer may not open, or that does not exist for them: refuse
+  const refused = !!openResultId && !attempts.some(s => s.result_id === openResultId)
 
-  const [resultId, setResultId] = useState(attempts[0]?.result_id || '')
+  const [resultId, setResultId] = useState((openResultId && !refused ? openResultId : attempts[0]?.result_id) || '')
   const [clipPos,  setClipPos]  = useState(0)
   const [url,      setUrl]      = useState('')
 
-  const session = attempts.find(s => s.result_id === resultId) || attempts[0]
+  // the attempt shown is found ONLY among the allowed ones, and is checked once more before any answer is built from it
+  const found = attempts.find(s => s.result_id === resultId) || attempts[0]
+  const session = canOpenAttempt(found, viewer) ? found : undefined
 
   const clipRows = useMemo(() => (clips || [])
     .filter(c => c.quiz_id === quiz.quiz_id)
@@ -74,6 +87,14 @@ export default function DrillReviewPage({ quiz, sessions, answersGiven, clips, o
   }, [clip?.drive_file_id])
 
   useEffect(() => { setClipPos(0) }, [resultId])
+
+  if (refused) return (
+    <Shell quiz={quiz} onBack={onBack}>
+      <div data-testid="review-refused" className="card" style={{ padding:24, fontSize:13, color:'#FF453A' }}>
+        {REVIEW_REFUSAL}
+      </div>
+    </Shell>
+  )
 
   if (!attempts.length) return (
     <Shell quiz={quiz} onBack={onBack}>
