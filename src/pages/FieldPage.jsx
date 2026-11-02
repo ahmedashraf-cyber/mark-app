@@ -17,8 +17,11 @@
 import { useState, useMemo, useEffect, useRef, useCallback } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { db } from '../firebase/config'
-import { collection, updateDoc, doc, setDoc,
-         getDocs, getDocsFromServer, query, where, serverTimestamp, deleteDoc, writeBatch } from 'firebase/firestore'
+import { collection, doc, getDocs, getDocsFromServer, query, where, serverTimestamp } from 'firebase/firestore'
+// Every Firestore WRITE Tag makes goes through the read-only guard (view mode of a compared half). Same names, same arguments:
+// setDoc, updateDoc, deleteDoc and writeBatch refuse with a ReadOnlyError while a compared half is open, whoever calls them.
+import { setDoc, updateDoc, deleteDoc, writeBatch } from '../utils/guardedFirestore'
+import { setWriteReadOnly, isWriteReadOnly, ReadOnlyError } from '../utils/writeGuard'
 import { useAuth } from '../hooks/useAuth.jsx'
 import { runChain, teamDecision, receptionAllowed, validTypes, inheritedReceptionTeam } from '../utils/phaseChain'
 import { findAtTime, pastCountAt, EVENT_HIGHLIGHT_TOLERANCE_S } from '../utils/eventHighlight'
@@ -28,7 +31,13 @@ import { createSource } from '../utils/comparisonSource'
 import ErrorTimeline from '../components/ErrorTimeline'
 import EventsSidebar from '../components/EventsSidebar'
 import TaggedEventsList from '../components/TaggedEventsList'
-import { downloadFieldCsv, syncSessionToSheet, findOwnSavedHalf } from '../utils/fieldSheetSync'
+import { downloadFieldCsv, syncSessionToSheet, findOwnHalfIn } from '../utils/fieldSheetSync'
+import { findSavedHalves, describeSavedHalves, readComparedInfo, readScoreRuns, isComparedIn, readFingerprint, saveEditedHalf, SavedHalfError } from '../utils/savedHalfSheet'
+import { loadSavedHalfData, fetchTotalEvents } from '../utils/savedHalfStore'
+import { buildReopenedSession, videoMismatch, describeHalfLine, makeSaveToken, PART_LABEL } from '../utils/savedHalf'
+import { rebuildFromEvents } from '../utils/tagRebuild'
+import { sameHr } from '../utils/drillAccess'
+import { ALLOW_NEW_SESSION_AFTER_COMPARE, COMPARE_POLL_MS, COMPARE_POLL_JITTER_MS, MSG } from '../config/savedHalfConfig'
 import { matchSummaryLine } from '../utils/tagMatchLine'
 import { showToast } from '../utils/toast'
 import { FIELD_LS_KEY, FIELD_SHEET_ID, validateMatchId } from '../config/fieldConfig'
@@ -49,6 +58,12 @@ function hashPath(p) {
 }
 function loadLocalSessions() { try { return JSON.parse(localStorage.getItem(FIELD_LS_KEY)||'[]') } catch { return [] } }
 function saveLocalSession(s) {
+  if (isWriteReadOnly()) return         // view mode writes nothing, not even to this PC
+  const all = loadLocalSessions().filter(x => x.sessionId !== s.sessionId)
+  localStorage.setItem(FIELD_LS_KEY, JSON.stringify([s,...all].slice(0,50)))
+}
+// The one local write allowed in view mode: taking a half that turned out to be LOCKED out of the "pending upload" state.
+function saveLocalSessionForce(s) {
   const all = loadLocalSessions().filter(x => x.sessionId !== s.sessionId)
   localStorage.setItem(FIELD_LS_KEY, JSON.stringify([s,...all].slice(0,50)))
 }
@@ -56,7 +71,8 @@ function clearLocalSession(sessionId) {
   const all = loadLocalSessions().filter(s => s.sessionId !== sessionId)
   localStorage.setItem(FIELD_LS_KEY, JSON.stringify(all))
 }
-function findSessionByPath(p) { return loadLocalSessions().find(s => s.videoPath===p && s.status!=='completed')||null }
+// A REOPENED half is never resumed just because the same video file is loaded: starting a NEW session on that file must stay possible.
+function findSessionByPath(p) { return loadLocalSessions().find(s => s.videoPath===p && s.status!=='completed' && !s.reopened)||null }
 function basename(p) { return p ? (p.split(/[\\/]/).pop()||p) : 'Untitled' }
 
 // ─── Capture state machine ────────────────────────────────────────────────────
@@ -152,11 +168,11 @@ async function lookupModelAnswer(matchId, half) {
  * The End stoppage entry in the OFFENSE panel — directly under Stoppage, click only (no hotkey).
  * Enabled only while a Stoppage is open; otherwise greyed, and it says why.
  */
-function EndStoppageItem({ open, onClick }) {
+function EndStoppageItem({ open, onClick, viewOnly = false }) {
   return (
-    <div data-testid="end-stoppage" data-open={open ? '1' : '0'} aria-disabled={!open}
+    <div data-testid="end-stoppage" data-open={open ? '1' : '0'} aria-disabled={!open} data-disabled={viewOnly ? '1' : undefined}
       onClick={open ? onClick : undefined}
-      title={open ? 'Close the open stoppage' : 'No open stoppage'}
+      title={viewOnly ? MSG.VIEW_ONLY_TIP : open ? 'Close the open stoppage' : 'No open stoppage'}
       className={`event-card mouse-only`}
       style={{ cursor: open ? 'pointer' : 'not-allowed', opacity: open ? 1 : 0.4,
         borderLeft: open ? '2px solid var(--p2)' : '2px solid transparent' }}>
@@ -170,7 +186,7 @@ function EndStoppageItem({ open, onClick }) {
   )
 }
 
-export default function FieldPage({ session: initialSession, onDone, onBack }) {
+export default function FieldPage({ session: initialSession, onDone, onBack, onOpenMyHalves }) {
   const { profile, role, caps, roleInfo } = useAuth()
   // Gates the model-answer checkbox. Operators only: a model answer becomes the
   // reference every collector is scored against, so a collector must not be
@@ -214,7 +230,17 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
   // (unverified = the sheet could not be read, so only this PC's own list was checked; it never blocks.)
   // A 'found' needs one deliberate click (dupAck) before Continue works.
   const [dupCheck, setDupCheck] = useState({ state:'idle' })
-  const [dupAck, setDupAck] = useState(false)
+  const [dupAck, setDupAck] = useState(false)          // "Start a new one from zero" was confirmed
+  const [savedPick, setSavedPick] = useState('')        // which saved session the collector picked from the list
+  const [newConfirm, setNewConfirm] = useState(false)   // the "second session" confirmation is showing
+  const [opening, setOpening] = useState('')            // session id being opened
+  const [openErr, setOpenErr] = useState('')
+  // A saved half reopened in this window. null = an ordinary new session.
+  // { sessionId, readOnly, comparedAtIso, switched, fingerprint, savedVideo:{name,durationMs}, unchecked }
+  const [reopen, setReopen] = useState(null)
+  const reopenRef = useRef(null)
+  const readOnlyRef = useRef(false)                     // the ONE flag every write path checks (mirrored in writeGuard.js)
+  const [videoWarn, setVideoWarn] = useState('')
 
   // Runs once both Match ID and Part are set. Debounced so typing a match ID
   // doesn't query the sheet on every keystroke; `live` discards an answer for
@@ -241,15 +267,28 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
   // Same moment as the model-answer check: once Match ID and Part are both set. Changing either one withdraws a
   // previous acknowledgement, so the click always refers to what is on screen now.
   useEffect(() => {
-    setDupAck(false)
+    setDupAck(false); setNewConfirm(false); setOpenErr('')
     if (methodConfirmed) return
     const id = startMatchId.trim(), hr = String(roleInfo?.code || '').trim()
     if (!id || !matchPart || !hr) { setDupCheck({ state:'idle' }); return }
     let live = true
     setDupCheck({ state:'checking' })
     const t = setTimeout(async () => {
-      const r = await findOwnSavedHalf({ matchId:id, half:partToHalf(matchPart), hrCode:hr, local:loadLocalSessions() })
-      if (live) setDupCheck(r.found ? { state:'found', sessionId:r.sessionId } : { state: r.verified ? 'none' : 'unverified' })
+      const half = partToHalf(matchPart)
+      let halves = [], sheetOk = true
+      try { halves = await findSavedHalves({ matchId:id, half, hrCode:hr }) }
+      catch (e) { sheetOk = false; console.warn('[MARK Field] saved-half check (sheet unreadable):', e?.message || e) }
+      let info = null, fsCounts = new Map()
+      if (halves.length) {
+        try { info = await describeSavedHalves(halves) } catch (e) { console.warn('[MARK Field] saved-half details:', e?.message || e) }
+        fsCounts = await fetchTotalEvents(halves.map(h => h.sessionId))
+      }
+      // a half saved on this PC that has not reached the sheet yet cannot be reopened from the sheet: it keeps the old warning
+      const local = findOwnHalfIn({ rows: [], local: loadLocalSessions(), matchId:id, half, hrCode:hr })
+      if (!live) return
+      if (halves.length) { setDupCheck({ state:'found', halves, info, fsCounts }); setSavedPick(p => halves.some(h => h.sessionId === p) ? p : halves[0].sessionId) }
+      else if (local) setDupCheck({ state:'found', legacy:true, sessionId:local.sessionId })
+      else setDupCheck({ state: sheetOk ? 'none' : 'unverified' })
     }, 600)
     return () => { live = false; clearTimeout(t) }
   }, [startMatchId, matchPart, methodConfirmed])
@@ -422,6 +461,13 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
 
   // ── Session creation ───────────────────────────────────────────────────────
   async function ensureSession(path) {
+    if (reopenRef.current) {
+      // A reopened half already has its session (same id, same sheet row). Loading its video must never create another one.
+      const cur = sessionRef.current || session
+      const upd = { ...cur, videoPath: path }
+      sessionRef.current = upd; setSession(upd)
+      return upd
+    }
     const existing = findSessionByPath(path)
     if (existing) { setSession(existing); return existing }
     const sessionId = `field_${profile.uid}_${hashPath(path)}_${Date.now()}`
@@ -442,6 +488,89 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
     catch(e) { console.warn('[MARK Field] session create:',e) }
     saveLocalSession(s); setSession(s); return s
   }
+
+  // ── Saved halves: reopening one, the lock, and view mode ───────────────────
+  // The flag is applied SYNCHRONOUSLY (writeGuard first, then React) so nothing can write from the moment a comparison is
+  // seen. The effect is only a backstop.
+  function applyReadOnly(v) { readOnlyRef.current = v; setWriteReadOnly(v) }
+  useEffect(() => { applyReadOnly(!!reopen?.readOnly) }, [reopen?.readOnly])
+  useEffect(() => () => setWriteReadOnly(false), [])        // leaving Tag never leaves the flag on for the next screen
+  reopenRef.current = reopen
+  const readOnly = !!reopen?.readOnly
+
+  /** Switch to view mode now: stop any capture, close the dialogs, and keep what was typed (it is already in Firestore). */
+  function enterViewMode({ comparedAtIso = '', switched = false, note = '' } = {}) {
+    applyReadOnly(true)
+    if (editingRef.current || captureStep !== 'idle') abandonCapture()
+    setShowDoneModal(false); setShowClearModal(false)
+    setReopen(r => r ? { ...r, readOnly: true, comparedAtIso: comparedAtIso || r.comparedAtIso || '', switched: switched || r.switched, note: note || r.note || '' } : r)
+  }
+  const enterViewRef = useRef(null); enterViewRef.current = enterViewMode
+
+  /**
+   * Open one of this collector's saved halves. The events come from FIRESTORE (the sheet has lost the goal-keeper body state),
+   * the lock is read FRESH from the scores tab, and everything a live session builds one key at a time is rebuilt from the
+   * events: the event_seq counter, the open pairs, the possession. Nothing is created: same session id, same sheet row.
+   */
+  async function openSavedHalf(h) {
+    const hr = String(roleInfo?.code || '').trim()
+    setOpenErr(''); setOpening(h.sessionId)
+    try {
+      if (!sameHr(h.hrCode, hr)) throw new SavedHalfError('forbidden', 'This half belongs to another collector.')
+      const fresh = (await findSavedHalves({ matchId: h.matchId, half: h.half, hrCode: hr })).find(x => x.sessionId === h.sessionId)
+      if (!fresh) throw new SavedHalfError('missing', 'This half is no longer in the sheet.')
+      const fingerprint = await readFingerprint(h.sessionId)
+      let info = { compared: false, comparedAtIso: '' }, unchecked = ''
+      try { info = await readComparedInfo(h.sessionId) } catch (e) { unchecked = e?.message || String(e) }   // may work locally; Save will refuse
+      const { fsDoc, events: saved } = await loadSavedHalfData(h.sessionId, { hrCode: hr })
+      const sess = buildReopenedSession({ half: fresh, fsDoc, profile, fingerprint, comparedAtIso: info.comparedAtIso })
+      sess.totalEvents = saved.length
+      const rb = rebuildFromEvents(saved)
+      applyReadOnly(info.compared)                                  // before anything is shown
+      eventSeqRef.current = rb.nextSeq; openPairsRef.current = rb.openPairs
+      setOpenStates(rb.openStates); possessionRef.current = rb.possession; setPossession(rb.possession)
+      eventsRef.current = saved; setEvents(saved)
+      sessionRef.current = sess; collStartRef.current = null
+      setStartMatchId(String(fresh.matchId)); setMatchPart(String(sess.part)); setCollectionMethod(sess.collectionMethod)
+      setSaveMatchId(String(fresh.matchId)); setSaveHalf(fresh.half); setSaveHrCode(hr)
+      setSaveHomeTeam(sess.homeTeamName || ''); setSaveAwayTeam(sess.awayTeamName || ''); setIsModelAnswer(false)
+      const r = { sessionId: h.sessionId, readOnly: info.compared, comparedAtIso: info.comparedAtIso, switched: false, fingerprint,
+        savedVideo: { name: fresh.videoName, durationMs: fresh.videoDurationMs }, unchecked, duplicateRows: fresh.duplicateRows }
+      reopenRef.current = r; setReopen(r)
+      setSession(sess); setMethodConfirmed(true)
+    } catch (e) { setOpenErr(e?.message || String(e)) }
+    finally { setOpening('') }
+  }
+
+  // While a saved half is open for EDITING: look for a comparison every COMPARE_POLL_MS (+ jitter), reading only the
+  // collector_session_id column. A comparison switches the screen to view mode at once. A failed poll never changes the mode:
+  // only a Save refuses (the check made at save time is the authoritative one).
+  useEffect(() => {
+    if (!reopen || reopen.readOnly) return
+    let live = true, timer = 0
+    const arm = () => {
+      timer = setTimeout(async () => {
+        try {
+          const runs = await readScoreRuns()
+          if (live && isComparedIn(runs, reopen.sessionId)) {
+            let at = ''; try { at = (await readComparedInfo(reopen.sessionId)).comparedAtIso } catch { /* the banner just omits the date */ }
+            if (live) { enterViewRef.current({ switched: true, comparedAtIso: at }); return }
+          }
+        } catch { /* ignore: a poll that fails changes nothing */ }
+        if (live) arm()
+      }, COMPARE_POLL_MS + Math.random() * COMPARE_POLL_JITTER_MS)
+    }
+    arm()
+    return () => { live = false; clearTimeout(timer) }
+  }, [reopen?.sessionId, reopen?.readOnly])
+
+  // The loaded video against the one this half was collected on: a WARNING, never a block.
+  useEffect(() => {
+    if (!reopen) { setVideoWarn(''); return }
+    const m = videoMismatch({ savedName: reopen.savedVideo?.name, savedDurationMs: reopen.savedVideo?.durationMs,
+      loadedPath: videoPath, loadedDurationMs: duration > 0 ? Math.round(duration * 1000) : null })
+    setVideoWarn(m.differs ? m.message : '')
+  }, [reopen?.sessionId, videoPath, duration])
 
   // ── Video loading ──────────────────────────────────────────────────────────
   async function handleVideoFile(forcedPath) {
@@ -577,6 +706,7 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
    * so an event cannot sit in the bar looking saved when it is not.
    */
   function writeEvent(ev, { token = 0, replacing = null } = {}) {
+    if (readOnlyRef.current) return Promise.resolve()
     const p = setDoc(doc(db, EVENTS_COL, ev.id), { ...stripLocal(ev), createdAt: serverTimestamp() })
     pendingWritesRef.current.set(ev.id, p)
     let t2 = 0, t10 = 0
@@ -602,6 +732,7 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
     }).finally(() => { if (pendingWritesRef.current.get(ev.id) === p) pendingWritesRef.current.delete(ev.id) })
   }
   function retryUnsaved() {
+    if (readOnlyRef.current) return
     eventsRef.current.filter(e => e._status === 'failed' || e._status === 'unconfirmed')
       .forEach(e => { markStatus(e.id, 'pending'); writeEvent(e) })
   }
@@ -666,6 +797,7 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
   // ── Start capture ──────────────────────────────────────────────────────────
   // opts.editing is the saved event being re-tagged (Edit).
   function startCapture(eventDef, vt, overrideAsClose, opts = {}) {
+    if (readOnlyRef.current) return          // view mode: no key, button or edit can begin an event
     if (!session) return
     // One commit at a time. A key pressed while the previous event is still being
     // saved is refused — visibly — rather than queued or doubled.
@@ -1004,6 +1136,7 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
    * kept pressing. That is the seven identical Passes.
    */
   async function commitEvent(eventDef, vt, type, groups, typeSource, variant, team, teamSrc, forceClose=false) {
+    if (readOnlyRef.current) return
     // Forced closes (Half end) are part of one user action and run in sequence;
     // everything else takes the lock, and a second attempt is refused.
     let token = 0
@@ -1206,7 +1339,7 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
    * (the original reappears) where it used to lose a saved event.
    */
   async function editEvent(ev) {
-    if (!ev) return
+    if (!ev || readOnlyRef.current) return
     if (commitLockRef.current) { flashBusy(); return }
     if (captureStep !== 'idle') {
       console.warn('[MARK Field] edit ignored — capture in progress:', captureStep)
@@ -1242,6 +1375,7 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
   }
 
   async function deleteEvent(ev) {
+    if (readOnlyRef.current) return
     try {
       // A write that has not been confirmed would land AFTER the delete and bring
       // the event back. Wait for it — but not forever when offline: then it is
@@ -1265,7 +1399,7 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
   // start. It keeps the video, match ID, part and method, and never touches
   // anything already written to the Sheet (no Sheet call exists here).
   async function clearAllEvents() {
-    if (clearing || commitLockRef.current) return
+    if (readOnlyRef.current || clearing || commitLockRef.current) return
     setClearing(true); setClearError('')
     const token = ++lockTokenRef.current
     commitLockRef.current = true; lockOwnerRef.current = token
@@ -1447,6 +1581,7 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
       if (key==='+'||key==='=') { e.preventDefault(); changeSpeed(p=>Math.min(SPEED_MAX,Math.round((p+SPEED_STEP)*100)/100)); return }
       if (key==='-'||key==='_') { e.preventDefault(); changeSpeed(p=>Math.max(SPEED_MIN,Math.round((p-SPEED_STEP)*100)/100)); return }
       if (key==='Escape') { setShowDoneModal(false); return }
+      if (readOnlyRef.current) return        // view mode: playback keys above, nothing below (no event hotkeys, no team prompts)
 
       // Check if this key closes an open state
       const closePair = getCloseAction(openStates, upper)||getCloseAction(openStates, key)
@@ -1550,11 +1685,12 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
   // memoised, so this node is rebuilt only when the stoppage opens or closes.
   const stoppageOpen = !!openStates.stoppage
   const endStoppageSlot = useMemo(() => ({
-    stoppage: <EndStoppageItem key="end_stoppage" open={stoppageOpen} onClick={onEndStoppage}/>,
-  }), [stoppageOpen, onEndStoppage])
+    stoppage: <EndStoppageItem key="end_stoppage" open={stoppageOpen && !readOnly} viewOnly={readOnly} onClick={onEndStoppage}/>,
+  }), [stoppageOpen, onEndStoppage, readOnly])
 
   // End stoppage: closes the open Stoppage (pair_id → duration_ms); team inherited from it.
   function clickEndStoppage() {
+    if (readOnlyRef.current) return
     if (!videoLoaded || captureStep !== 'idle') return
     if (!openStatesRef.current.stoppage) { flashMsg('No open stoppage'); return }
     const def = EVENT_BY_ID['end_stoppage']
@@ -1564,7 +1700,7 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
   // Mouse events from sidebar
   const mouseRef=useRef(null)
   mouseRef.current=(ev)=>{
-    if (!videoLoaded||captureStep!=='idle') return
+    if (readOnlyRef.current || !videoLoaded||captureStep!=='idle') return
     const def=FIELD_EVENTS.find(e=>e.id===ev.id)
     if (def) startCapture(def, getVideoTime())
   }
@@ -1572,6 +1708,7 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
 
   // ── Save to Sheet ──────────────────────────────────────────────────────────
   async function handleSaveToSheet() {
+    if (readOnlyRef.current) return          // a compared half is never saved from here
     // Match ID, Half and HR-code are no longer typed here. They come from the
     // start screen and the sign-in; the fallbacks guard against the save
     // fields having been cleared, since there is no longer an input to refill
@@ -1641,30 +1778,54 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
       })
     } catch(e) { console.warn('[MARK Field] Firestore update:', e) }
 
+    // A reopened half carries what its retry needs: the version that was opened (the two-windows fingerprint) and the save's
+    // token, derived from the content, so a retry after a lost answer is recognised and any further edit is a new save.
+    if (reopenRef.current) completed.reopened = { ...(session.reopened || {}), fingerprint: reopenRef.current.fingerprint,
+      saveToken: makeSaveToken(session.sessionId, reopenRef.current.fingerprint, events) }
     // Save locally as pending — so crash before Sheet write still preserves data
     saveLocalSession(completed)
     setSession(completed)
 
     // Attempt Sheet write
     try {
-      const result = await syncSessionToSheet(completed, events)
+      // A reopened half is saved OVER its earlier version in one atomic write, with the lock re-checked right before.
+      const reopened = reopenRef.current
+      const result = reopened
+        ? await saveEditedHalf({ session: completed, events, opened: { fingerprint: reopened.fingerprint }, editorEmail: profile?.email, saveToken: completed.reopened?.saveToken })
+        : await syncSessionToSheet(completed, events)
 
       // ── CONFIRMED SUCCESS — now safe to clear ─────────────────────────────
       const cleared = { ...completed, status: 'completed' }
+      if (reopened && result.fingerprint) {
+        // the version now in the sheet is the version this window holds
+        cleared.reopened = { ...completed.reopened, fingerprint: result.fingerprint }
+        const nr = { ...reopened, fingerprint: result.fingerprint }; reopenRef.current = nr; setReopen(nr)
+      }
       saveLocalSession(cleared)
 
       setSaveResult({
         status: 'success',
         rowsWritten: result.rowsWritten,
         duplicateHalfWarning: result.duplicateHalfWarning,
+        edited: !!reopened, alreadySaved: !!result.alreadySaved,
       })
       setSubmitting(false)
       // Don't auto-close — let collector see confirmation, then onDone resets UI
     } catch(e) {
       // ── FAILED — keep data, show options ────────────────────────────────
       console.error('[MARK Field] Sheet sync failed:', e)
+      // A reviewer compared this half while it was open: it is locked now. The screen becomes view only AT ONCE; the edited
+      // version stays in MARK's own storage (Firestore), not in the sheet, and nothing is overwritten.
+      if (e instanceof SavedHalfError && e.kind === 'compared') {
+        // (the local record was marked "pending upload" just before this attempt; a half that is locked must not stay in that
+        // state, or it would be offered for retry for ever)
+        enterViewMode({ comparedAtIso: e.comparedAtIso || '', switched: true, note: e.message })
+        saveLocalSessionForce({ ...completed, status: 'in_progress' })
+        showToast(e.message, 'error')
+      }
       setSaveResult({
         status: 'failed',
+        kind: e?.kind || '',
         message: e.message || String(e),
       })
       setSubmitting(false)
@@ -1672,10 +1833,14 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
   }
 
   async function handleRetryUpload(pendingSess, pendingEventsArg) {
+    if (readOnlyRef.current) return
     setSubmitting(true)
     setSaveResult(null)
     try {
-      const result = await syncSessionToSheet(pendingSess, pendingEventsArg)
+      const result = pendingSess?.reopened
+        ? await saveEditedHalf({ session: pendingSess, events: pendingEventsArg, opened: { fingerprint: pendingSess.reopened.fingerprint },
+            editorEmail: profile?.email, saveToken: pendingSess.reopened.saveToken })
+        : await syncSessionToSheet(pendingSess, pendingEventsArg)
       const cleared = { ...pendingSess, status: 'completed' }
       saveLocalSession(cleared)
       setSaveResult({ status: 'success', rowsWritten: result.rowsWritten })
@@ -1704,6 +1869,7 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
   }
 
   function handleDiscard() {
+    if (readOnlyRef.current) return
     const sess = session || pendingUpload
     if (sess) {
       saveLocalSession({ ...sess, status: 'discarded' })
@@ -1726,6 +1892,8 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
     setStartMatchId(''); setMatchPart(null); setCollectionMethod(null); setMethodConfirmed(false)
     setModelCheck({ state:'idle' }); setDupCheck({ state:'idle' }); setDupAck(false)
     setIsModelAnswer(false)
+    setReopen(null); reopenRef.current = null; applyReadOnly(false)
+    setSavedPick(''); setNewConfirm(false); setOpening(''); setOpenErr(''); setVideoWarn('')
     setSession(null)
     setEvents([])
     setVideoPath(null)
@@ -1839,16 +2007,66 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
                 fontSize:13, fontWeight:600, color:'var(--t-1)', lineHeight:1.5 }}>{line}</div>
             ) : null
           })()}
-          {dupCheck.state === 'found' && (
+          {dupCheck.state === 'found' && dupCheck.legacy && (
             <div data-testid="dup-half" style={{ margin:'0 0 14px', padding:'10px 12px', borderRadius:8,
               background:'rgba(255,159,10,0.1)', border:'1px solid rgba(255,159,10,0.4)', fontSize:12, lineHeight:1.5 }}>
-              <div style={{ fontWeight:700, color:'#FF9F0A' }}>You already saved this half for this match.</div>
+              <div style={{ fontWeight:700, color:'#FF9F0A' }}>You already saved this half for this match, on this PC, and it has not reached the sheet yet.</div>
               {dupAck
                 ? <div style={{ color:'var(--t-3)', marginTop:4 }}>Understood — you can continue and collect it again.</div>
                 : <button className="btn-ghost" data-testid="dup-ack" style={{ marginTop:8, padding:'6px 12px', fontSize:11 }}
                     onClick={() => setDupAck(true)}>I want to collect it again</button>}
             </div>
           )}
+          {/* YOUR SAVED HALF: open it with its events (edit it while nobody has compared it), or start a second session */}
+          {dupCheck.state === 'found' && !dupCheck.legacy && (() => {
+            const halves = dupCheck.halves, sel = halves.find(h => h.sessionId === savedPick) || halves[0]
+            const runs = dupCheck.info?.runs, counts = dupCheck.info?.counts
+            const comparedOf = h => runs ? isComparedIn(runs, h.sessionId) : null
+            const compared = comparedOf(sel)
+            const canMyHalves = typeof onOpenMyHalves === 'function' && !!caps.viewOwnHalves        // only when this build HAS the page and the role may see it
+            const allowNew = compared !== true || ALLOW_NEW_SESSION_AFTER_COMPARE
+            const line = h => describeHalfLine({ half: h, firestoreCount: dupCheck.fsCounts?.get(h.sessionId) ?? null,
+              sheetCount: counts ? (counts.get(h.sessionId) ?? 0) : null, compared: comparedOf(h) })
+            return (
+              <div data-testid="saved-half" style={{ margin:'0 0 14px', padding:'12px 14px', borderRadius:8,
+                background:'rgba(10,132,255,0.08)', border:'1px solid rgba(10,132,255,0.3)', fontSize:12, lineHeight:1.5 }}>
+                <div style={{ fontWeight:700, color:'#64B5FF', marginBottom:8 }}>
+                  {halves.length > 1 ? `You saved this half ${halves.length} times. Pick one:` : 'You already saved this half.'}
+                </div>
+                {halves.map(h => (
+                  <label key={h.sessionId} data-testid="saved-row" style={{ display:'flex', gap:8, alignItems:'flex-start', padding:'4px 0', cursor: halves.length > 1 ? 'pointer' : 'default', color:'var(--t-1)' }}>
+                    {halves.length > 1 && <input type="radio" name="saved-pick" checked={sel.sessionId === h.sessionId} onChange={() => setSavedPick(h.sessionId)}/>}
+                    <span>{line(h)}{h.duplicateRows > 1 && <span style={{ color:'#FF9F0A' }}> · stored {h.duplicateRows} times in the sheet (it can be opened, but a save will be refused: ask a Batch Manager)</span>}</span>
+                  </label>
+                ))}
+                {compared === null && (
+                  <div data-testid="compared-unknown" style={{ color:'#FF9F0A', marginTop:6 }}>
+                    Couldn&rsquo;t check whether it has been compared{dupCheck.info?.runsError ? ` (${dupCheck.info.runsError})` : ''}. It is checked again when you open it.
+                  </div>)}
+                {compared === true && (
+                  <div data-testid="compared-line" style={{ marginTop:8, color:'var(--t-2)' }}>
+                    {MSG.COMPARED_LINE}
+                    {canMyHalves && <button className="btn-ghost" data-testid="open-my-halves" style={{ marginLeft:8, padding:'4px 10px', fontSize:11 }} onClick={() => onOpenMyHalves()}>Open My halves</button>}
+                  </div>)}
+                {openErr && <div data-testid="open-error" style={{ color:'#FF453A', marginTop:8 }}>{openErr}</div>}
+                <div style={{ display:'flex', gap:8, marginTop:10, flexWrap:'wrap' }}>
+                  <button className="btn-orange" data-testid="open-saved" disabled={!!opening} style={{ padding:'8px 14px', fontSize:12 }}
+                    onClick={() => openSavedHalf(sel)}>{opening ? 'Opening…' : compared === true ? 'Open my saved half (view only)' : 'Open my saved half'}</button>
+                  {allowNew && !dupAck && !newConfirm && (
+                    <button className="btn-ghost" data-testid="new-from-zero" style={{ padding:'8px 14px', fontSize:12 }} onClick={() => setNewConfirm(true)}>Start a new one from zero</button>)}
+                </div>
+                {newConfirm && !dupAck && (
+                  <div data-testid="new-confirm" style={{ marginTop:10, padding:'10px 12px', borderRadius:8, background:'rgba(255,159,10,0.1)', border:'1px solid rgba(255,159,10,0.4)' }}>
+                    <div style={{ marginBottom:8 }}>{MSG.NEW_CONFIRM}</div>
+                    <div style={{ display:'flex', gap:8 }}>
+                      <button className="btn-ghost" data-testid="new-cancel" style={{ padding:'6px 12px', fontSize:11 }} onClick={() => setNewConfirm(false)}>Cancel</button>
+                      <button className="btn-orange" data-testid="new-yes" style={{ padding:'6px 12px', fontSize:11 }} onClick={() => { setDupAck(true); setNewConfirm(false) }}>Yes, start a new one</button>
+                    </div>
+                  </div>)}
+                {dupAck && <div data-testid="new-ack" style={{ marginTop:8, color:'var(--t-3)' }}>Understood — Continue starts a new session. Your saved one stays.</div>}
+              </div>
+            )
+          })()}
 
           <div style={{ display:'flex', gap:8 }}>
             <button className="btn-ghost" style={{ padding:'9px 16px', fontSize:12 }}
@@ -1920,6 +2138,7 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
               : 'rgba(255,149,0,0.4)'}`,
           }}
           onClick={() => {
+            if (readOnlyRef.current) return
             setPossession(prev => {
               const f = prev.team==='home'?'away':prev.team==='away'?'home':null
               return {team:f,certain:true}
@@ -1948,7 +2167,7 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
           </button>
         )}
         {/* Model import — hidden once done, internal users only */}
-        {isInternal && !isModelImportDone() && modelImportStatus !== 'done' && (
+        {!readOnly && isInternal && !isModelImportDone() && modelImportStatus !== 'done' && (
           <button
             disabled={modelImportStatus==='running'}
             onClick={async()=>{
@@ -1967,17 +2186,47 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
             {modelImportStatus==='running'?modelImportMsg:modelImportStatus==='error'?`⚠ ${modelImportMsg}`:modelImportStatus==='done'?modelImportMsg:'Import Model Answers'}
           </button>
         )}
+        {!readOnly && (<>
         <button data-testid="clear-all" disabled={events.length===0||!!saveUi||clearing}
           onClick={()=>{ setClearError(''); setShowClearModal(true) }}
           title="Delete every event in this session (the video, match and part are kept)"
           style={{padding:'6px 12px',fontSize:12,background:'transparent',border:'1px solid rgba(255,69,58,0.4)',borderRadius:8,
             color:'#FF453A',cursor:(events.length===0||saveUi||clearing)?'not-allowed':'pointer',opacity:(events.length===0||saveUi||clearing)?0.4:1}}>Clear all</button>
         <button className="btn-orange" style={{padding:'6px 16px',fontSize:12}} onClick={()=>{ if(editOriginalRef.current) abandonCapture(); setShowDoneModal(true) }}>Done</button>
+        </>)}
       </div>
+
+      {/* ── Saved half: what this screen is, and a warning if the video differs ── */}
+      {reopen && (
+        <div data-testid={readOnly ? 'view-banner' : 'edit-banner'} style={{ flexShrink:0, padding:'8px 16px', fontSize:12, lineHeight:1.5,
+          background: readOnly ? 'rgba(255,159,10,0.12)' : 'rgba(10,132,255,0.10)', borderBottom:'1px solid var(--b-1)',
+          color:'var(--t-1)' }}>
+          {readOnly ? (
+            <>
+              <div style={{ fontWeight:700 }}>{MSG.VIEW_BANNER}</div>
+              <div style={{ color:'var(--t-2)' }}>
+                Match {sessionRef.current?.matchId || startMatchId} · {PART_LABEL[Number(sessionRef.current?.part) || Number(matchPart)] || 'part ?'}
+                {reopen.comparedAtIso ? ` · compared ${String(reopen.comparedAtIso).slice(0, 10)}` : ''}
+              </div>
+              {reopen.switched && <div data-testid="switched-note" style={{ color:'var(--t-2)' }}>{MSG.SWITCHED} They are kept in MARK on your account, not in the sheet.</div>}
+              {reopen.note && <div style={{ color:'#FF453A' }}>{reopen.note}</div>}
+            </>
+          ) : (
+            <>
+              <div style={{ fontWeight:700 }}>{MSG.EDIT_BANNER}</div>
+              {reopen.unchecked && (
+                <div data-testid="unchecked-note" style={{ color:'#FF9F0A' }}>
+                  Couldn&rsquo;t check whether this half has been compared ({reopen.unchecked}). You can keep working, but Save is refused until it can be checked.
+                </div>)}
+            </>
+          )}
+          {videoWarn && <div data-testid="video-warning" style={{ color:'#FF9F0A' }}>⚠ {videoWarn}</div>}
+        </div>
+      )}
 
       {/* ── Main ── */}
       <div style={{flex:1,display:'flex',overflow:'hidden',position:'relative'}}>
-        <EventsSidebar side="left"  activeKey={activeKey} onMouseEvent={onMouseEvent} insertAfter={endStoppageSlot}/>
+        <EventsSidebar side="left"  readOnly={readOnly} activeKey={activeKey} onMouseEvent={onMouseEvent} insertAfter={endStoppageSlot}/>
 
         {/* Video */}
         <div style={{flex:1,position:'relative',background:'#000',display:'flex',alignItems:'center',justifyContent:'center'}}>
@@ -2033,17 +2282,18 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
         </div>
 
         {/* Right sidebar — unknown_pass_end injected via extraItems into the scroll container */}
-        <EventsSidebar side="right" activeKey={activeKey} onMouseEvent={onMouseEvent}
+        <EventsSidebar side="right" readOnly={readOnly} activeKey={activeKey} onMouseEvent={onMouseEvent}
           extraItems={
-            <div key="unknown_pass_end"
+            <div key="unknown_pass_end" data-testid="unknown-pass-end" aria-disabled={readOnly}
+              title={readOnly ? MSG.VIEW_ONLY_TIP : undefined}
               onClick={() => {
-                if (!videoLoaded || captureStep !== 'idle') return
+                if (readOnly || !videoLoaded || captureStep !== 'idle') return
                 const def = EVENT_BY_ID['unknown_pass_end']
                 if (def) startCapture(def, getVideoTime())
               }}
               style={{
                 display:'flex', alignItems:'center', justifyContent:'space-between',
-                padding:'7px 12px', cursor:'pointer',
+                padding:'7px 12px', cursor: readOnly ? 'not-allowed' : 'pointer', opacity: readOnly ? 0.4 : 1,
                 borderTop:'1px solid var(--b-1)',
               }}
               onMouseEnter={e => e.currentTarget.style.background = 'rgba(255,255,255,0.04)'}
@@ -2206,7 +2456,7 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
 
       {/* ── Events list ── */}
       <TaggedEventsList tags={events} videoDuration={duration}
-        matchName="Home vs Away" onEdit={onEditStable} onDelete={onDeleteStable} onSeek={onSeekStable} onRetry={onRetryStable}
+        matchName="Home vs Away" onEdit={onEditStable} onDelete={onDeleteStable} onSeek={onSeekStable} onRetry={readOnly ? null : onRetryStable} readOnly={readOnly}
         highlightIds={highlightIds} highlightNearestId={highlightNearest} pastCount={pastCount}/>
 
       {perfEnabled() && <PerfOverlay videoRef={videoRef} renderCountRef={renderCountRef} eventCount={events.length}/>}
@@ -2561,7 +2811,7 @@ export default function FieldPage({ session: initialSession, onDone, onBack }) {
                   </div>
                   <button className="btn-orange" style={{flex:2,padding:'10px 0',fontSize:13}}
                     disabled={submitting||verifyBlocks} onClick={handleSaveToSheet}>
-                    {submitting ? 'Saving…' : 'Save to Sheet'}
+                    {submitting ? 'Saving…' : reopen ? 'Save changes' : 'Save to Sheet'}
                   </button>
                 </div>
               </>
