@@ -4,6 +4,11 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      field_sheet_id:
+        description: 'TEST BUILD: id of the spreadsheet COPY the app reads and writes (the part of its URL between /d/ and /edit). Empty = the PRODUCTION sheet.'
+        required: false
+        default: ''
 
 jobs:
   build-windows:
@@ -34,6 +39,13 @@ jobs:
 
       - name: Install frontend dependencies
         run: npm install
+
+      - name: Say which spreadsheet this build points at
+        shell: pwsh
+        run: |
+          $id = "${{ inputs.field_sheet_id }}"
+          if ($id) { Write-Host "TEST BUILD: the app will read and write the spreadsheet COPY $id" }
+          else { Write-Host "WARNING: no spreadsheet id given - this build points at the PRODUCTION spreadsheet" }
 
       - name: Sync version to tauri.conf.json
         run: node scripts/sync-version.js
@@ -85,6 +97,7 @@ jobs:
           # to the embedded copy, so nothing breaks in the meantime.
           MARK_SA_PRIVATE_KEY: ${{ secrets.MARK_SA_PRIVATE_KEY }}
           VITE_GH_SYNC_TOKEN: ${{ secrets.VITE_GH_SYNC_TOKEN }}
+          VITE_FIELD_SHEET_ID: ${{ inputs.field_sheet_id }}
           # Updater signing. When absent the build succeeds but the updater
           # plugin cannot verify downloads. Add these secrets before shipping
           # the updater feature to users.
