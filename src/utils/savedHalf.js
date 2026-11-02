@@ -79,3 +79,28 @@ export function makeSaveToken(sessionId, fingerprint, events) {
   for (let i = 0; i < s.length; i++) { const c = s.charCodeAt(i); h1 = Math.imul(h1 ^ c, 16777619) >>> 0; h2 = Math.imul(h2 ^ (c + i), 2246822519) >>> 0 }
   return `${h1.toString(36)}${h2.toString(36)}`
 }
+
+/** JSON with every object's keys sorted, so the same content always gives the same text. */
+const stable = v => Array.isArray(v) ? `[${v.map(stable).join(',')}]`
+  : v && typeof v === 'object' ? `{${Object.keys(v).filter(k => v[k] !== undefined).sort().map(k => `${JSON.stringify(k)}:${stable(v[k])}`).join(',')}}`
+  : JSON.stringify(v ?? null)
+
+/**
+ * A fingerprint of WHAT THE EVENTS ARE: the same hashing as makeSaveToken, but over the events only (no session, no opened
+ * version), and ignoring everything that is local or server bookkeeping (_status, _docId, createdAt). Order does not matter.
+ *
+ * Used to tell, in view mode, whether the events on screen are the version that was last SAVED: the hash of the saved version is
+ * stored on the half's session record (when it is first opened for editing, and again after each successful save), and view mode
+ * compares the current events with it. A half that was never opened for editing has no baseline and cannot have unsaved edits.
+ */
+export function contentHash(events) {
+  const body = (events || []).map(e => { const o = {}; Object.keys(e).filter(k => !k.startsWith('_') && k !== 'createdAt').forEach(k => { o[k] = e[k] }); return stable(o) }).sort().join('\n')
+  let h1 = 0x811c9dc5, h2 = 0x01000193
+  for (let i = 0; i < body.length; i++) { const c = body.charCodeAt(i); h1 = Math.imul(h1 ^ c, 16777619) >>> 0; h2 = Math.imul(h2 ^ (c + i), 2246822519) >>> 0 }
+  return `c${(events || []).length}-${h1.toString(36)}${h2.toString(36)}`
+}
+
+/** true when the events on screen are NOT the saved version. false when they match, or when there is no baseline to judge by. */
+export const hasUnsavedEdits = (baseline, events) => !!baseline && contentHash(events) !== baseline
+
+export const UNSAVED_WARNING = 'This view includes edits that were never saved. The reviewer compared the saved version.'

@@ -34,7 +34,7 @@ import TaggedEventsList from '../components/TaggedEventsList'
 import { downloadFieldCsv, syncSessionToSheet, findOwnHalfIn } from '../utils/fieldSheetSync'
 import { findSavedHalves, describeSavedHalves, readComparedInfo, readScoreRuns, isComparedIn, readFingerprint, saveEditedHalf, SavedHalfError } from '../utils/savedHalfSheet'
 import { loadSavedHalfData, fetchTotalEvents } from '../utils/savedHalfStore'
-import { buildReopenedSession, videoMismatch, describeHalfLine, makeSaveToken, PART_LABEL } from '../utils/savedHalf'
+import { buildReopenedSession, videoMismatch, describeHalfLine, makeSaveToken, contentHash, hasUnsavedEdits, UNSAVED_WARNING, PART_LABEL } from '../utils/savedHalf'
 import { rebuildFromEvents } from '../utils/tagRebuild'
 import { sameHr } from '../utils/drillAccess'
 import { ALLOW_NEW_SESSION_AFTER_COMPARE, COMPARE_POLL_MS, COMPARE_POLL_JITTER_MS, MSG } from '../config/savedHalfConfig'
@@ -503,7 +503,8 @@ export default function FieldPage({ session: initialSession, onDone, onBack, onO
     applyReadOnly(true)
     if (editingRef.current || captureStep !== 'idle') abandonCapture()
     setShowDoneModal(false); setShowClearModal(false)
-    setReopen(r => r ? { ...r, readOnly: true, comparedAtIso: comparedAtIso || r.comparedAtIso || '', switched: switched || r.switched, note: note || r.note || '' } : r)
+    const unsavedEdits = hasUnsavedEdits(reopenRef.current?.baseline, eventsRef.current)     // what is on screen vs the version that was last saved
+    setReopen(r => r ? { ...r, readOnly: true, comparedAtIso: comparedAtIso || r.comparedAtIso || '', switched: switched || r.switched, note: note || r.note || '', unsavedEdits } : r)
   }
   const enterViewRef = useRef(null); enterViewRef.current = enterViewMode
 
@@ -527,6 +528,15 @@ export default function FieldPage({ session: initialSession, onDone, onBack, onO
       sess.totalEvents = saved.length
       const rb = rebuildFromEvents(saved)
       applyReadOnly(info.compared)                                  // before anything is shown
+      // The BASELINE: the hash of the saved version, kept on the half's session record, so view mode can tell whether the events it
+      // shows are that version. Written once, here, when the half is first opened for EDITING (never in view mode); refreshed after
+      // every successful save. A half that was never opened for editing has none, and cannot have unsaved edits.
+      let baseline = String(fsDoc?.savedContentHash || '')
+      if (!info.compared && !baseline) {
+        const hh = contentHash(saved)
+        try { await updateDoc(doc(db, 'mark_field_sessions', h.sessionId), { savedContentHash: hh, savedContentAt: Date.now() }); baseline = hh }
+        catch (e) { console.warn('[MARK Field] could not record the saved version (no unsaved-edits warning will be possible for this half):', e?.message || e) }
+      }
       eventSeqRef.current = rb.nextSeq; openPairsRef.current = rb.openPairs
       setOpenStates(rb.openStates); possessionRef.current = rb.possession; setPossession(rb.possession)
       eventsRef.current = saved; setEvents(saved)
@@ -534,7 +544,8 @@ export default function FieldPage({ session: initialSession, onDone, onBack, onO
       setStartMatchId(String(fresh.matchId)); setMatchPart(String(sess.part)); setCollectionMethod(sess.collectionMethod)
       setSaveMatchId(String(fresh.matchId)); setSaveHalf(fresh.half); setSaveHrCode(hr)
       setSaveHomeTeam(sess.homeTeamName || ''); setSaveAwayTeam(sess.awayTeamName || ''); setIsModelAnswer(false)
-      const r = { sessionId: h.sessionId, readOnly: info.compared, comparedAtIso: info.comparedAtIso, switched: false, fingerprint,
+      const r = { sessionId: h.sessionId, readOnly: info.compared, comparedAtIso: info.comparedAtIso, switched: false, fingerprint, baseline,
+        unsavedEdits: info.compared && hasUnsavedEdits(baseline, saved),
         savedVideo: { name: fresh.videoName, durationMs: fresh.videoDurationMs }, unchecked, duplicateRows: fresh.duplicateRows }
       reopenRef.current = r; setReopen(r)
       setSession(sess); setMethodConfirmed(true)
@@ -1799,7 +1810,10 @@ export default function FieldPage({ session: initialSession, onDone, onBack, onO
       if (reopened && result.fingerprint) {
         // the version now in the sheet is the version this window holds
         cleared.reopened = { ...completed.reopened, fingerprint: result.fingerprint }
-        const nr = { ...reopened, fingerprint: result.fingerprint }; reopenRef.current = nr; setReopen(nr)
+        const savedHash = contentHash(events)
+        updateDoc(doc(db, 'mark_field_sessions', session.sessionId), { savedContentHash: savedHash, savedContentAt: Date.now() })
+          .catch(e => console.warn('[MARK Field] could not refresh the saved-version record:', e?.message || e))
+        const nr = { ...reopened, fingerprint: result.fingerprint, baseline: savedHash }; reopenRef.current = nr; setReopen(nr)
       }
       saveLocalSession(cleared)
 
@@ -2210,6 +2224,7 @@ export default function FieldPage({ session: initialSession, onDone, onBack, onO
               </div>
               {reopen.switched && <div data-testid="switched-note" style={{ color:'var(--t-2)' }}>{MSG.SWITCHED} They are kept in MARK on your account, not in the sheet.</div>}
               {reopen.note && <div style={{ color:'#FF453A' }}>{reopen.note}</div>}
+              {reopen.unsavedEdits && <div data-testid="unsaved-warning" style={{ color:'#FF9F0A', fontWeight:700 }}>⚠ {UNSAVED_WARNING}</div>}
             </>
           ) : (
             <>

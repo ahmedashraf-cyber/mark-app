@@ -1,5 +1,5 @@
 globalThis.window = { __TAURI_INTERNALS__: { invoke: async () => 't' } }
-const { buildReopenedSession, videoMismatch, describeHalfLine, makeSaveToken, PART_LABEL } = await import('./savedHalf.js')
+const { buildReopenedSession, videoMismatch, describeHalfLine, makeSaveToken, PART_LABEL, contentHash, hasUnsavedEdits, UNSAVED_WARNING } = await import('./savedHalf.js')
 let pass = 0, fail = 0
 const ok = (n, c, d = '') => { c ? pass++ : fail++; console.log(`${c ? '  ✓' : '  ✗'} ${n}${!c && d ? '   [' + String(d).slice(0, 200) + ']' : ''}`) }
 const half = { sessionId: 'S1', matchId: '1454815', half: '1H', hrCode: 'C-77', email: 'c@x.com', method: 'all', part: '1', videoName: 'Match.mp4', videoDurationMs: 2700000, videoSizeBytes: 5000, homeTeam: 'Arsenal', awayTeam: 'Chelsea', startIso: '2026-10-01T10:00:00.000Z', endIso: '2026-10-01T10:45:00.000Z', elapsedMs: 2700000, incomplete: false }
@@ -28,4 +28,17 @@ ok('local-only fields (_status) do not change it', makeSaveToken('S1', fp, base)
 ok('one more event gives a NEW token (new work is never mistaken for the old save)', makeSaveToken('S1', fp, base) !== makeSaveToken('S1', fp, [...base, ev('c')]))
 ok('one edited attribute gives a new token', makeSaveToken('S1', fp, base) !== makeSaveToken('S1', fp, [ev('a', { eventId: 'tackle' }), ev('b')]))
 ok('a different opened version or session gives a new token', makeSaveToken('S1', fp, base) !== makeSaveToken('S1', { ...fp, eventRows: 3 }, base) && makeSaveToken('S1', fp, base) !== makeSaveToken('S2', fp, base))
+console.log('the content hash (the baseline for "edits that were never saved")')
+const base2 = [ev('a'), ev('b', { groups: [{ groupId: 'outcome', selections: [{ code: 'X' }] }] })]
+ok('the same events give the same hash, in any order', contentHash(base2) === contentHash([...base2].reverse()))
+ok('local and server bookkeeping is ignored (_status, _docId, createdAt)', contentHash(base2) === contentHash(base2.map(e => ({ ...e, _status: 'saved', _docId: 'x', createdAt: { seconds: 5 } }))))
+ok('key order inside an event or a group does not matter', contentHash(base2) === contentHash([ev('a'), { groups: [{ selections: [{ code: 'X' }], groupId: 'outcome' }], videoTimeSec: 5, team: 'home', eventId: 'pass', event_seq: 1, id: 'b' }]))
+ok('a deleted event changes it', contentHash(base2) !== contentHash([base2[0]]))
+ok('an added event changes it', contentHash(base2) !== contentHash([...base2, ev('c')]))
+ok('a changed team changes it', contentHash(base2) !== contentHash([base2[0], { ...base2[1], team: 'away' }]))
+ok('a changed attribute changes it', contentHash(base2) !== contentHash([base2[0], { ...base2[1], groups: [{ groupId: 'outcome', selections: [{ code: 'Y' }] }] }]))
+ok('a changed time changes it', contentHash(base2) !== contentHash([{ ...base2[0], videoTimeSec: 6 }, base2[1]]))
+ok('hasUnsavedEdits: no baseline means no claim (a half never opened for editing)', hasUnsavedEdits('', base2) === false && hasUnsavedEdits(undefined, base2) === false)
+ok('hasUnsavedEdits: equal is false, different is true', hasUnsavedEdits(contentHash(base2), base2) === false && hasUnsavedEdits(contentHash(base2), [base2[0]]) === true)
+ok('the warning wording', UNSAVED_WARNING === 'This view includes edits that were never saved. The reviewer compared the saved version.')
 console.log(`\n${pass} passed, ${fail} failed`); process.exit(fail ? 1 : 0)
