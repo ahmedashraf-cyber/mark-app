@@ -25,11 +25,12 @@ import {
 } from '../config/fieldConfig'
 import { CURRENT_VERSION } from '../hooks/useUpdateCheck'
 import { showToast } from './toast'
+import { assertWritable } from './writeGuard'
 
 const SHEETS_BASE = 'https://sheets.googleapis.com/v4/spreadsheets'
 
 // ── Auth ────────────────────────────────────────────────────────────────────
-async function getToken() {
+export async function getToken() {
   try {
     const token = await invoke('get_google_access_token_cmd')
     if (!token) throw new Error('No token returned')
@@ -325,7 +326,7 @@ async function appendRows(token, tab, values) {
  * DIFFERENT tab that happens to own that number. Throws a clear error, before anything is deleted or written, if a tab
  * is not in the spreadsheet.
  */
-async function tabIdsByName(token, names) {
+export async function tabIdsByName(token, names) {
   const res = await fetch(`${SHEETS_BASE}/${FIELD_SHEET_ID}?fields=sheets.properties(sheetId,title)`,
     { headers: { Authorization: `Bearer ${token}` } })
   if (!res.ok) {
@@ -433,6 +434,7 @@ export async function findOwnSavedHalf({ matchId, half, hrCode, local = [] }) {
 
 // ── Main sync ─────────────────────────────────────────────────────────────
 export async function syncSessionToSheet(session, events) {
+  assertWritable('saving to the sheet')   // view mode: a compared half never reaches the sheet
   const token = await getToken()
 
   // 1. Validate/write headers on both tabs

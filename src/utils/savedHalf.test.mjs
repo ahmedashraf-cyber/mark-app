@@ -1,0 +1,31 @@
+globalThis.window = { __TAURI_INTERNALS__: { invoke: async () => 't' } }
+const { buildReopenedSession, videoMismatch, describeHalfLine, makeSaveToken, PART_LABEL } = await import('./savedHalf.js')
+let pass = 0, fail = 0
+const ok = (n, c, d = '') => { c ? pass++ : fail++; console.log(`${c ? '  ✓' : '  ✗'} ${n}${!c && d ? '   [' + String(d).slice(0, 200) + ']' : ''}`) }
+const half = { sessionId: 'S1', matchId: '1454815', half: '1H', hrCode: 'C-77', email: 'c@x.com', method: 'all', part: '1', videoName: 'Match.mp4', videoDurationMs: 2700000, videoSizeBytes: 5000, homeTeam: 'Arsenal', awayTeam: 'Chelsea', startIso: '2026-10-01T10:00:00.000Z', endIso: '2026-10-01T10:45:00.000Z', elapsedMs: 2700000, incomplete: false }
+console.log('the reopened session object')
+const s = buildReopenedSession({ half, fingerprint: { endIso: 'e', elapsedMs: '2700000', eventRows: 5 }, now: new Date('2026-11-02T08:00:00Z') })
+ok('same session id, match, half, HR-code, method, teams: nothing regenerated', s.sessionId === 'S1' && s.matchId === '1454815' && s.half === '1H' && s.collectorHrCode === 'C-77' && s.collectionMethod === 'all' && s.homeTeamName === 'Arsenal')
+ok('the ORIGINAL collection start is kept; the old active time is carried (FieldPage adds the new sitting to it)', s.collectionStartWallMs === Date.parse('2026-10-01T10:00:00.000Z') && s.accumulatedMs === 2700000)
+ok('part comes from the row, or from the half when the row has none (an old row with no part column)', s.part === 1 && buildReopenedSession({ half: { ...half, part: '', half: '2H' }, fingerprint: {} }).part === 2 && buildReopenedSession({ half: { ...half, part: '', half: 'ET1' }, fingerprint: {} }).part === 3)
+ok('it is marked as reopened and carries the fingerprint of the version opened', s.reopened?.fingerprint?.eventRows === 5 && s.status === 'in_progress')
+ok('it is never a model answer', s.is_model === '0')
+console.log('the video warning (a warning, never a block)')
+ok('same file name and length: no warning', videoMismatch({ savedName: 'Match.mp4', savedDurationMs: 2700000, loadedPath: 'C:\\videos\\match.MP4', loadedDurationMs: 2700400 }).differs === false)
+ok('a different name: warns, naming both', (m => m.differs && /saved "Match.mp4", loaded "other.mp4"/.test(m.message))(videoMismatch({ savedName: 'Match.mp4', savedDurationMs: 2700000, loadedPath: '/x/other.mp4', loadedDurationMs: 2700000 })))
+ok('a different length (beyond 1 s): warns with both lengths', (m => m.differs && /45:00/.test(m.message) && /44:50/.test(m.message))(videoMismatch({ savedName: 'Match.mp4', savedDurationMs: 2700000, loadedPath: 'Match.mp4', loadedDurationMs: 2690000 })))
+ok('no video loaded yet: no warning', videoMismatch({ savedName: 'a.mp4', savedDurationMs: 1, loadedPath: '', loadedDurationMs: null }).differs === false)
+ok('unknown saved values never warn', videoMismatch({ savedName: '', savedDurationMs: null, loadedPath: 'a.mp4', loadedDurationMs: 99 }).differs === false)
+console.log('the list line')
+ok('shows saved date, event count, method, video file, compared or not', /2026-10-01 10:45 · 120 events · all events · Match.mp4 · not compared/.test(describeHalfLine({ half, firestoreCount: 120, compared: false })))
+ok('says so when the sheet and MARK\'s copy disagree', /120 events \(the sheet has 118\)/.test(describeHalfLine({ half, firestoreCount: 120, sheetCount: 118, compared: false })))
+ok('says so when "compared" could not be checked', /could not check/.test(describeHalfLine({ half, compared: null })))
+console.log('the save token')
+const ev = (id, o = {}) => ({ id, event_seq: 1, eventId: 'pass', videoTimeSec: 5, team: 'home', groups: [], ...o })
+const fp = { endIso: 'a', elapsedMs: '1', eventRows: 2 }, base = [ev('a'), ev('b')]
+ok('the same content gives the same token (a Retry after a lost answer is recognised)', makeSaveToken('S1', fp, base) === makeSaveToken('S1', fp, [...base].reverse()))
+ok('local-only fields (_status) do not change it', makeSaveToken('S1', fp, base) === makeSaveToken('S1', fp, base.map(e => ({ ...e, _status: 'saved' }))))
+ok('one more event gives a NEW token (new work is never mistaken for the old save)', makeSaveToken('S1', fp, base) !== makeSaveToken('S1', fp, [...base, ev('c')]))
+ok('one edited attribute gives a new token', makeSaveToken('S1', fp, base) !== makeSaveToken('S1', fp, [ev('a', { eventId: 'tackle' }), ev('b')]))
+ok('a different opened version or session gives a new token', makeSaveToken('S1', fp, base) !== makeSaveToken('S1', { ...fp, eventRows: 3 }, base) && makeSaveToken('S1', fp, base) !== makeSaveToken('S2', fp, base))
+console.log(`\n${pass} passed, ${fail} failed`); process.exit(fail ? 1 : 0)
