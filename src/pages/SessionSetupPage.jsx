@@ -151,7 +151,7 @@ async function fetchMatchesFromSheet() {
   return result
 }
 
-export default function SessionSetupPage({ onSessionStart, lastResult, onShowHistory, onWatchSession, onSelfReviewDirty }) {
+export default function SessionSetupPage({ onSessionStart, lastResult, onShowHistory, onWatchSession, onSelfReviewDirty, openMyHalves = false, onMyHalvesOpened }) {
   // Runtime version — read from Tauri's bundle at startup so the header always
   // matches the OS window title.  Falls back to the build-time constant outside
   // Tauri (dev server, tests).
@@ -215,7 +215,8 @@ export default function SessionSetupPage({ onSessionStart, lastResult, onShowHis
   const [showTagEditor, setShowTagEditor] = useState(false)
   const [showInsights,    setShowInsights]    = useState(false)
   const [showSelfReview,     setShowSelfReview]     = useState(false)
-  const [showMyHalves,       setShowMyHalves]       = useState(false)
+  const [showMyHalves,       setShowMyHalves]       = useState(!!openMyHalves)   // true when Tag sent the user here
+  useEffect(() => { if (openMyHalves) onMyHalvesOpened?.() }, [])                 // the request is used up: coming back later shows the launcher
   const [selfReviewDirty,    setSelfReviewDirty]    = useState(false)
 
   async function handleRosterImport(file) {
