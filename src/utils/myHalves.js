@@ -46,20 +46,21 @@ export function fmtDuration(ms) {
   const s = Math.round(n / 1000), h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), r = s % 60
   return h ? `${h}:${String(m).padStart(2, '0')}:${String(r).padStart(2, '0')}` : `${m}:${String(r).padStart(2, '0')}`
 }
+// 'Events/min' and 'Active time' are NOT shown (list, details, CSV): the writer stores collection_elapsed_raw_ms at twice the real active
+// time and collection_events_per_min at half the real rate (a known defect, not fixed here). Showing them would show wrong numbers.
+// To bring them back once the defect is fixed, restore the two column definitions and the two detail rows below.
 const extra = [
-  { key: 'speed', label: 'Events/min', sort: r => num(r.collection_events_per_min), csv: r => r.collection_events_per_min || '' },
-  { key: 'active', label: 'Active time', sort: r => num(r.collection_elapsed_raw_ms), csv: r => fmtDuration(r.collection_elapsed_raw_ms) },
   { key: 'start', label: 'Collection start', sort: r => r.collection_start_wall_iso || null, csv: r => r.collection_start_wall_iso || '' },
   { key: 'end', label: 'Collection end', sort: r => r.collection_end_wall_iso || null, csv: r => r.collection_end_wall_iso || '' },
   { key: 'incomplete', label: 'No Half end', sort: r => (r.incomplete ? 1 : 0), csv: r => (r.incomplete ? 'yes' : 'no') },
 ].map(c => ({ ...c, def: false }))
 /** Every column this screen can show, in order. Teams and Saved come right after Match ID and Half for readability. */
 export const HALF_COLUMNS = [byKey.match, byKey.teams, byKey.half, byKey.part, byKey.collector, byKey.name, byKey.role, byKey.email,
-  byKey.saved, byKey.method, byKey.events, ...extra.slice(0, 2), byKey.overall, byKey.a, byKey.b, byKey.c, byKey.d, byKey.to, byKey.pressure,
+  byKey.saved, byKey.method, byKey.events, byKey.overall, byKey.a, byKey.b, byKey.c, byKey.d, byKey.to, byKey.pressure,
   byKey.status, byKey.runs, byKey.runAt, byKey.modelSession, byKey.totalModel, byKey.correct, byKey.missing, byKey.extra, byKey.wrongSide,
-  byKey.wrongTime, byKey.wrongExtra, byKey.missExtra, byKey.notNeeded, ...extra.slice(2), byKey.video, byKey.type, byKey.flags, byKey.session]
-export const OWN_DEFAULT_COLUMNS = ['match', 'teams', 'half', 'part', 'saved', 'method', 'events', 'speed', 'overall', 'a', 'b', 'c', 'd', 'to', 'pressure', 'status']
-export const ANY_DEFAULT_COLUMNS = ['match', 'teams', 'half', 'part', 'collector', 'name', 'saved', 'method', 'events', 'speed', 'overall', 'a', 'b', 'c', 'd', 'to', 'pressure', 'status']
+  byKey.wrongTime, byKey.wrongExtra, byKey.missExtra, byKey.notNeeded, ...extra, byKey.video, byKey.type, byKey.flags, byKey.session]
+export const OWN_DEFAULT_COLUMNS = ['match', 'teams', 'half', 'part', 'saved', 'method', 'events', 'overall', 'a', 'b', 'c', 'd', 'to', 'pressure', 'status']
+export const ANY_DEFAULT_COLUMNS = ['match', 'teams', 'half', 'part', 'collector', 'name', 'saved', 'method', 'events', 'overall', 'a', 'b', 'c', 'd', 'to', 'pressure', 'status']
 
 // ── one half's detail ────────────────────────────────────────────────────────────────────────────────────────
 /**
@@ -153,8 +154,6 @@ export function collectionDetails(row) {
     ['Part', ({ 1: '1st half', 2: '2nd half', 3: 'Extra time 1', 4: 'Extra time 2', 5: 'Penalties' })[Number(row.part)] || row.part || '—'],
     ['Collection started', row.collection_start_wall_iso ? row.collection_start_wall_iso.replace('T', ' ').slice(0, 19) : '—'],
     ['Collection ended', row.collection_end_wall_iso ? row.collection_end_wall_iso.replace('T', ' ').slice(0, 19) : '—'],
-    ['Active time', fmtDuration(row.collection_elapsed_raw_ms) || '—'],
-    ['Events per minute', row.collection_events_per_min || '—'],
     ['Saved without a Half end', row.incomplete ? 'Yes (collection_incomplete = 1)' : 'No'],
     ['Video file', row.video_filename || '—'],
   ]
