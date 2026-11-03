@@ -6,6 +6,7 @@ import { isBelowMinimum } from './utils/sheetRole.js'
 import { checkForUpdate, CURRENT_VERSION } from './hooks/useUpdateCheck.js'
 import LoginPage from './pages/LoginPage'
 import SessionSetupPage from './pages/SessionSetupPage'
+import { myHalvesOpener } from './utils/myHalvesNav'
 import ReviewPage from './pages/ReviewPage'
 import FieldPage from './pages/FieldPage'
 import ComparisonPage from './pages/ComparisonPage'
@@ -176,6 +177,7 @@ function AppInner() {
   const [update, setUpdate]           = useState(null)
   const [updateDismissed, setUpdateDismissed] = useState(false)
   const [selfReviewDirty, setSelfReviewDirty] = useState(false)
+  const [openMyHalves, setOpenMyHalves] = useState(false)   // Tag's "See its errors in My halves": leave Tag, land on My halves
 
   // Returns true when there is unsaved work in any mode.
   // Called by UpdateBanner before auto-installing so the user can cancel.
@@ -362,6 +364,7 @@ function AppInner() {
             session={session}
             onDone={() => setSession(null)}
             onBack={() => setSession(null)}
+            onOpenMyHalves={myHalvesOpener(caps, () => { setOpenMyHalves(true); setSession(null) })}
           />
         ) : session?.mode === 'drill' ? (
           <DrillPage onBack={() => setSession(null)} />
@@ -387,6 +390,8 @@ function AppInner() {
             onShowHistory={(session) => { setHistorySession(session || null); setShowHistory(true) }}
             onWatchSession={(s) => setObservingSession(s)}
             onSelfReviewDirty={setSelfReviewDirty}
+            openMyHalves={openMyHalves}
+            onMyHalvesOpened={() => setOpenMyHalves(false)}
           />
         )}
       </PageTransition>
