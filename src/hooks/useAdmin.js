@@ -121,6 +121,11 @@ export function capabilities(role, overrides) {
     // Collector Self-Review: defaults to the same access as Tag (all roles).
     selfReview:  operator || collector,
     quizAssign:  operator,
+    // My halves (read-only): a collector rewatching their own halves against the model answer, and a reviewer doing
+    // the same for any collector. Named separately so a Batch Manager can tune both in the Role Access matrix.
+    // Defaults: every collector and the six operator roles see their own; only the six operator roles see anyone's.
+    viewOwnHalves: operator || collector,
+    viewAnyHalves: operator,
     hrCodeLogin: collector,          // collectors only, by default
     // Insights (Common Mistakes). Its default is the role's COMPARISON value —
     // see the override step below, which makes it follow Comparison exactly.
