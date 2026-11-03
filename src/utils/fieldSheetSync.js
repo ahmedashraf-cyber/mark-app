@@ -25,11 +25,12 @@ import {
 } from '../config/fieldConfig'
 import { CURRENT_VERSION } from '../hooks/useUpdateCheck'
 import { showToast } from './toast'
+import { assertWritable } from './writeGuard'
 
 const SHEETS_BASE = 'https://sheets.googleapis.com/v4/spreadsheets'
 
 // ── Auth ────────────────────────────────────────────────────────────────────
-async function getToken() {
+export async function getToken() {
   try {
     const token = await invoke('get_google_access_token_cmd')
     if (!token) throw new Error('No token returned')
@@ -319,17 +320,45 @@ async function appendRows(token, tab, values) {
   return written
 }
 
-async function deleteRowsBySessionId(token, tab, sessionId, colIndex = 0) {
-  const colA = await readRange(token, tab, 'A:A')
+/**
+ * Numeric tab ids, looked up by tab NAME from the spreadsheet itself, never assumed. A tab id is an internal number that
+ * differs from sheet to sheet; sending one that is wrong either fails the whole request or, worse, deletes rows in a
+ * DIFFERENT tab that happens to own that number. Throws a clear error, before anything is deleted or written, if a tab
+ * is not in the spreadsheet.
+ */
+export async function tabIdsByName(token, names) {
+  const res = await fetch(`${SHEETS_BASE}/${FIELD_SHEET_ID}?fields=sheets.properties(sheetId,title)`,
+    { headers: { Authorization: `Bearer ${token}` } })
+  if (!res.ok) {
+    const txt = await res.text().catch(()=>'')
+    throw new Error(`Could not read the tab list of the spreadsheet (${res.status}): ${txt.slice(0,200)}. Nothing was deleted or written.`)
+  }
+  const tabs = ((await res.json()).sheets || []).map(s => s.properties || {})
+  const out = {}
+  for (const name of names) {
+    const hit = tabs.find(t => t.title === name)
+    if (!hit || typeof hit.sheetId !== 'number')
+      throw new Error(`Tab "${name}" was not found in the spreadsheet (tabs found: ${tabs.map(t => t.title).join(', ') || 'none'}). Nothing was deleted or written.`)
+    out[name] = hit.sheetId
+  }
+  return out
+}
+
+// CHANGE 2: read the column that really holds the session id (events: A, sessions: B). It used to read 'A:A' and then
+// compare row[1], which is never there, so the sessions row of a re-saved half was never found and never deleted.
+async function deleteRowsBySessionId(token, tab, sessionId, colIndex = 0, sheetId) {
+  if (typeof sheetId !== 'number') throw new Error(`No tab id for ${tab}: refusing to delete rows`)
+  const letter = String.fromCharCode(65 + colIndex)
+  const idCol = await readRange(token, tab, `${letter}:${letter}`)
   const toDelete = []
-  colA.forEach((row, idx) => {
-    if (idx > 0 && row[colIndex] === sessionId) toDelete.push(idx + 1)
+  idCol.forEach((row, idx) => {
+    if (idx > 0 && row[0] === sessionId) toDelete.push(idx + 1)
   })
   if (toDelete.length === 0) return 0
 
   const requests = [...toDelete].reverse().map(rowNum => ({
     deleteDimension: {
-      range: { sheetId: tab === FIELD_TAB_SESSIONS ? 0 : 1,
+      range: { sheetId,
                dimension: 'ROWS', startIndex: rowNum-1, endIndex: rowNum }
     }
   }))
@@ -405,6 +434,7 @@ export async function findOwnSavedHalf({ matchId, half, hrCode, local = [] }) {
 
 // ── Main sync ─────────────────────────────────────────────────────────────
 export async function syncSessionToSheet(session, events) {
+  assertWritable('saving to the sheet')   // view mode: a compared half never reaches the sheet
   const token = await getToken()
 
   // 1. Validate/write headers on both tabs
@@ -427,10 +457,11 @@ export async function syncSessionToSheet(session, events) {
     }
   } catch(e) { console.warn('[MARK Field] duplicate check (non-fatal):', e.message) }
 
-  // 3. Delete existing rows for this session (idempotent retry safety)
+  // 3. Delete existing rows for this session (idempotent retry safety). Tab ids come from the sheet, by name, first.
+  const ids = await tabIdsByName(token, [FIELD_TAB_SESSIONS, FIELD_TAB_EVENTS])
   const [delSess, delEvs] = await Promise.all([
-    deleteRowsBySessionId(token, FIELD_TAB_SESSIONS, session.sessionId, 1),
-    deleteRowsBySessionId(token, FIELD_TAB_EVENTS,   session.sessionId, 0),
+    deleteRowsBySessionId(token, FIELD_TAB_SESSIONS, session.sessionId, 1, ids[FIELD_TAB_SESSIONS]),
+    deleteRowsBySessionId(token, FIELD_TAB_EVENTS,   session.sessionId, 0, ids[FIELD_TAB_EVENTS]),
   ])
   if (delSess + delEvs > 0)
     console.log(`[MARK Field] Deleted ${delSess} session rows, ${delEvs} event rows for retry`)

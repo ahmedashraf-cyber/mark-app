@@ -66,13 +66,15 @@ const RIGHT_EVENTS = [
   { key: null,   label: 'Match status',     id: 'match_status' },
 ]
 
-function EventCard({ ev, active, onClick }) {
+function EventCard({ ev, active, onClick, disabled = false }) {
   const isMouseOnly = ev.key === null
   return (
     <div
-      onClick={onClick}
+      onClick={disabled ? undefined : onClick}
+      data-disabled={disabled ? '1' : undefined} aria-disabled={disabled || undefined}
+      title={disabled ? 'View only. This half has been compared.' : undefined}
       className={`event-card ${active ? 'active' : ''} ${isMouseOnly ? 'mouse-only' : ''}`}
-      style={{ cursor: isMouseOnly || active ? 'pointer' : 'default' }}
+      style={{ cursor: disabled ? 'not-allowed' : isMouseOnly || active ? 'pointer' : 'default', ...(disabled ? { opacity: 0.4 } : {}) }}
     >
       <span style={{
         fontSize: 12,
@@ -112,7 +114,7 @@ function EventCard({ ev, active, onClick }) {
 
 // insertAfter (optional, FIELD only): { [eventId]: node } — a node rendered directly under that
 // event's card. Scout passes nothing, so its panel is exactly as before.
-function EventsSidebar({ side, activeKey, onMouseEvent, extraItems, insertAfter }) {
+function EventsSidebar({ side, activeKey, onMouseEvent, extraItems, insertAfter, readOnly = false }) {
   const events = side === 'left' ? LEFT_EVENTS : RIGHT_EVENTS
   const activeUpper = activeKey ? activeKey.toUpperCase() : null
 
@@ -148,7 +150,7 @@ function EventsSidebar({ side, activeKey, onMouseEvent, extraItems, insertAfter 
             <Fragment key={ev.id}>
               <EventCard
                 ev={ev}
-                active={ev.key !== null && activeUpper === ev.key}
+                active={ev.key !== null && activeUpper === ev.key} disabled={readOnly}
                 onClick={ev.key === null ? () => onMouseEvent?.(ev) : undefined}
               />
               {insertAfter[ev.id]}
@@ -157,7 +159,7 @@ function EventsSidebar({ side, activeKey, onMouseEvent, extraItems, insertAfter 
             <EventCard
               key={ev.id}
               ev={ev}
-              active={ev.key !== null && activeUpper === ev.key}
+              active={ev.key !== null && activeUpper === ev.key} disabled={readOnly}
               onClick={ev.key === null ? () => onMouseEvent?.(ev) : undefined}
             />
           )
