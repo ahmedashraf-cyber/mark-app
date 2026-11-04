@@ -10,7 +10,9 @@
  */
 
 // ── Google Sheet ───────────────────────────────────────────────────────────────
-export const FIELD_SHEET_ID      = '1l3tYwre5ik0nMbBS562tge0Ch4MHKcuXTuNdPaEoTec'
+// TEST BUILD ONLY (this line is not on the feature branch or on main): VITE_FIELD_SHEET_ID, set at BUILD time, points the whole app (Tag,
+// Comparison, Admin, Insights, the scores tab) at a COPY of the spreadsheet. Not set = the production sheet, exactly as before.
+export const FIELD_SHEET_ID      = import.meta.env?.VITE_FIELD_SHEET_ID || '1l3tYwre5ik0nMbBS562tge0Ch4MHKcuXTuNdPaEoTec'
 export const FIELD_TAB_SESSIONS  = 'field_sessions'
 export const FIELD_TAB_EVENTS    = 'field_events'
 
