@@ -71,6 +71,40 @@ export function filterReviews(reviews, f, now = new Date()) {
     (!periodDays || (now - x.savedAt) / 864e5 <= periodDays))
 }
 
+// ── Dependent filters ─────────────────────────────────────────────────────────
+// Each list-filter (Half, Match ID, Collector) offers only the values that still have reviews once ALL the OTHER filters are
+// applied, so no combination the screen offers can come back empty. Period is a time window, not a list of values: it is not
+// faceted, and a period with no reviews is an honest empty state.
+const HALF_ORDER = ['1H', '2H', 'ET1', 'ET2']
+export function compareHalves(a, b) {
+  const ia = HALF_ORDER.indexOf(a), ib = HALF_ORDER.indexOf(b)
+  if (ia !== -1 || ib !== -1) return (ia === -1 ? 99 : ia) - (ib === -1 ? 99 : ib)
+  return a.localeCompare(b)
+}
+export const compareNumericText = (a, b) => a.localeCompare(b, undefined, { numeric: true })
+/** Order in which a selection that has become impossible is reset to "All" (the one the user just changed is never reset). */
+export const FILTER_RESET_ORDER = ['match', 'collector', 'half']
+const FACET_FIELD = { match: 'match', collector: 'hr', half: 'half' }
+
+/** The values `key` can take given every OTHER filter: sorted, distinct. filters: { half, periodDays, match, collector }. */
+export function facetValues(reviews, filters, key, now = new Date()) {
+  const vals = [...new Set(filterReviews(reviews, { ...filters, [key]: '' }, now).map(x => x[FACET_FIELD[key]]))]
+  return vals.sort(key === 'half' ? compareHalves : compareNumericText)
+}
+
+/**
+ * Returns the filters with every impossible selection reset to "" (All). `changedKey` is the filter the user just changed: it is
+ * never reset, the others give way. Pass null after a data refresh, when any selection may have become impossible.
+ */
+export function resolveFilters(reviews, filters, changedKey = null, now = new Date()) {
+  const next = { half: '', periodDays: 0, match: '', collector: '', ...filters }
+  for (const key of FILTER_RESET_ORDER) {
+    if (key === changedKey || !next[key]) continue
+    if (!facetValues(reviews, next, key, now).includes(next[key])) next[key] = ''
+  }
+  return next
+}
+
 /** Weekly points, oldest first: the COUNT-BASED overall score of the reviews saved in that week. */
 export function weeklyTrend(rs) {
   const wk = new Map()

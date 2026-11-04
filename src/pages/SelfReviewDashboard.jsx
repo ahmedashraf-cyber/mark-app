@@ -17,7 +17,7 @@ import SearchSelect from '../components/SearchSelect'
 import { loadDashboardData } from '../utils/selfReviewDashData'
 import { readPassMark, setPassMark } from '../utils/selfReviewPassMark'
 import {
-  totals, overallScore, correctRatio, passRate, bestLowest, pillClass, filterReviews, weeklyTrend, trendDelta,
+  totals, overallScore, correctRatio, passRate, bestLowest, pillClass, filterReviews, weeklyTrend, trendDelta, facetValues, resolveFilters,
   errorBreakdown, leaderboard, reviewRow, sortRows, dayKey,
 } from '../utils/selfReviewDashStats'
 import {
@@ -161,10 +161,7 @@ export default function SelfReviewDashboard({ onBack }) {
   const [pmNotice, setPmNotice] = useState('')
   const [pmError, setPmError] = useState('')
   const [pmSaving, setPmSaving] = useState(false)
-  const [half, setHalf] = useState('')
-  const [period, setPeriod] = useState('0')
-  const [match, setMatch] = useState('')
-  const [collector, setCollector] = useState('')
+  const [filters, setFilters] = useState({ half: '', period: '0', match: '', collector: '' })
 
   const seq = useRef(0)
   const last = useRef({ at: 0, promise: null })
@@ -197,14 +194,28 @@ export default function SelfReviewDashboard({ onBack }) {
   }, [read, canView])
 
   // on open, and on every filter change
-  useEffect(() => { load(first.current); first.current = false }, [half, period, match, collector, load])
+  useEffect(() => { load(first.current); first.current = false }, [filters.half, filters.period, filters.match, filters.collector, load])
 
   const data = view.data
-  const effMatch = data && match && data.matches.includes(match) ? match : ''
-  const effHalf = data && half && data.halves.includes(half) ? half : ''
-  const rs = useMemo(() => (data ? filterReviews(data.reviews, {
-    half: effHalf, periodDays: Number(period), match: effMatch, collector: scope === 'all' ? collector : '',
-  }) : []), [data, effHalf, period, effMatch, collector, scope])
+  // DEPENDENT FILTERS. Half, Match ID and Collector each offer only values that still have reviews once the other filters are
+  // applied, so no offered combination is empty. `eff` is the selection with anything that has become impossible (new data after
+  // a refresh, a new period) reset to All; changing a filter by hand resets the OTHER ones that it makes impossible (see change()).
+  const eff = useMemo(() => (data
+    ? resolveFilters(data.reviews, { ...filters, periodDays: Number(filters.period), collector: scope === 'all' ? filters.collector : '' }, null)
+    : { half: '', periodDays: 0, match: '', collector: '' }), [data, filters, scope])
+  const query = { half: eff.half, periodDays: Number(filters.period), match: eff.match, collector: eff.collector }
+  const rs = useMemo(() => (data ? filterReviews(data.reviews, query) : []), [data, eff, filters.period])    // eslint-disable-line react-hooks/exhaustive-deps
+  const facets = useMemo(() => (data ? {
+    half: facetValues(data.reviews, query, 'half'), match: facetValues(data.reviews, query, 'match'), collector: facetValues(data.reviews, query, 'collector'),
+  } : { half: [], match: [], collector: [] }), [data, eff, filters.period])                                  // eslint-disable-line react-hooks/exhaustive-deps
+  function change(key, value) {
+    setFilters(f => {
+      const n = { ...f, [key]: value }
+      if (!data) return n
+      const r = resolveFilters(data.reviews, { half: n.half, periodDays: Number(n.period), match: n.match, collector: scope === 'all' ? n.collector : '' }, key === 'period' ? null : key)
+      return { half: r.half, period: n.period, match: r.match, collector: r.collector }
+    })
+  }
 
   async function changePassMark(v) {
     setPmError(''); setPmSaving(true)
@@ -253,15 +264,15 @@ export default function SelfReviewDashboard({ onBack }) {
           </div>)}
         {view.status === 'ok' && (<>
           <div style={{ display:'flex', flexWrap:'wrap', gap:10, alignItems:'flex-end', marginBottom:14 }}>
-            <SearchSelect label="Half" testId="f-half" value={effHalf} onChange={setHalf}
-              options={[{ value:'', label:'All halves' }, ...data.halves.map(h => ({ value:h, label:h }))]} />
-            <SearchSelect label="Period" testId="f-period" value={period} onChange={setPeriod}
+            <SearchSelect label="Half" testId="f-half" value={eff.half} onChange={v => change('half', v)}
+              options={[{ value:'', label:'All halves' }, ...facets.half.map(h => ({ value:h, label:h }))]} />
+            <SearchSelect label="Period" testId="f-period" value={filters.period} onChange={v => change('period', v)}
               options={[{ value:'0', label:'All time' }, { value:'30', label:'Last 30 days' }, { value:'90', label:'Last 90 days' }]} />
-            <SearchSelect label="Match ID" testId="f-match" value={effMatch} onChange={setMatch}
-              options={[{ value:'', label:'All matches' }, ...data.matches.map(m => ({ value:m, label:m }))]} />
+            <SearchSelect label="Match ID" testId="f-match" value={eff.match} onChange={v => change('match', v)}
+              options={[{ value:'', label:'All matches' }, ...facets.match.map(m => ({ value:m, label:m }))]} />
             {scope === 'all' && (
-              <SearchSelect label="Collector" testId="f-collector" value={collector} onChange={setCollector}
-                options={[{ value:'', label:'All collectors' }, ...data.collectors.map(c => ({ value:c, label:c }))]} />)}
+              <SearchSelect label="Collector" testId="f-collector" value={eff.collector} onChange={v => change('collector', v)}
+                options={[{ value:'', label:'All collectors' }, ...facets.collector.map(c => ({ value:c, label:c }))]} />)}
             <div style={{ marginLeft:'auto', textAlign:'right' }}>
               <SearchSelect label="Pass mark" testId="f-pass" value={passMark} onChange={changePassMark} disabled={!canEditPass || pmSaving}
                 options={PASS_MARK_OPTIONS.map(n => ({ value:n, label:`${n}%` }))} />

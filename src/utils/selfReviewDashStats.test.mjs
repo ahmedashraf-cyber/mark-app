@@ -1,7 +1,7 @@
 // SYNTHETIC data only. Dates are built from local parts so the suite does not depend on the machine's time zone.
 import {
   totals, overallScore, correctRatio, errorRate, passRate, bestLowest, pillClass, filterReviews, weekStart, weeklyTrend, trendDelta,
-  errorBreakdown, leaderboard, reviewRow, sortRows, dayKey,
+  errorBreakdown, leaderboard, reviewRow, sortRows, dayKey, facetValues, resolveFilters, compareHalves, compareNumericText,
 } from './selfReviewDashStats.js'
 
 let pass = 0, fail = 0
@@ -141,6 +141,58 @@ console.log('table rows and sorting')
   ok('match ids sort numerically (9, 10, 100), not as text', sortRows(rows, 'match', 1).map(r => r.match).join() === '9,10,100')
   ok('a null Correct % sorts first ascending without crashing', sortRows(rows, 'correctPct', 1)[0].correctPct === 25 || sortRows(rows, 'correctPct', 1)[0].correctPct === null)
   ok('sorting does not change the input', rows[0].match === '10')
+}
+
+console.log('dependent filters: each list offers only what still has reviews given the OTHER filters')
+{
+  const NOW = D(2026, 11, 3)
+  const mk = (hr, match, half, day, mon = 10) => rv({ hr, match, half, savedAt: D(2026, mon, day) })
+  const R = [mk('A-073', '1445555', '1H', 19), mk('A-368', '1453624', '1H', 21), mk('A-1387', '1471525', '1H', 22), mk('A-1387', '1445206', '2H', 22), mk('A-073', '8000001', '1H', 20, 8)]
+  const F = (o = {}) => ({ half: '', periodDays: 0, match: '', collector: '', ...o })
+  const J = JSON.stringify
+  ok('nothing selected: every value of each list is offered, numbers in numeric order', J(facetValues(R, F(), 'match', NOW)) === '["1445206","1445555","1453624","1471525","8000001"]' && J(facetValues(R, F(), 'collector', NOW)) === '["A-073","A-368","A-1387"]' && J(facetValues(R, F(), 'half', NOW)) === '["1H","2H"]')
+  ok('YOUR CASE: collector A-073 selected, the Match list offers only A-073\'s matches: 1453624 is NOT among them', J(facetValues(R, F({ collector: 'A-073' }), 'match', NOW)) === '["1445555","8000001"]')
+  ok('match 1453624 selected: the Collector list offers only A-368', J(facetValues(R, F({ match: '1453624' }), 'collector', NOW)) === '["A-368"]')
+  ok('half follows the others: A-368 has only 1H; A-1387 has 1H and 2H', J(facetValues(R, F({ collector: 'A-368' }), 'half', NOW)) === '["1H"]' && J(facetValues(R, F({ collector: 'A-1387' }), 'half', NOW)) === '["1H","2H"]')
+  ok('a list is computed WITHOUT its own selection, so the user can still switch (match 1445555 selected still lists the other matches)', J(facetValues(R, F({ match: '1445555' }), 'match', NOW)) === '["1445206","1445555","1453624","1471525","8000001"]')
+  ok('the period narrows every list: Last 30 days drops the August match and nothing else', J(facetValues(R, F({ periodDays: 30 }), 'match', NOW)) === '["1445206","1445555","1453624","1471525"]')
+  ok('filters combine: A-1387 + 2H offers only match 1445206', J(facetValues(R, F({ collector: 'A-1387', half: '2H' }), 'match', NOW)) === '["1445206"]')
+  ok('a selection with no reviews gives an empty list, not an error', J(facetValues(R, F({ collector: 'A-368', half: '2H' }), 'match', NOW)) === '[]' && J(facetValues([], F(), 'match', NOW)) === '[]')
+  ok('half sorting 1H, 2H, ET1, ET2 and unknown halves last', [...['ET2', 'X', '2H', 'ET1', '1H']].sort(compareHalves).join() === '1H,2H,ET1,ET2,X')
+  ok('numeric text sorting: 9 before 10 before 100, A-2 before A-10', ['100', '10', '9'].sort(compareNumericText).join() === '9,10,100' && ['A-10', 'A-2'].sort(compareNumericText).join() === 'A-2,A-10')
+
+  // ---- resolveFilters: a selection that has become impossible goes back to All ----
+  const same = (a, b) => a.half === b.half && a.match === b.match && a.collector === b.collector && a.periodDays === b.periodDays
+  ok('YOUR CASE, collector changed to A-073 while match 1453624 was selected: the MATCH resets, the collector the user picked stays', same(resolveFilters(R, F({ collector: 'A-073', match: '1453624' }), 'collector', NOW), F({ collector: 'A-073' })))
+  ok('match changed to 1453624 while collector A-073 was selected: the COLLECTOR resets, the match stays', same(resolveFilters(R, F({ collector: 'A-073', match: '1453624' }), 'match', NOW), F({ match: '1453624' })))
+  ok('a possible combination is left exactly alone', same(resolveFilters(R, F({ collector: 'A-1387', match: '1445206', half: '2H' }), 'match', NOW), F({ collector: 'A-1387', match: '1445206', half: '2H' })))
+  ok('the period shrinks and the August match is no longer possible: the match resets, the collector (still has October reviews) stays', same(resolveFilters(R, F({ collector: 'A-073', match: '8000001', periodDays: 30 }), null, NOW), F({ collector: 'A-073', periodDays: 30 })))
+  ok('after a refresh the collector no longer exists in the data: it resets, and the other valid filters stay', same(resolveFilters(R.filter(x => x.hr !== 'A-368'), F({ collector: 'A-368', half: '1H' }), null, NOW), F({ half: '1H' })))
+  ok('a reset does not over-reset: half 1H stays when only the match was impossible', same(resolveFilters(R, F({ collector: 'A-073', match: '1453624', half: '1H' }), 'collector', NOW), F({ collector: 'A-073', half: '1H' })))
+  ok('a period with no reviews at all clears every list filter (the empty state is then honest)', (() => { const r = resolveFilters(R, F({ collector: 'A-073', match: '1445555', periodDays: 1 }), null, NOW); return r.collector === '' && r.match === '' && filterReviews(R, r, NOW).length === 0 })())
+  ok('the input object is not modified', (() => { const f = F({ collector: 'A-073', match: '1453624' }); resolveFilters(R, f, 'collector', NOW); return f.match === '1453624' })())
+
+  // ---- the guarantee: whatever the user picks from an offered list, the screen is never empty ----
+  let seed = 7; const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647
+  const pick = a => a[Math.floor(rnd() * a.length)]
+  let bad = 0, runs = 0
+  for (let i = 0; i < 600; i++) {
+    const hrs = ['A-1', 'A-2', 'A-3', 'A-10'], halves = ['1H', '2H', 'ET1']
+    const set = Array.from({ length: 1 + Math.floor(rnd() * 14) }, () => rv({ hr: pick(hrs), match: String(100 + Math.floor(rnd() * 6)), half: pick(halves), savedAt: D(2026, 8 + Math.floor(rnd() * 3), 1 + Math.floor(rnd() * 28)) }))
+    let state = F({ periodDays: pick([0, 30, 90]) })
+    for (let step = 0; step < 6; step++) {
+      const key = pick(['match', 'collector', 'half'])
+      const offered = facetValues(set, state, key, NOW)
+      const value = pick(['', ...offered])
+      state = resolveFilters(set, { ...state, [key]: value }, key, NOW)
+      runs++
+      const periodOnly = filterReviews(set, { periodDays: state.periodDays }, NOW).length
+      if (periodOnly > 0 && filterReviews(set, state, NOW).length === 0) bad++
+    }
+    const newPeriod = pick([0, 30, 90]); state = resolveFilters(set, { ...state, periodDays: newPeriod }, null, NOW)
+    if (filterReviews(set, { periodDays: newPeriod }, NOW).length > 0 && filterReviews(set, state, NOW).length === 0) bad++
+  }
+  ok(`${runs}+ random sequences of picks from the offered lists and period changes: NEVER an empty screen when the period has reviews`, bad === 0, `${bad} empty`)
 }
 
 console.log('totals')

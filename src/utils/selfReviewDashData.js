@@ -28,6 +28,7 @@ import {
   SELF_REVIEW_RESULTS_SPREADSHEET_ID, SELF_REVIEW_RESULTS_TAB,
   SELF_REVIEW_HEADER, SELF_REVIEW_HEADER_LEGACY, SCORE_CHECK_TOLERANCE,
 } from '../config/selfReviewDashboardConfig.js'
+import { compareHalves, compareNumericText } from './selfReviewDashStats.js'
 
 const BASE = 'https://sheets.googleapis.com/v4/spreadsheets'
 
@@ -87,13 +88,6 @@ export function checkHeader(headerRow) {
 function emptyResult(scope, reason, legacyHeader = false) {
   return { reviews: [], noComparison: 0, duplicates: 0, incomplete: 0, runsRead: 0, rowsRead: 0,
     legacyHeader, halves: [], matches: [], collectors: [], scope, reason }
-}
-
-const HALF_ORDER = ['1H', '2H', 'ET1', 'ET2']
-const byHalf = (a, b) => {
-  const ia = HALF_ORDER.indexOf(a), ib = HALF_ORDER.indexOf(b)
-  if (ia !== -1 || ib !== -1) return (ia === -1 ? 99 : ia) - (ib === -1 ? 99 : ib)
-  return a.localeCompare(b)
 }
 
 /** One data row -> { rec } or { problem }. */
@@ -200,9 +194,9 @@ export function processValues(values, ctx) {
 
   return {
     reviews, noComparison, duplicates, incomplete, runsRead: parsed.length, rowsRead, legacyHeader: legacy,
-    halves: [...new Set(reviews.map(x => x.half))].sort(byHalf),
-    matches: [...new Set(reviews.map(x => x.match))].sort((a, b) => a.localeCompare(b, undefined, { numeric: true })),
-    collectors: [...new Set(reviews.map(x => x.hr))].sort((a, b) => a.localeCompare(b, undefined, { numeric: true })),
+    halves: [...new Set(reviews.map(x => x.half))].sort(compareHalves),
+    matches: [...new Set(reviews.map(x => x.match))].sort(compareNumericText),
+    collectors: [...new Set(reviews.map(x => x.hr))].sort(compareNumericText),
     scope, reason: null,
   }
 }

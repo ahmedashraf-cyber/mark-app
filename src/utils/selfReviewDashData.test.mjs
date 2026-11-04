@@ -100,6 +100,26 @@ console.log('loud failures: nothing is silently dropped')
   try { many(); ok('several problems are all reported', false) } catch (er) { ok('several problems are all reported, not just the first', er.problems.length === 2 && /2 problem/.test(er.message), er.message) }
 }
 
+console.log('mixed cell types in one sheet: match_id as a number for some rows and text for others; mangled time cells')
+{
+  const withMatch = (rows, v) => rows.map(r => { const c = [...r]; c[3] = v; return c })
+  const mixed = sheet(withMatch(run({ id: 'num', hr: 'T-001', match: 'x' }), 1445555), withMatch(run({ id: 'txt', hr: 'T-002', match: 'x' }), '1453624'))
+  const r = processValues(mixed, all)
+  ok('a number in one run and text in another both come out as plain text ids', r.reviews.map(x => x.match).sort().join() === '1445555,1453624' && r.reviews.every(x => typeof x.match === 'string'))
+  ok('the Match filter list holds both, sorted as numbers', JSON.stringify(r.matches) === '["1445555","1453624"]')
+  ok('a collector whose rows are numbers and one whose rows are text are both read in the own-halves view', processValues(mixed, own('T-001')).reviews[0].match === '1445555' && processValues(mixed, own('T-002')).reviews[0].match === '1453624')
+  const half = run({ id: 'half', hr: 'T-001', match: 'x', trainer: 6 }); half.forEach((row, i) => { row[3] = i % 2 ? 1445555 : '1445555' })
+  ok('ONE run whose own rows mix number and text for the same match id is not "disagreeing rows": it is one run', processValues(sheet(half), all).reviews.length === 1)
+  const dupMixed = processValues(sheet(withMatch(run({ id: 'first', hr: 'T-001', match: 'x' }), 1445555), withMatch(run({ id: 'second', hr: 'T-001', match: 'x', at: '2026-10-25T10:00:00.000Z' }), '1445555')), all)
+  ok('the SAME half saved once as a number and once as text is still ONE half: the later run is a duplicate', dupMixed.reviews.length === 1 && dupMixed.duplicates === 1 && dupMixed.reviews[0].runId === 'first')
+  ok('a match id with surrounding spaces is trimmed', processValues(sheet(withMatch(run({ id: 'a' }), '  1445555 ')), all).reviews[0].match === '1445555')
+  // the dashboard reads NO time column: columns 12 and 13 can hold anything
+  const timeShapes = ['2:50', '24:26:00', 2400, 0.0170, '', null, true, '  ', 'abc']
+  const odd = run({ id: 'times', hr: 'T-001', match: '5', trainer: 9 }); odd.forEach((row, i) => { row[12] = timeShapes[i % timeShapes.length]; row[13] = timeShapes[(i + 3) % timeShapes.length] })
+  const clean = run({ id: 'times', hr: 'T-001', match: '5', trainer: 9 })
+  ok('trainer_time / collector_time as text, "24:26:00", a number, a time fraction, blank, boolean or garbage change NOTHING in the result', JSON.stringify(processValues(sheet(odd), all).reviews) === JSON.stringify(processValues(sheet(clean), all).reviews))
+}
+
 console.log('a run must agree with ITSELF (check A and check B)')
 {
   const fails = (rs, scope = all) => { try { processValues(sheet(...rs), scope); return null } catch (e) { return e.code === 'BAD_DATA' ? e : { code: e.code, problems: [] } } }
