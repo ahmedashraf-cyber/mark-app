@@ -120,6 +120,11 @@ export function capabilities(role, overrides) {
     quizManage:  operator,           // create, edit, publish
     // Collector Self-Review: defaults to the same access as Tag (all roles).
     selfReview:  operator || collector,
+    // Self-Review dashboard (read-only scores view inside Self-Review). Same default reach as Self-Review itself. Collector
+    // roles only ever see their OWN results; that scope follows the role, not this key.
+    selfReviewDashboard: operator || collector,
+    // Changing the pass mark the dashboard colours and counts against: Batch Manager only by default.
+    selfReviewPassMark:  manager,
     quizAssign:  operator,
     // My halves (read-only): a collector rewatching their own halves against the model answer, and a reviewer doing
     // the same for any collector. Named separately so a Batch Manager can tune both in the Role Access matrix.

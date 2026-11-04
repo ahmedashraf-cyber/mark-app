@@ -49,14 +49,14 @@ async function saToken() {
 
 // ── generic helpers ─────────────────────────────────────────────────────────
 
-async function readRange(sheetId, range) {
+export async function readRange(sheetId, range) {
   const url = `${BASE}/${sheetId}/values/${encodeURIComponent(range)}`
   const res = await fetch(url, { headers: { Authorization: `Bearer ${await saToken()}` } })
   if (!res.ok) throw new Error(`Read failed (${res.status}) on ${range}`)
   return (await res.json()).values || []
 }
 
-async function writeRange(sheetId, range, values) {
+export async function writeRange(sheetId, range, values) {
   const url = `${BASE}/${sheetId}/values/${encodeURIComponent(range)}?valueInputOption=RAW`
   const res = await fetch(url, {
     method: 'PUT',
@@ -66,7 +66,7 @@ async function writeRange(sheetId, range, values) {
   if (!res.ok) throw new Error(`Write failed (${res.status}) on ${range}: ${await res.text()}`)
 }
 
-async function appendRows(sheetId, tab, values) {
+export async function appendRows(sheetId, tab, values) {
   const url = `${BASE}/${sheetId}/values/${encodeURIComponent(tab + '!A:A')}`
     + ':append?valueInputOption=RAW&insertDataOption=INSERT_ROWS'
   const res = await fetch(url, {
@@ -78,7 +78,7 @@ async function appendRows(sheetId, tab, values) {
 }
 
 /** Create a tab if it is missing, then make sure row 1 is the header. */
-async function ensureTab(sheetId, tab, header) {
+export async function ensureTab(sheetId, tab, header) {
   const meta = await fetch(`${BASE}/${sheetId}?fields=sheets.properties.title`,
     { headers: { Authorization: `Bearer ${await saToken()}` } })
   if (!meta.ok) throw new Error(`Could not list tabs (${meta.status})`)
@@ -329,6 +329,8 @@ export const PERMISSIONS = [
   { key:'selfReview',       label:'Self-Review' },
   { key:'viewOwnHalves',    label:'My halves (own)' },
   { key:'viewAnyHalves',    label:'My halves (any collector)' },
+  { key:'selfReviewDashboard', label:'Self-Review dashboard' },
+  { key:'selfReviewPassMark',  label:'Self-Review pass mark (edit)' },
 ]
 
 export const ACCESS_HEADER = ['role', ...PERMISSIONS.map(p => p.key)]
@@ -380,7 +382,7 @@ export async function saveRoleAccess(matrix, changedBy) {
 // ── config: minimum version ─────────────────────────────────────────────────
 
 export const CONFIG_TAB = 'config'
-const CONFIG_HEADER = ['key', 'value']
+export const CONFIG_HEADER = ['key', 'value']
 
 export async function loadConfig() {
   try {
