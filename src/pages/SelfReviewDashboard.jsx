@@ -70,8 +70,8 @@ function Kpi({ label, value, sub, testId }) {
 function Trend({ rs, passMark }) {
   const pts = weeklyTrend(rs).filter(p => p.overall != null)
   if (!pts.length) return <div style={S.empty}>No matched reviews</div>
-  const W = 640, H = 230, L = 34, B = 26, T = 10, Rr = 10, hi = 100
-  const lo = Math.min(60, Math.floor(Math.min(...pts.map(p => p.overall)) / 5) * 5, passMark)
+  const W = 640, H = 230, L = 34, B = 26, T = 10, Rr = 26, hi = 100
+  const lo = Math.min(60, Math.floor(Math.min(...pts.map(p => p.overall)) / 10) * 10, Math.floor(passMark / 10) * 10)   // gridlines fall on multiples of 10, 100 included
   const X = i => L + (pts.length > 1 ? i / (pts.length - 1) : 0.5) * (W - L - Rr)
   const Yv = v => T + (hi - v) / (hi - lo) * (H - T - B)
   const grid = []
