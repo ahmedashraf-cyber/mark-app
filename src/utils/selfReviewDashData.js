@@ -17,8 +17,11 @@
  *  6. Every run must agree with ITSELF, or the screen would contradict itself:
  *       check A: trainer_rows = matched + wrong_event + missed
  *       check B: |score_percent - max(0, 100 - (missed + wrong_event + collector_only) / trainer_rows x 100)| <= 0.1
- *     (check B is skipped when the score is blank: that run has nothing to compare). A run that fails is reported with its run_id
- *     and which check, like the other bad-data rules, and no scores are shown.
+ *     (check B is skipped when the score is blank: that run has nothing to compare). A run that fails is LEFT OUT, and only that run:
+ *     it is returned in `excludedRuns` (run_id, sheet row, which check, the numbers) for the screen to list in a red banner, and
+ *     everything else is scored. It is removed BEFORE the earliest run of its half is chosen, so a later valid run of that half can
+ *     stand in for it. Rules 1-3 (header, unparseable data, a run whose rows disagree) still block everything: they mean the tab
+ *     cannot be trusted at all, not that one run is wrong.
  *
  * Uses the mark-reporter service account (invoke get_google_access_token_cmd), never an API key. Does not touch
  * selfReviewSheet.js, which owns the write path.
@@ -86,7 +89,7 @@ export function checkHeader(headerRow) {
 }
 
 function emptyResult(scope, reason, legacyHeader = false) {
-  return { reviews: [], noComparison: 0, duplicates: 0, incomplete: 0, runsRead: 0, rowsRead: 0,
+  return { reviews: [], excludedRuns: [], noComparison: 0, duplicates: 0, incomplete: 0, runsRead: 0, rowsRead: 0,
     legacyHeader, halves: [], matches: [], collectors: [], scope, reason }
 }
 
@@ -141,20 +144,27 @@ export function processValues(values, ctx) {
   }
 
   const parsed = []
+  const excludedRuns = []
   for (const [runId, list] of runs) {
     const first = list[0]
     const odd = list.find(x => sig(x.rec) !== sig(first.rec))
     if (odd) { problems.push({ runId, row: odd.row, reason: `rows of this run disagree (row ${first.row} vs row ${odd.row})` }); continue }
     const rec = first.rec
     const accounted = rec.correct + rec.wrong + rec.missed
+    const issues = []
     if (rec.trainerRows !== accounted) {
-      problems.push({ runId, row: first.row, reason: `check A failed: reviewer events (trainer_rows ${rec.trainerRows}) must equal matched + wrong_event + missed (${rec.correct} + ${rec.wrong} + ${rec.missed} = ${accounted})` })
+      issues.push({ check: 'A', text: `reviewer events (trainer_rows ${rec.trainerRows}) must equal matched + wrong_event + missed (${rec.correct} + ${rec.wrong} + ${rec.missed} = ${accounted})` })
     }
     if (rec.score !== null && rec.trainerRows > 0) {
       const expected = Math.max(0, 100 - (rec.missed + rec.wrong + rec.extra) / rec.trainerRows * 100)
       if (Math.abs(rec.score - expected) > SCORE_CHECK_TOLERANCE + 1e-9) {
-        problems.push({ runId, row: first.row, reason: `check B failed: stored score ${rec.score}% disagrees with its own counts, which give ${expected.toFixed(1)}% (100 - (missed + wrong_event + collector_only) / trainer_rows)` })
+        issues.push({ check: 'B', text: `stored score ${rec.score}% disagrees with its own counts, which give ${expected.toFixed(1)}% (100 - (missed + wrong_event + collector_only) / trainer_rows)` })
       }
+    }
+    if (issues.length) {          // leave out THIS run only; it is listed for the screen to show
+      excludedRuns.push({ runId, row: first.row, hr: rec.hr, match: rec.match, half: rec.half, issues,
+        numbers: { trainerRows: rec.trainerRows, matched: rec.correct, wrongEvent: rec.wrong, missed: rec.missed, collectorOnly: rec.extra, storedScore: rec.score } })
+      continue
     }
     parsed.push({ ...rec, rowCount: list.length, firstRow: first.row })
   }
@@ -193,7 +203,7 @@ export function processValues(values, ctx) {
   reviews.sort((a, b) => a.savedAt - b.savedAt || a.runId.localeCompare(b.runId))
 
   return {
-    reviews, noComparison, duplicates, incomplete, runsRead: parsed.length, rowsRead, legacyHeader: legacy,
+    reviews, excludedRuns, noComparison, duplicates, incomplete, runsRead: parsed.length, rowsRead, legacyHeader: legacy,
     halves: [...new Set(reviews.map(x => x.half))].sort(compareHalves),
     matches: [...new Set(reviews.map(x => x.match))].sort(compareNumericText),
     collectors: [...new Set(reviews.map(x => x.hr))].sort(compareNumericText),

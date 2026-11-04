@@ -282,6 +282,21 @@ export default function SelfReviewDashboard({ onBack }) {
           {pmNotice && <div style={{ ...S.note, color:Y, marginBottom:8 }} role="status" data-testid="pass-notice">{pmNotice}</div>}
           {pmError && <div style={{ ...S.note, color:R, marginBottom:8 }} role="alert" data-testid="pass-error">{pmError}</div>}
 
+          {data.excludedRuns?.length > 0 && (
+            <div style={{ ...S.card, borderColor:'rgba(239,91,91,.55)', background:'rgba(239,91,91,.08)', marginBottom:12 }} role="alert" data-testid="excluded-banner">
+              <div style={{ color:R, fontWeight:600, marginBottom:4 }}>
+                {data.excludedRuns.length} run{data.excludedRuns.length === 1 ? '' : 's'} left out: {data.excludedRuns.length === 1 ? 'its' : 'their'} own numbers do not add up
+              </div>
+              <div style={{ ...S.note, color:'var(--t-2)', marginBottom:6 }}>
+                Everything else is shown below. Fix or remove {data.excludedRuns.length === 1 ? 'this row' : 'these rows'} in the {SELF_REVIEW_RESULTS_TAB} tab, then press Refresh.
+              </div>
+              <ul style={{ margin:0, paddingLeft:18, color:'var(--t-1)', fontSize:12 }}>
+                {data.excludedRuns.slice(0, 10).map(x => (
+                  <li key={x.runId} data-testid="excluded-run">{x.runId} · row {x.row} · {x.issues.map(i => `check ${i.check}: ${i.text}`).join('; ')}</li>))}
+                {data.excludedRuns.length > 10 && <li>…and {data.excludedRuns.length - 10} more</li>}
+              </ul>
+            </div>)}
+
           {data.reason === 'NO_HR_CODE' && (
             <div style={{ ...S.card, ...S.empty }} data-testid="empty">Your account has no HR-code, so there are no halves to show.</div>)}
           {data.reason !== 'NO_HR_CODE' && data.reviews.length === 0 && (
@@ -293,7 +308,7 @@ export default function SelfReviewDashboard({ onBack }) {
               <Kpi testId="k-overall" label="Overall score" value={pct1(overallScore(rs))}
                 sub={`${delta == null ? '' : `${delta >= 0 ? '▲ ' : '▼ '}${Math.abs(delta).toFixed(1)} vs earlier · `}all errors incl. collector-only`} />
               <Kpi testId="k-correct" label="Correct ratio" value={pct1(correctRatio(rs))}
-                sub={t.trainer > 0 ? `${t.correct.toLocaleString()} of ${t.trainer.toLocaleString()} reviewer events` : 'correct ÷ reviewer events'} />
+                sub={t.trainer > 0 ? `${t.correct.toLocaleString()} of ${t.trainer.toLocaleString()} reviewer events` : 'correct of reviewer events'} />
               <Kpi testId="k-reviews" label={scope === 'all' ? 'Matched reviews' : 'My halves'} value={rs.length}
                 sub={scope === 'all' ? `${new Set(rs.map(x => x.hr)).size} collector(s)` : 'reviewed & matched'} />
               <Kpi testId="k-pass" label="Pass rate" value={passRate(rs, passMark) == null ? '–' : `${passRate(rs, passMark)}%`} sub={`≥ ${passMark}% pass mark`} />
@@ -310,6 +325,7 @@ export default function SelfReviewDashboard({ onBack }) {
           <p style={{ ...S.note, marginTop:12 }} data-testid="footer">
             Score = 100% − (missed + wrong_event + collector_only) ÷ trainer_rows. Only runs with a trainer comparison are scored.
             {' '}{data.noComparison} run(s) with no trainer comparison excluded; {data.duplicates} later duplicate run(s) ignored.
+            {data.excludedRuns?.length > 0 && ` ${data.excludedRuns.length} run(s) left out for inconsistent numbers (see the red note above).`}
             {data.incomplete > 0 && ` ${data.incomplete} run(s) have fewer rows than their own summary says: check the copy is complete.`}
           </p>
         </>)}
