@@ -36,5 +36,10 @@ export const PASS_MARK_DEFAULT = 85
 export const PASS_MARK_OPTIONS = [50, 55, 60, 65, 70, 75, 80, 85, 90, 95, 100]
 export const PASS_MARK_AMBER_BAND = 10          // within this many points below the pass mark = amber
 
+// A run's stored score must agree with its own counts to within this many points (the app stores one decimal)
+export const SCORE_CHECK_TOLERANCE = 0.1
+// "vs earlier" is only meaningful when the reviews in view span at least this many days (two weeks)
+export const TREND_DELTA_MIN_SPAN_DAYS = 14
+
 // Two reads closer together than this share one network call (protects the Sheets quota). Every filter change still asks.
 export const DASH_MIN_READ_GAP_MS = 5000

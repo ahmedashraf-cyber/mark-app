@@ -17,7 +17,7 @@
  *
  * Every divisor is guarded: no reviewer events means null ("no data"), never NaN or Infinity.
  */
-import { PASS_MARK_AMBER_BAND } from '../config/selfReviewDashboardConfig.js'
+import { PASS_MARK_AMBER_BAND, TREND_DELTA_MIN_SPAN_DAYS } from '../config/selfReviewDashboardConfig.js'
 
 export function totals(rs) {
   let T = 0, C = 0, mi = 0, wr = 0, ex = 0
@@ -83,10 +83,15 @@ export function weeklyTrend(rs) {
     .map(([week, list]) => ({ week, n: list.length, overall: overallScore(list) }))
 }
 
-/** Later half of the reviews minus the earlier half, both count-based. Needs more than 3 reviews, else null. */
+/**
+ * Later half of the reviews minus the earlier half, both count-based. null (so the screen shows nothing) unless there are more
+ * than 3 reviews AND they span at least two weeks: over a few days a "trend" is noise.
+ */
 export function trendDelta(rs) {
   if (rs.length <= 3) return null
   const sorted = [...rs].sort((a, b) => a.savedAt - b.savedAt || a.runId.localeCompare(b.runId))
+  const spanDays = (sorted[sorted.length - 1].savedAt - sorted[0].savedAt) / 864e5
+  if (spanDays < TREND_DELTA_MIN_SPAN_DAYS) return null
   const half = Math.floor(sorted.length / 2)
   const later = overallScore(sorted.slice(half)), earlier = overallScore(sorted.slice(0, half))
   return later === null || earlier === null ? null : later - earlier

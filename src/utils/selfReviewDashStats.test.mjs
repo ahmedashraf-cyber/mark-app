@@ -95,14 +95,19 @@ ok('a week that crosses a year end', weekStart(D(2027, 1, 2)) === '2026-12-28')
   ok('no reviews: no points', weeklyTrend([]).length === 0)
 }
 
-console.log('trend delta: later half minus earlier half, count-based, needs more than 3 reviews')
+console.log('trend delta: later half minus earlier half, count-based; needs more than 3 reviews AND at least two weeks of data')
 ok('3 reviews or fewer: no delta', trendDelta([rv(), rv(), rv()]) === null && trendDelta([]) === null)
 {
   const mk = (d, errors) => rv({ savedAt: D(2026, 10, d), trainerRows: 10, correct: 10 - errors, missed: errors, wrong: 0, extra: 0 })
-  const rs = [mk(1, 5), mk(2, 5), mk(3, 1), mk(4, 1)]
-  ok('4 reviews: later two (90) minus earlier two (50) = +40', near(trendDelta(rs), 40), String(trendDelta(rs)))
-  ok('the input order does not matter', near(trendDelta([...rs].reverse()), 40))
-  ok('5 reviews: the extra one goes to the later half', trendDelta([mk(1, 5), mk(2, 5), mk(3, 1), mk(4, 1), mk(5, 1)]) !== null)
+  const spread = [mk(1, 5), mk(8, 5), mk(15, 1), mk(22, 1)]
+  ok('4 reviews over 21 days: later two (90) minus earlier two (50) = +40', near(trendDelta(spread), 40), String(trendDelta(spread)))
+  ok('the input order does not matter', near(trendDelta([...spread].reverse()), 40))
+  ok('5 reviews over 28 days: the extra one goes to the later half', trendDelta([mk(1, 5), mk(8, 5), mk(15, 1), mk(22, 1), mk(29, 1)]) !== null)
+  ok('4 reviews within 3 days (the real data): NO delta, however different the halves are', trendDelta([mk(1, 5), mk(2, 5), mk(3, 1), mk(4, 1)]) === null)
+  ok('4 reviews spanning 13 days: no delta (less than two weeks)', trendDelta([mk(1, 5), mk(5, 5), mk(9, 1), mk(14, 1)]) === null)
+  ok('4 reviews spanning exactly 14 days: the delta appears (+40)', near(trendDelta([mk(1, 5), mk(5, 5), mk(10, 1), mk(15, 1)]), 40), String(trendDelta([mk(1, 5), mk(5, 5), mk(10, 1), mk(15, 1)])))
+  ok('the span is measured on the reviews in view: a long history narrowed to one week has no delta', trendDelta(filterReviews([...spread, mk(23, 1), mk(24, 1)], { periodDays: 0 }).filter(x => x.savedAt >= D(2026, 10, 22))) === null)
+  ok('the span uses the actual dates, not the number of weekly buckets: two reviews either side of a Monday are 1 day apart', trendDelta([mk(24, 5), mk(25, 5), mk(26, 1), mk(27, 1)]) === null)
 }
 
 console.log('error breakdown')

@@ -14,6 +14,11 @@
  *  4. One review per half (HR-code + match + half): the EARLIEST run, as Self-Review itself shows. Later runs are ignored
  *     and counted.
  *  5. Rule B: a chosen run counts only if its score is not blank AND trainer_rows > 0. A score of 0 is a real score.
+ *  6. Every run must agree with ITSELF, or the screen would contradict itself:
+ *       check A: trainer_rows = matched + wrong_event + missed
+ *       check B: |score_percent - max(0, 100 - (missed + wrong_event + collector_only) / trainer_rows x 100)| <= 0.1
+ *     (check B is skipped when the score is blank: that run has nothing to compare). A run that fails is reported with its run_id
+ *     and which check, like the other bad-data rules, and no scores are shown.
  *
  * Uses the mark-reporter service account (invoke get_google_access_token_cmd), never an API key. Does not touch
  * selfReviewSheet.js, which owns the write path.
@@ -21,7 +26,7 @@
 import { invoke } from '@tauri-apps/api/core'
 import {
   SELF_REVIEW_RESULTS_SPREADSHEET_ID, SELF_REVIEW_RESULTS_TAB,
-  SELF_REVIEW_HEADER, SELF_REVIEW_HEADER_LEGACY,
+  SELF_REVIEW_HEADER, SELF_REVIEW_HEADER_LEGACY, SCORE_CHECK_TOLERANCE,
 } from '../config/selfReviewDashboardConfig.js'
 
 const BASE = 'https://sheets.googleapis.com/v4/spreadsheets'
@@ -146,7 +151,18 @@ export function processValues(values, ctx) {
     const first = list[0]
     const odd = list.find(x => sig(x.rec) !== sig(first.rec))
     if (odd) { problems.push({ runId, row: odd.row, reason: `rows of this run disagree (row ${first.row} vs row ${odd.row})` }); continue }
-    parsed.push({ ...first.rec, rowCount: list.length, firstRow: first.row })
+    const rec = first.rec
+    const accounted = rec.correct + rec.wrong + rec.missed
+    if (rec.trainerRows !== accounted) {
+      problems.push({ runId, row: first.row, reason: `check A failed: reviewer events (trainer_rows ${rec.trainerRows}) must equal matched + wrong_event + missed (${rec.correct} + ${rec.wrong} + ${rec.missed} = ${accounted})` })
+    }
+    if (rec.score !== null && rec.trainerRows > 0) {
+      const expected = Math.max(0, 100 - (rec.missed + rec.wrong + rec.extra) / rec.trainerRows * 100)
+      if (Math.abs(rec.score - expected) > SCORE_CHECK_TOLERANCE + 1e-9) {
+        problems.push({ runId, row: first.row, reason: `check B failed: stored score ${rec.score}% disagrees with its own counts, which give ${expected.toFixed(1)}% (100 - (missed + wrong_event + collector_only) / trainer_rows)` })
+      }
+    }
+    parsed.push({ ...rec, rowCount: list.length, firstRow: first.row })
   }
   if (problems.length) {
     // One problem per run and reason, however many of its rows share it: a 14-row run with one bad date is ONE thing to fix.
