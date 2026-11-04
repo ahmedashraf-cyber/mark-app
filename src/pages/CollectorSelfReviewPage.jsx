@@ -16,6 +16,7 @@ import {
   doc, getDoc, runTransaction, updateDoc, serverTimestamp,
 } from 'firebase/firestore'
 import { useAuth } from '../hooks/useAuth'
+import SelfReviewDashboard from './SelfReviewDashboard'
 import {
   loadCollectorHalves,
   loadSavedReviews,
@@ -108,8 +109,10 @@ export function selfReviewIsDirty(rows, isLocked) {
 }
 
 export default function CollectorSelfReviewPage({ onBack, onDirtyChange }) {
-  const { roleInfo } = useAuth()
+  const { roleInfo, caps } = useAuth()
   const hrCode = (roleInfo?.code || '').trim().toUpperCase()
+  // 'review' = this page as it always was; 'dashboard' = the read-only scores view (SelfReviewDashboard)
+  const [view, setView] = useState('review')
 
   // Page-level state
   const [halves,       setHalves]       = useState([])        // [{key,matchId,half,sheetId}]
@@ -644,6 +647,10 @@ export default function CollectorSelfReviewPage({ onBack, onDirtyChange }) {
     ? (activeFilter === 'all' ? lastRun.results : lastRun.results.filter(r => r.status === activeFilter))
     : []
 
+  // The dashboard is a different screen drawn by this same page, placed after every hook above so the hook order never
+  // changes and an unsaved review (rows, lastRun, status) is still here when you come back.
+  if (view === 'dashboard' && caps?.selfReviewDashboard) return <SelfReviewDashboard onBack={() => setView('review')} />
+
   return (
     <div style={S.page}>
       {/* Header */}
@@ -651,6 +658,13 @@ export default function CollectorSelfReviewPage({ onBack, onDirtyChange }) {
         <button style={S.backBtn} onClick={onBack}>←</button>
         <span style={S.title}>Self-Review</span>
         {hrCode && <span style={S.sub}>· {hrCode}</span>}
+        {caps?.selfReviewDashboard && (
+          <div style={{ display:'flex', gap:4, marginLeft:10 }} role="tablist" aria-label="Self-Review views">
+            <button role="tab" aria-selected="true" style={{ background:'var(--bg-3)', border:'1px solid var(--b-2)', color:'var(--t-1)', borderRadius:8, padding:'4px 12px', fontSize:12, cursor:'default' }}>Review a half</button>
+            <button role="tab" aria-selected="false" data-testid="open-dashboard" onClick={() => setView('dashboard')}
+              style={{ background:'none', border:'1px solid transparent', color:'var(--t-3)', borderRadius:8, padding:'4px 12px', fontSize:12, cursor:'pointer' }}>Dashboard</button>
+          </div>
+        )}
         <div style={{ flex:1 }}/>
         {selectedHalf && (
           <div style={{ display:'flex', alignItems:'center', gap:8, flexWrap:'wrap' }}>
