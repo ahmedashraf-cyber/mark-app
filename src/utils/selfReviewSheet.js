@@ -6,34 +6,29 @@
  * Trainer review sheets must be shared with mark-reporter as Viewer (Option Z
  * ensures this for new sheets; existing sheets are shared manually).
  *
- * Read by: CollectorSelfReviewPage.jsx only.
+ * Read by: CollectorSelfReviewPage.jsx only. (The dashboard reads the same tab through selfReviewDashData.js and never writes.)
  * Does not touch Scout, Audit, FIELD, Drill, Comparison, or Insights.
  */
 
 import { invoke } from '@tauri-apps/api/core'
+import {
+  SELF_REVIEW_RESULTS_SPREADSHEET_ID, SELF_REVIEW_RESULTS_TAB, SELF_REVIEW_HEADER, SELF_REVIEW_HEADER_LEGACY,
+} from '../config/selfReviewDashboardConfig.js'
 
 const SAMPLED_SHEET_ID = '1XGVp4o7xu8mwPkhEamz-d1aiWYCkkhR-ffTlVQCcsrM'
 const SAMPLED_TAB      = 'Sampled Halves'
-const SAVE_TAB         = 'Collector Self Review'
+// Where results are SAVED and read back: the "Collector Self Review" tab of the Mark Field Collected Data spreadsheet
+// (moved from the Sampled Halves spreadsheet in v7.12.31). One definition, in selfReviewDashboardConfig.js.
+const RESULTS_SHEET_ID   = SELF_REVIEW_RESULTS_SPREADSHEET_ID
+const SAVE_TAB          = SELF_REVIEW_RESULTS_TAB
 const BASE             = 'https://sheets.googleapis.com/v4/spreadsheets'
 const DRIVE_BASE       = 'https://www.googleapis.com/drive/v3/files'
 
 // The authoritative 19-column header (v7.12.9+).
 // Columns 18-19 (wrong_event, collector_event) were appended in v7.12.9.
 // The 17-column v7.12.8 header is migrated on first write after the upgrade.
-const SAVE_HEADER = [
-  'run_id','saved_at_iso','collector_hr_code','match_id','half',
-  'score_percent','trainer_rows','matched','missed','collector_only',
-  'status','event','trainer_time','collector_time','delta_s',
-  'trainer_error_type','collector_error_type',
-  'wrong_event','collector_event',
-]
-const SAVE_HEADER_V788 = [
-  'run_id','saved_at_iso','collector_hr_code','match_id','half',
-  'score_percent','trainer_rows','matched','missed','collector_only',
-  'status','event','trainer_time','collector_time','delta_s',
-  'trainer_error_type','collector_error_type',
-]
+const SAVE_HEADER      = SELF_REVIEW_HEADER
+const SAVE_HEADER_V788 = SELF_REVIEW_HEADER_LEGACY
 
 // Map half number (column D) to the internal code used everywhere in MARK.
 const HALF_FROM_NUM = { '1':'1H', '2':'2H', '3':'ET1', '4':'ET2' }
@@ -168,7 +163,7 @@ export async function loadSavedReviews(hrCode) {
   const data = await sheetGet(
     // Read through col S (19 cols) so new wrong_event/collector_event columns are included.
     // Rows written by v7.12.8 only have 17 columns; cols R/S will simply be undefined → ''.
-    `${BASE}/${SAMPLED_SHEET_ID}/values/${encodeURIComponent(`'${SAVE_TAB}'!A1:S50000`)}`,
+    `${BASE}/${RESULTS_SHEET_ID}/values/${encodeURIComponent(`'${SAVE_TAB}'!A1:S50000`)}`,
     tok
   )
   const rows = (data.values || []).slice(1) // skip header row
@@ -261,7 +256,7 @@ export async function loadTrainerSheet(sheetId, matchId) {
 export async function verifySaveHeader() {
   const tok  = await saToken()
   const data = await sheetGet(
-    `${BASE}/${SAMPLED_SHEET_ID}/values/${encodeURIComponent(`'${SAVE_TAB}'!A1:S1`)}`,
+    `${BASE}/${RESULTS_SHEET_ID}/values/${encodeURIComponent(`'${SAVE_TAB}'!A1:S1`)}`,
     tok
   )
   const hdr = (data.values?.[0] || []).map(s => String(s || '').trim())
@@ -274,7 +269,7 @@ export async function verifySaveHeader() {
   if (JSON.stringify(hdr) === JSON.stringify(SAVE_HEADER_V788)) {
     // Migrate: append the two new column headers into R1:S1.
     await sheetPost(
-      `${BASE}/${SAMPLED_SHEET_ID}/values/${encodeURIComponent(`'${SAVE_TAB}'!R1:S1`)}?valueInputOption=RAW`,
+      `${BASE}/${RESULTS_SHEET_ID}/values/${encodeURIComponent(`'${SAVE_TAB}'!R1:S1`)}?valueInputOption=RAW`,
       tok,
       { values: [['wrong_event', 'collector_event']] }
     )
@@ -291,7 +286,7 @@ export async function verifySaveHeader() {
 export async function appendSaveRows(rows) {
   const tok = await saToken()
   return sheetPost(
-    `${BASE}/${SAMPLED_SHEET_ID}/values/${encodeURIComponent(`'${SAVE_TAB}'!A1`)}:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS`,
+    `${BASE}/${RESULTS_SHEET_ID}/values/${encodeURIComponent(`'${SAVE_TAB}'!A1`)}:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS`,
     tok,
     { values: rows }
   )
@@ -301,7 +296,7 @@ export async function appendSaveRows(rows) {
 export async function savedRowsForRunId(runId) {
   const tok  = await saToken()
   const data = await sheetGet(
-    `${BASE}/${SAMPLED_SHEET_ID}/values/${encodeURIComponent(`'${SAVE_TAB}'!A1:A50000`)}`,
+    `${BASE}/${RESULTS_SHEET_ID}/values/${encodeURIComponent(`'${SAVE_TAB}'!A1:A50000`)}`,
     tok
   )
   const col = (data.values || []).flat().map(s => String(s || '').trim())
