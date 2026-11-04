@@ -247,7 +247,7 @@ export default function SelfReviewDashboard({ onBack }) {
             <div style={{ color:'var(--t-1)', fontSize:13 }}>{view.error?.message || String(view.error)}</div>
             {view.error?.problems?.length > 0 && (
               <ul style={{ margin:'10px 0 0', paddingLeft:18, color:'var(--t-2)', fontSize:12 }}>
-                {view.error.problems.slice(0, 10).map((p, i) => <li key={i}>{p.runId} · row {p.row}: {p.reason}</li>)}
+                {view.error.problems.slice(0, 10).map((p, i) => <li key={i}>{p.runId} · row {p.row}{p.moreRows ? ` (and ${p.moreRows} more row(s))` : ''}: {p.reason}</li>)}
                 {view.error.problems.length > 10 && <li>…and {view.error.problems.length - 10} more</li>}
               </ul>)}
           </div>)}

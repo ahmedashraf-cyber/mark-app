@@ -68,21 +68,30 @@ console.log('a score of 0 is a real score; rule B')
 
 console.log('loud failures: nothing is silently dropped')
 {
-  const bad = (mut, id = 'bad') => { const rows = run({ id }); mut(rows[0]); return processValues(sheet(run({ id: 'good', match: '9' }), rows), all) }
+  // the change is applied to EVERY row of the run, so the rows agree with each other and only the rule under test can fire
+  const bad = (mut, id = 'bad') => { const rows = run({ id }); rows.forEach(mut); return processValues(sheet(run({ id: 'good', match: '9' }), rows), all) }
   const code = (mut) => { try { bad(mut); return null } catch (e) { return e } }
+  const why = (e, re) => !!e && e.code === 'BAD_DATA' && e.problems.length === 1 && re.test(e.problems[0].reason) && e.problems[0].runId === 'bad'
   let e = code(r => { r[1] = 46315.4 })
-  ok('a saved_at_iso that Sheets converted to a date serial fails loudly, naming the run and the sheet row', e?.code === 'BAD_DATA' && /bad/.test(e.message) && e.problems[0].row === 6, e?.message)
-  e = code(r => { r[1] = 'yesterday' }); ok('non-ISO text in saved_at_iso fails', e?.code === 'BAD_DATA')
-  e = code(r => { r[1] = '2026-10-20 10:00' }); ok('a date without the T separator fails (not guessed)', e?.code === 'BAD_DATA')
-  e = code(r => { r[6] = 'four' }); ok('a non-numeric trainer_rows fails', e?.code === 'BAD_DATA')
-  e = code(r => { r[8] = '1.5' }); ok('a fractional count fails', e?.code === 'BAD_DATA')
-  e = code(r => { r[5] = 101 }); ok('a score above 100 fails', e?.code === 'BAD_DATA')
-  e = code(r => { r[17] = 'x' }); ok('a non-numeric wrong_event fails', e?.code === 'BAD_DATA')
-  e = code(r => { r[3] = '' }); ok('a blank match_id fails', e?.code === 'BAD_DATA')
-  e = code(r => { r[2] = '' }); ok('a blank HR-code fails for the all-collectors view', e?.code === 'BAD_DATA')
-  e = code(r => { r[0] = '' }); ok('a row with no run_id fails', e?.code === 'BAD_DATA' && e.problems[0].runId === '(blank)')
+  ok('a saved_at_iso that Sheets converted to a date serial fails loudly, naming the run and the sheet row', why(e, /not an ISO date-time/) && e.problems[0].row === 6 && /bad \(row 6 and 3 more row\(s\)\)/.test(e.message), e?.message)
+  e = code(r => { r[1] = 'yesterday' }); ok('non-ISO text in saved_at_iso fails, for that reason', why(e, /not an ISO date-time/), e?.message)
+  e = code(r => { r[1] = '2026-10-20 10:00' }); ok('a date without the T separator fails (JavaScript would accept it; we do not guess)', why(e, /not an ISO date-time/), e?.message)
+  e = code(r => { r[1] = '2026-10-20' }); ok('a date with no time fails', why(e, /not an ISO date-time/), e?.message)
+  e = code(r => { r[1] = '2026-13-45T10:00:00Z' }); ok('an impossible date fails', why(e, /not an ISO date-time/), e?.message)
+  e = code(r => { r[6] = 'four' }); ok('a non-numeric trainer_rows fails, naming the column', why(e, /trainer_rows/), e?.message)
+  e = code(r => { r[8] = '1.5' }); ok('a fractional count fails, naming the column', why(e, /missed/), e?.message)
+  e = code(r => { r[7] = -1 }); ok('a negative count fails', why(e, /matched/), e?.message)
+  e = code(r => { r[5] = 101 }); ok('a score above 100 fails', why(e, /score_percent/), e?.message)
+  e = code(r => { r[5] = 'ninety' }); ok('a non-numeric score fails', why(e, /score_percent/), e?.message)
+  e = code(r => { r[17] = 'x' }); ok('a non-numeric wrong_event fails', why(e, /wrong_event/), e?.message)
+  e = code(r => { r[3] = '' }); ok('a blank match_id fails', why(e, /match_id is blank/), e?.message)
+  e = code(r => { r[4] = '' }); ok('a blank half fails', why(e, /half is blank/), e?.message)
+  e = code(r => { r[2] = '' }); ok('a blank HR-code fails for the all-collectors view', why(e, /collector_hr_code is blank/), e?.message)
+  e = code(r => { r[0] = '' }); ok('a row with no run_id fails', e?.code === 'BAD_DATA' && e.problems.every(p => p.runId === '(blank)' && /run_id is blank/.test(p.reason)), e?.message)
   try { processValues(sheet(run({ id: 'x', trainer: 3 }).map((r, i) => (i === 2 ? r.map((c, k) => (k === 5 ? '99' : c)) : r))), all); ok('rows of one run that disagree fail', false) }
   catch (er) { ok('rows of one run that disagree fail and say which rows', er.code === 'BAD_DATA' && /disagree/.test(er.message) && er.problems[0].row === 4, er.message) }
+  try { processValues(sheet(run({ id: 'wide', trainer: 14 }).map(r => { r[1] = 'x'; return r })), all); ok('a bad run is reported', false) }
+  catch (er) { ok('a 14-row run with one bad date is ONE problem, with the number of affected rows, not fourteen', er.problems.length === 1 && er.problems[0].moreRows === 13 && /1 problem\(s\)/.test(er.message) && /and 13 more row\(s\)/.test(er.message), er.message) }
   const many = processValues.bind(null, sheet(run({ id: 'p', trainer: 1 }).map(r => { r[1] = 'x'; return r }), run({ id: 'q', match: '2', trainer: 1 }).map(r => { r[6] = 'n'; return r })), all)
   try { many(); ok('several problems are all reported', false) } catch (er) { ok('several problems are all reported, not just the first', er.problems.length === 2 && /2 problem/.test(er.message), er.message) }
 }

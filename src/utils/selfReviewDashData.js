@@ -149,9 +149,18 @@ export function processValues(values, ctx) {
     parsed.push({ ...first.rec, rowCount: list.length, firstRow: first.row })
   }
   if (problems.length) {
-    const shown = problems.slice(0, 3).map(p => `${p.runId} (row ${p.row}): ${p.reason}`).join('; ')
+    // One problem per run and reason, however many of its rows share it: a 14-row run with one bad date is ONE thing to fix.
+    const uniq = new Map()
+    for (const p of problems) {
+      const k = `${p.runId}|${p.reason}`
+      if (uniq.has(k)) uniq.get(k).moreRows++
+      else uniq.set(k, { ...p, moreRows: 0 })
+    }
+    const list = [...uniq.values()]
+    const more = p => (p.moreRows ? ` and ${p.moreRows} more row(s)` : '')
+    const shown = list.slice(0, 3).map(p => `${p.runId} (row ${p.row}${more(p)}): ${p.reason}`).join('; ')
     throw new DashDataError('BAD_DATA',
-      `${problems.length} problem(s) in the "${SELF_REVIEW_RESULTS_TAB}" tab, so no scores are shown. ${shown}${problems.length > 3 ? '; and more' : ''}.`, problems)
+      `${list.length} problem(s) in the "${SELF_REVIEW_RESULTS_TAB}" tab, so no scores are shown. ${shown}${list.length > 3 ? '; and more' : ''}.`, list)
   }
 
   // One review per half: the earliest run (ties by run_id), the same run Self-Review shows. The rest are ignored and counted.
