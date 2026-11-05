@@ -16,15 +16,18 @@ import {
   doc, getDoc, runTransaction, updateDoc, serverTimestamp,
 } from 'firebase/firestore'
 import { useAuth } from '../hooks/useAuth'
+import SelfReviewDashboard from './SelfReviewDashboard'
 import {
   loadCollectorHalves,
   loadSavedReviews,
   loadTrainerSheet,
   verifySaveHeader,
   appendSaveRows,
-  savedRowsForRunId,
+  readHalfState,
   SAVE_HEADER,
 } from '../utils/selfReviewSheet'
+import { makeLockStore } from '../utils/selfReviewLockStore'
+import { saveHalf, retryPending } from '../utils/selfReviewSave'
 import {
   compare,
   labelToCode,
@@ -40,6 +43,9 @@ import {
 import { HALVES } from '../utils/half'
 
 const LOCK_COLLECTION = 'mark_self_review_locks'
+// The save lock lives in Firestore, the rows in the sheet. The rules for how they interact are in utils/selfReviewSave.js.
+const lockStore = makeLockStore({ doc, getDoc, runTransaction, updateDoc, serverTimestamp }, db, LOCK_COLLECTION)
+const saveSheet = { readHalfState, verifyHeader: verifySaveHeader, appendRows: appendSaveRows }
 const TOLERANCE_S     = 2
 const HALF_LABEL = { '1H':'1st half','2H':'2nd half','ET1':'Extra time 1','ET2':'Extra time 2' }
 
@@ -108,8 +114,10 @@ export function selfReviewIsDirty(rows, isLocked) {
 }
 
 export default function CollectorSelfReviewPage({ onBack, onDirtyChange }) {
-  const { roleInfo } = useAuth()
+  const { roleInfo, caps } = useAuth()
   const hrCode = (roleInfo?.code || '').trim().toUpperCase()
+  // 'review' = this page as it always was; 'dashboard' = the read-only scores view (SelfReviewDashboard)
+  const [view, setView] = useState('review')
 
   // Page-level state
   const [halves,       setHalves]       = useState([])        // [{key,matchId,half,sheetId}]
@@ -440,126 +448,66 @@ export default function CollectorSelfReviewPage({ onBack, onDirtyChange }) {
   }
 
   // ── Save ──────────────────────────────────────────────────────────────────
+  // The lock rules (a lock with no rows behind it never blocks; a takeover needs a clean full read of the sheet) live in
+  // utils/selfReviewSave.js. This function only turns its outcome into a message.
   async function saveToSheet() {
     if (!lastRun || lastRun.saved || saving) return
     setSaving(true)
     const { matchId, half } = lastRun
-    const lockId = `${hrCode}_${matchId}_${half}`
-
     setStatus({ type:'loading', msg:'Checking this half hasn\'t been saved yet…' })
-
-    // Step a: Firestore transaction — create lock with status "pending" or abort.
-    let runId, savedAt
-    try {
-      const lockRef = doc(db, LOCK_COLLECTION, lockId)
-      await runTransaction(db, async tx => {
-        const snap = await tx.get(lockRef)
-        if (snap.exists()) {
-          const d = snap.data()
-          if (d.status === 'saved') throw Object.assign(new Error('already_saved'), { lockData: d })
-          if (d.status === 'pending') throw Object.assign(new Error('pending_lock'), { lockData: d })
-          throw Object.assign(new Error('already_saved'), { lockData: d })
-        }
-        runId   = `${hrCode}_${matchId}_${half}_${Date.now()}`
-        savedAt = new Date().toISOString()
-        tx.set(lockRef, {
-          hr_code: hrCode, match_id: matchId, half, status: 'pending',
-          run_id: runId, created_at: serverTimestamp(), saved_at: null,
-        })
-      })
-    } catch (e) {
-      setSaving(false)
-      if (e.message === 'already_saved') {
-        // Refresh saved map and show read-only view
-        const saved = await loadSavedReviews(hrCode).catch(() => savedMap)
-        setSavedMap(saved)
-        setStatus({ type:'error', msg:'This half was already saved by another session, so this review wasn\'t saved. Your saved results are shown below.' })
-        return
-      }
-      if (e.message === 'pending_lock') {
-        setStatus({ type:'error', msg:'Your last save didn\'t finish — use Retry to complete it.' })
-        return
-      }
-      setStatus({ type:'error', msg: `Couldn't create the save lock: ${e.message}` })
-      return
-    }
-
-    // Step b: verify header + append rows.
-    setStatus({ type:'loading', msg:`Saving ${lastRun.results.length} rows to the sheet…` })
-    const sheetRows = buildSheetRows(lastRun, runId, savedAt)
-    try {
-      await verifySaveHeader()
-      await appendSaveRows(sheetRows)
-    } catch (e) {
-      // Sheet write failed — update lock to failed and surface error.
-      try {
-        await updateDoc(doc(db, LOCK_COLLECTION, lockId), { status: 'failed', error: e.message })
-      } catch (_) {}
-      setSaving(false)
-      setStatus({ type:'error', msg:`${e.message} — nothing was confirmed saved. Check the tab before retrying.` })
-      return
-    }
-
-    // Step c: update lock to "saved".
-    try {
-      await updateDoc(doc(db, LOCK_COLLECTION, lockId), { status: 'saved', saved_at: serverTimestamp() })
-    } catch (_) {
-      // Non-fatal — sheet write succeeded.
-      console.warn('[MARK SelfReview] Lock status update to "saved" failed (non-fatal).')
-    }
-
-    // Update local saved map and show read-only view.
-    const updatedSaved = await loadSavedReviews(hrCode).catch(() => {
-      const m = new Map(savedMap)
-      m.set(selectedKey, sheetRows.map(r => r.map(v => String(v ?? ''))))
-      return m
+    const res = await saveHalf({ lockStore, sheet: saveSheet }, {
+      hrCode, matchId, half, buildRows: (runId, savedAt) => buildSheetRows(lastRun, runId, savedAt),
     })
-    setSavedMap(updatedSaved)
-    setLastRun(prev => ({ ...prev, saved: true, readOnly: true, runId, savedAt }))
+    if (res.outcome === 'saved') {
+      const sheetRows = buildSheetRows(lastRun, res.runId, res.savedAt)
+      const updatedSaved = await loadSavedReviews(hrCode).catch(() => {
+        const m = new Map(savedMap)
+        m.set(selectedKey, sheetRows.map(r => r.map(v => String(v ?? ''))))
+        return m
+      })
+      setSavedMap(updatedSaved)
+      setLastRun(prev => ({ ...prev, saved: true, readOnly: true, runId: res.runId, savedAt: res.savedAt }))
+      setStatus({ type:'info', msg:`Saved ${res.count} rows. This half is now locked.${res.tookOver ? ' (An earlier attempt had not written anything, so its lock was replaced.)' : ''}` })
+    } else if (res.outcome === 'already_saved') {
+      const saved = await loadSavedReviews(hrCode).catch(() => savedMap)
+      setSavedMap(saved)
+      setStatus({ type:'error', msg:'This half was already saved by another session, so this review wasn\'t saved. Your saved results are shown below.' })
+    } else if (res.outcome === 'in_progress') {
+      setStatus({ type:'error', msg:'Your last save didn\'t finish — use Retry to complete it.' })
+    } else if (res.outcome === 'blocked') {
+      setStatus({ type:'error', msg:`Couldn't check the sheet, so nothing was saved and no lock was changed: ${res.error.message}` })
+    } else if (res.outcome === 'failed') {
+      setStatus({ type:'error', msg:`${res.error.message} — nothing was written. You can press Save again.` })
+    } else {
+      setStatus({ type:'error', msg:`Couldn't create the save lock: ${res.error.message}` })
+    }
     setSaving(false)
-    setStatus({ type:'info', msg:`Saved ${sheetRows.length} rows. This half is now locked.` })
   }
 
   // ── Retry (pending lock) ──────────────────────────────────────────────────
   async function retryPendingSave() {
     if (!lastRun || saving) return
     const { matchId, half } = lastRun
-    const lockId = `${hrCode}_${matchId}_${half}`
     setSaving(true)
     setStatus({ type:'loading', msg:'Checking what was saved before…' })
-    try {
-      const lockSnap = await getDoc(doc(db, LOCK_COLLECTION, lockId))
-      if (!lockSnap.exists()) { setStatus({ type:'error', msg:'No pending lock found.' }); setSaving(false); return }
-      const { run_id: runId, status: lockStatus } = lockSnap.data()
-      if (lockStatus === 'saved') {
-        const saved = await loadSavedReviews(hrCode)
-        setSavedMap(saved)
-        setStatus({ type:'info', msg:'This half is already saved.' })
-        setSaving(false); return
-      }
-      // Check if the run_id row already made it to the sheet
-      const alreadyInSheet = await savedRowsForRunId(runId)
-      if (alreadyInSheet) {
-        await updateDoc(doc(db, LOCK_COLLECTION, lockId), { status: 'saved', saved_at: serverTimestamp() })
-        const saved = await loadSavedReviews(hrCode)
-        setSavedMap(saved)
-        setStatus({ type:'info', msg:'Found your rows in the sheet — lock updated. Half is now saved.' })
-        setSaving(false); return
-      }
-      // Not in sheet — re-append
-      setStatus({ type:'loading', msg:'Re-saving…' })
-      const savedAt = new Date().toISOString()
-      const sheetRows = buildSheetRows(lastRun, runId, savedAt)
-      await verifySaveHeader()
-      await appendSaveRows(sheetRows)
-      await updateDoc(doc(db, LOCK_COLLECTION, lockId), { status: 'saved', saved_at: serverTimestamp() })
-      const saved = await loadSavedReviews(hrCode)
-      setSavedMap(saved)
-      setLastRun(prev => ({ ...prev, saved: true, readOnly: true }))
+    const res = await retryPending({ lockStore, sheet: saveSheet }, {
+      hrCode, matchId, half, buildRows: (runId, savedAt) => buildSheetRows(lastRun, runId, savedAt),
+    })
+    if (res.outcome === 'no_lock') {
+      setStatus({ type:'error', msg:'No pending lock found.' })
+    } else if (res.outcome === 'already_saved') {
+      setSavedMap(await loadSavedReviews(hrCode).catch(() => savedMap))
+      setStatus({ type:'info', msg: res.repaired ? 'Found your rows in the sheet — lock updated. Half is now saved.' : 'This half is already saved.' })
+    } else if (res.outcome === 'saved') {
+      setSavedMap(await loadSavedReviews(hrCode).catch(() => savedMap))
+      setLastRun(prev => ({ ...prev, saved: true, readOnly: true, runId: res.runId, savedAt: res.savedAt }))
       setStatus({ type:'info', msg:'Save completed. Half is now locked.' })
-    } catch (e) {
-      setStatus({ type:'error', msg: `Retry failed: ${e.message}` })
-    } finally { setSaving(false) }
+    } else if (res.outcome === 'blocked') {
+      setStatus({ type:'error', msg:`Couldn't check the sheet, so nothing was changed: ${res.error.message}` })
+    } else {
+      setStatus({ type:'error', msg:`Retry failed: ${res.error.message}` })
+    }
+    setSaving(false)
   }
 
   // ── CSV export ────────────────────────────────────────────────────────────
@@ -644,6 +592,10 @@ export default function CollectorSelfReviewPage({ onBack, onDirtyChange }) {
     ? (activeFilter === 'all' ? lastRun.results : lastRun.results.filter(r => r.status === activeFilter))
     : []
 
+  // The dashboard is a different screen drawn by this same page, placed after every hook above so the hook order never
+  // changes and an unsaved review (rows, lastRun, status) is still here when you come back.
+  if (view === 'dashboard' && caps?.selfReviewDashboard) return <SelfReviewDashboard onBack={() => setView('review')} />
+
   return (
     <div style={S.page}>
       {/* Header */}
@@ -651,6 +603,13 @@ export default function CollectorSelfReviewPage({ onBack, onDirtyChange }) {
         <button style={S.backBtn} onClick={onBack}>←</button>
         <span style={S.title}>Self-Review</span>
         {hrCode && <span style={S.sub}>· {hrCode}</span>}
+        {caps?.selfReviewDashboard && (
+          <div style={{ display:'flex', gap:4, marginLeft:10 }} role="tablist" aria-label="Self-Review views">
+            <button role="tab" aria-selected="true" style={{ background:'var(--bg-3)', border:'1px solid var(--b-2)', color:'var(--t-1)', borderRadius:8, padding:'4px 12px', fontSize:12, cursor:'default' }}>Review a half</button>
+            <button role="tab" aria-selected="false" data-testid="open-dashboard" onClick={() => setView('dashboard')}
+              style={{ background:'none', border:'1px solid transparent', color:'var(--t-3)', borderRadius:8, padding:'4px 12px', fontSize:12, cursor:'pointer' }}>Dashboard</button>
+          </div>
+        )}
         <div style={{ flex:1 }}/>
         {selectedHalf && (
           <div style={{ display:'flex', alignItems:'center', gap:8, flexWrap:'wrap' }}>
