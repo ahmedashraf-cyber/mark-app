@@ -136,6 +136,7 @@ console.log('the bootstrap full-access account')
 console.log('where it points')
 ok('a normal build points the pass mark at the real People spreadsheet', SELF_REVIEW_CONFIG_SPREADSHEET_ID === PEOPLE_SHEET_ID && defaultDeps.spreadsheetId === PEOPLE_SHEET_ID)
 ok('the only way to repoint it is the build constant VITE_SELF_REVIEW_CONFIG_SHEET_ID', /VITE_SELF_REVIEW_CONFIG_SHEET_ID/.test(fs.readFileSync('src/config/selfReviewDashboardConfig.js', 'utf8')))
+ok('the config reads the build variable by its STATIC name and never a bare import.meta.env (which would embed the whole environment in the bundle)', (() => { const code = fs.readFileSync('src/config/selfReviewDashboardConfig.js', 'utf8').replace(/\/\/.*$/gm, ''); return /import\.meta\.env\.VITE_SELF_REVIEW_CONFIG_SHEET_ID/.test(code) && !/import\.meta\.env(?!\.VITE_)/.test(code) })())
 ok('the module holds no spreadsheet id literal', !/[0-9A-Za-z_-]{40,}/.test(fs.readFileSync('src/utils/selfReviewPassMark.js', 'utf8')))
 
 console.log(`\n${pass} passed, ${fail} failed`)

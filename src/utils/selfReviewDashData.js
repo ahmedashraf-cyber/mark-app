@@ -32,6 +32,7 @@ import {
   SELF_REVIEW_HEADER, SELF_REVIEW_HEADER_LEGACY, SCORE_CHECK_TOLERANCE,
 } from '../config/selfReviewDashboardConfig.js'
 import { compareHalves, compareNumericText } from './selfReviewDashStats.js'
+import { describeTarget, readReply, failureMessage } from './sheetsFetch.js'
 
 const BASE = 'https://sheets.googleapis.com/v4/spreadsheets'
 
@@ -226,9 +227,8 @@ export async function loadDashboardData(ctx, deps = {}) {
     + '?valueRenderOption=UNFORMATTED_VALUE'
   let res
   try { res = await doFetch(url, { headers: { Authorization: `Bearer ${token}` } }) }
-  catch (e) { throw new DashDataError('NETWORK', `Could not reach Google Sheets: ${e?.message || e}`) }
-  let body = null
-  try { body = await res.json() } catch { body = null }
+  catch (e) { throw new DashDataError('NETWORK', `Could not reach Google Sheets while reading ${describeTarget(url)}: ${e?.message || e}`) }
+  const { data: body, raw } = await readReply(res)
   if (!res.ok) {
     const msg = body?.error?.message || `HTTP ${res.status}`
     if (res.status === 400 && /unable to parse range/i.test(msg)) {
@@ -238,7 +238,8 @@ export async function loadDashboardData(ctx, deps = {}) {
     if (res.status === 403 || res.status === 401) {
       throw new DashDataError('NO_ACCESS', 'The MARK service account is not allowed to read the Mark Field Collected Data spreadsheet. Ask a Batch Manager to share it with the service account.')
     }
-    throw new DashDataError('READ_FAILED', `Reading the scores failed: ${msg}`)
+    throw new DashDataError('READ_FAILED', `Reading the scores failed. ${failureMessage(res, 'GET', url, body, raw)}`)
   }
+  if (body === undefined) throw new DashDataError('READ_FAILED', `Reading the scores failed. ${failureMessage(res, 'GET', url, body, raw)}`)
   return processValues(body?.values, ctx)
 }

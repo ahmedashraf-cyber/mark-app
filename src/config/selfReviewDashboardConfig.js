@@ -29,8 +29,11 @@ export const SELF_REVIEW_HEADER_LEGACY = SELF_REVIEW_HEADER.slice(0, 17)
 // Stored in the existing key/value `config` tab of the People spreadsheet (the same tab that holds minimum_version).
 // A build can point this at a COPY of that spreadsheet with VITE_SELF_REVIEW_CONFIG_SHEET_ID, so a test installer never
 // touches production. A normal build leaves it unset and uses the real People spreadsheet.
-export const SELF_REVIEW_CONFIG_SPREADSHEET_ID =
-  (import.meta.env && import.meta.env.VITE_SELF_REVIEW_CONFIG_SHEET_ID) || PEOPLE_SHEET_ID
+// The variable is read by its STATIC NAME so Vite replaces just that one value (or `undefined`). Never write `import.meta.env && ...`
+// here: a bare reference to import.meta.env makes Vite embed the whole environment object in the bundle. (Outside Vite, as in the unit
+// tests, import.meta.env does not exist: the try/catch turns that into "not set".)
+const fromBuild = (() => { try { return import.meta.env.VITE_SELF_REVIEW_CONFIG_SHEET_ID } catch { return undefined } })()
+export const SELF_REVIEW_CONFIG_SPREADSHEET_ID = fromBuild || PEOPLE_SHEET_ID
 export const PASS_MARK_KEY = 'self_review_pass_mark'
 export const PASS_MARK_DEFAULT = 85
 export const PASS_MARK_OPTIONS = [50, 55, 60, 65, 70, 75, 80, 85, 90, 95, 100]

@@ -239,6 +239,16 @@ console.log('the loader (Sheets call mocked)')
   ok('a network failure is NETWORK', await errCode(new Error('offline')) === 'NETWORK')
   ok('an empty tab (no values) is TAB_EMPTY', await errCode({ ok: true, status: 200, json: async () => ({}) }) === 'TAB_EMPTY')
   ok('a response that is not JSON does not crash', await errCode({ ok: false, status: 502, json: async () => { throw new Error('html') } }) === 'READ_FAILED')
+  const msgOf = async res => { try { await loadDashboardData(all, mk(res)); return null } catch (e) { return { code: e.code, message: e.message } } }
+  const SHORT = `${SELF_REVIEW_RESULTS_SPREADSHEET_ID.slice(0, 6)}…${SELF_REVIEW_RESULTS_SPREADSHEET_ID.slice(-4)}`
+  let m = await msgOf({ ok: false, status: 502, statusText: 'Bad Gateway', text: async () => '<html><body><h1>Bad Gateway</h1></body></html>' })
+  ok('an HTML error page: READ_FAILED naming the HTTP status, the tab, the short spreadsheet id and the readable words, no tags', m.code === 'READ_FAILED' && /HTTP 502 Bad Gateway while reading the "Collector Self Review" tab of spreadsheet/.test(m.message) && m.message.includes(SHORT) && /Bad Gateway/.test(m.message) && !/<h1>/.test(m.message), m.message)
+  m = await msgOf({ ok: true, status: 200, statusText: 'OK', text: async () => '<html>Please sign in</html>' })
+  ok('HTTP 200 whose body is not JSON is READ_FAILED "not JSON", not a misleading "tab is empty"', m.code === 'READ_FAILED' && /not JSON/.test(m.message) && /Please sign in/.test(m.message), m.message)
+  m = await msgOf({ ok: true, status: 200, statusText: 'OK', text: async () => '' })
+  ok('an empty 200 reply is READ_FAILED "(empty reply)"', m.code === 'READ_FAILED' && /\(empty reply\)/.test(m.message), m.message)
+  m = await msgOf(new Error('socket hang up'))
+  ok('a network failure names the tab and the spreadsheet', m.code === 'NETWORK' && /Could not reach Google Sheets while reading the "Collector Self Review" tab of spreadsheet/.test(m.message) && /socket hang up/.test(m.message), m.message)
   calls = []
   const none = await loadDashboardData(own(''), mk(good))
   ok('own scope with no HR-code does not even call Google', calls.length === 0 && none.reason === 'NO_HR_CODE')

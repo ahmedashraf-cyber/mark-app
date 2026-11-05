@@ -73,6 +73,16 @@ jobs:
           Copy-Item $exe.FullName "src-tauri/binaries/ffmpeg.exe" -Force
           Write-Host "ffmpeg bundled: $((Get-Item 'src-tauri/binaries/ffmpeg.exe').Length) bytes"
 
+      # Fails the release if the BUILT web bundle does not point at the right spreadsheets (or carries a test COPY id).
+      # Expected ids are pinned in scripts/verify-release-bundle.mjs. Runs before the installer is packaged.
+      - name: Verify release bundle (spreadsheet ids)
+        shell: pwsh
+        run: |
+          npm run build
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node scripts/verify-release-bundle.mjs --dist dist
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       - name: Build Tauri app
         uses: tauri-apps/tauri-action@v0
         env:
