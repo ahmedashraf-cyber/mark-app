@@ -14,12 +14,12 @@ import { invoke } from '@tauri-apps/api/core'
 import {
   SELF_REVIEW_RESULTS_SPREADSHEET_ID, SELF_REVIEW_RESULTS_TAB, SELF_REVIEW_HEADER, SELF_REVIEW_HEADER_LEGACY,
 } from '../config/selfReviewDashboardConfig.js'
-import { describeTarget, verbFor, readReply, failureMessage } from './sheetsFetch.js'
+import { describeTarget, verbFor, readReply, failureMessage, assertSheetsContract } from './sheetsFetch.js'
 
 const SAMPLED_SHEET_ID = '1XGVp4o7xu8mwPkhEamz-d1aiWYCkkhR-ffTlVQCcsrM'
 const SAMPLED_TAB      = 'Sampled Halves'
 // Where results are SAVED and read back: the "Collector Self Review" tab of the Mark Field Collected Data spreadsheet
-// (moved from the Sampled Halves spreadsheet in v7.12.32). One definition, in selfReviewDashboardConfig.js.
+// (moved from the Sampled Halves spreadsheet in v7.12.33). One definition, in selfReviewDashboardConfig.js.
 const RESULTS_SHEET_ID   = SELF_REVIEW_RESULTS_SPREADSHEET_ID
 const SAVE_TAB          = SELF_REVIEW_RESULTS_TAB
 const BASE             = 'https://sheets.googleapis.com/v4/spreadsheets'
@@ -45,7 +45,8 @@ function authHdr(tok) {
 // ── Generic fetch helpers ─────────────────────────────────────────────────────
 // Failures are described by utils/sheetsFetch.js: the status, the action, the tab, the spreadsheet and what Google answered.
 function explainFailure(res, method, url, data, raw) { throw new Error(failureMessage(res, method, url, data, raw)) }
-async function sheetCall(url, tok, method, body) {
+export async function sheetCall(url, tok, method, body) {      // exported so the guard's wiring can be tested
+  assertSheetsContract(method, url)        // a wrong method is refused here, before anything is sent
   let res
   try {
     res = await fetch(url, {
@@ -59,6 +60,7 @@ async function sheetCall(url, tok, method, body) {
 }
 async function sheetGet(url, tok) { return sheetCall(url, tok, 'GET') }
 async function sheetPost(url, tok, body) { return sheetCall(url, tok, 'POST', body) }
+async function sheetPut(url, tok, body) { return sheetCall(url, tok, 'PUT', body) }          // values.update
 
 // ── Extract sheet ID or folder ID from a Drive URL ────────────────────────────
 function sheetIdFromUri(uri) {
@@ -268,12 +270,20 @@ export async function verifySaveHeader() {
   }
 
   if (JSON.stringify(hdr) === JSON.stringify(SAVE_HEADER_V788)) {
-    // Migrate: append the two new column headers into R1:S1.
-    await sheetPost(
-      `${BASE}/${RESULTS_SHEET_ID}/values/${encodeURIComponent(`'${SAVE_TAB}'!R1:S1`)}?valueInputOption=RAW`,
-      tok,
-      { values: [['wrong_event', 'collector_event']] }
-    )
+    // Migrate: write the two new column names into R1:S1. That is values.update, which Google defines as PUT (a POST here is
+    // answered with an HTML "Page not found"). Then READ THE HEADER BACK: nothing is appended unless it is now the 19 columns.
+    try {
+      await sheetPut(
+        `${BASE}/${RESULTS_SHEET_ID}/values/${encodeURIComponent(`'${SAVE_TAB}'!R1:S1`)}?valueInputOption=RAW`,
+        tok,
+        { values: [['wrong_event', 'collector_event']] }
+      )
+      const back = await sheetGet(`${BASE}/${RESULTS_SHEET_ID}/values/${encodeURIComponent(`'${SAVE_TAB}'!A1:S1`)}`, tok)
+      const now = (back.values?.[0] || []).map(s => String(s || '').trim())
+      if (JSON.stringify(now) !== JSON.stringify(SAVE_HEADER)) throw new Error(`the header still reads [${now.join(', ')}] after the update`)
+    } catch (e) {
+      throw new Error(`Could not add the two new header columns (wrong_event, collector_event) to the "${SAVE_TAB}" tab: ${e.message}`)
+    }
     console.log('[MARK SelfReview] Migrated save-tab header from 17 → 19 columns.')
     return
   }

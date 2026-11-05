@@ -1,12 +1,13 @@
 // The Self-Review write path now targets the "Collector Self Review" tab of the Mark Field Collected Data spreadsheet.
 // Tauri's invoke and fetch are faked; every URL the module calls is recorded and inspected.
 import {
-  loadCollectorHalves, loadSavedReviews, verifySaveHeader, appendSaveRows, savedRowsForRunId, readHalfState, SAVE_HEADER,
+  loadCollectorHalves, loadSavedReviews, verifySaveHeader, appendSaveRows, savedRowsForRunId, readHalfState, sheetCall, SAVE_HEADER,
 } from './selfReviewSheet.js'
 import {
   SELF_REVIEW_RESULTS_SPREADSHEET_ID as NEW_ID, SELF_REVIEW_RESULTS_TAB as TAB, SELF_REVIEW_HEADER, SELF_REVIEW_HEADER_LEGACY,
 } from '../config/selfReviewDashboardConfig.js'
 import { FIELD_SHEET_ID } from '../config/fieldConfig.js'
+import { assertSheetsContract } from './sheetsFetch.js'
 
 let pass = 0, fail = 0
 const ok = (n, c, d = '') => { c ? pass++ : fail++; console.log(`${c ? '  ✓' : '  ✗'} ${n}${!c && d ? '   [' + d + ']' : ''}`) }
@@ -18,6 +19,29 @@ let calls = []
 let reply = () => ({})
 globalThis.fetch = async (url, opts = {}) => { calls.push({ url: String(url), method: opts.method || 'GET', body: opts.body }); return { ok: true, status: 200, json: async () => reply(String(url), opts) } }
 const reset = r => { calls = []; reply = r || (() => ({})) }
+
+// ---- a Google that enforces the REAL Sheets REST rules (values.get = GET, values.update = PUT, values.append = POST ...:append) ----
+// Anything else gets the HTML "Page not found" page, exactly as Google answers it. State: the tab's rows.
+function strictGoogle(rows, { ignoreWrites = false, failPut = null } = {}) {
+  const g = { tab: rows.map(r => [...r]), log: [] }
+  const NOT_FOUND = '<!DOCTYPE html><html><body>Page not found. Sorry, unable to open the file at this time. Please check the address and try again.</body></html>'
+  g.fetch = async (url, o = {}) => {
+    const method = o.method || 'GET', u = new URL(String(url)), path = decodeURIComponent(u.pathname)
+    const m = /^\/v4\/spreadsheets\/([^/]+)\/values\/(.+)$/.exec(path), range = m && m[2], isAppend = !!range && range.endsWith(':append')
+    const valid = !!m && ((method === 'GET' && !isAppend) || (method === 'PUT' && !isAppend && !!u.searchParams.get('valueInputOption')) || (method === 'POST' && isAppend && !!u.searchParams.get('valueInputOption')))
+    g.log.push({ method, ok: valid, url: String(url), contentType: (o.headers || {})['Content-Type'] || null, body: o.body ? JSON.parse(o.body) : null })
+    const out = (status, body, raw) => ({ ok: status < 400, status, statusText: status < 400 ? 'OK' : 'Error', text: async () => (raw ?? JSON.stringify(body)) })
+    if (!valid) return out(400, null, NOT_FOUND)
+    if (method === 'GET') return out(200, { values: /A1%3AS1|A1:S1/.test(String(url)) ? [g.tab[0]] : g.tab.map(r => [...r]) })
+    if (method === 'PUT') { if (failPut) return out(failPut, { error: { message: 'The caller does not have permission' } }); const b = JSON.parse(o.body); if (!ignoreWrites) g.tab[0] = [...g.tab[0].slice(0, 17), ...b.values[0]]; return out(200, { updatedCells: b.values[0].length }) }
+    const b = JSON.parse(o.body); g.tab.push(...b.values); return out(200, { updates: { updatedRows: b.values.length } })
+  }
+  return g
+}
+const withGoogle = async (g, fn) => { const real = globalThis.fetch; globalThis.fetch = g.fetch; try { return await fn() } finally { globalThis.fetch = real } }
+const ID = '1l3tYwre5ik0nMbBS562tge0Ch4MHKcuXTuNdPaEoTec'                                   // the production results spreadsheet, hard-coded on purpose
+const VALUES = `https://sheets.googleapis.com/v4/spreadsheets/${ID}/values/`
+const ENC_TAB = `'Collector%20Self%20Review'`
 
 console.log('where results live')
 ok('the results spreadsheet is the Mark Field Collected Data spreadsheet (FIELD_SHEET_ID)', NEW_ID === FIELD_SHEET_ID)
@@ -33,19 +57,69 @@ console.log('reading saved reviews')
   ok('...and still keeps the earliest run of a half, own HR-code only (unchanged behaviour)', m.size === 1 && m.get('5_1H')[0][0] === 'early')
 }
 
-console.log('the header check and its 17 -> 19 migration')
+console.log('the header check and its 17 -> 19 migration (against a Google that enforces the real REST rules)')
 {
-  reset(() => ({ values: [SELF_REVIEW_HEADER] }))
-  await verifySaveHeader()
-  ok('a 19-column header passes with one read of the NEW spreadsheet and no write', calls.length === 1 && calls[0].method === 'GET' && calls[0].url.includes(`/${NEW_ID}/values/${encTab}`) && !calls.some(c => c.url.includes(OLD_ID)))
-  reset(() => ({ values: [SELF_REVIEW_HEADER_LEGACY] }))
-  await verifySaveHeader()
-  const post = calls.find(c => c.method === 'POST')
-  ok('the legacy 17-column header is migrated by writing R1:S1 on the NEW spreadsheet', calls.length === 2 && post && post.url.includes(`/${NEW_ID}/values/${encodeURIComponent(`'${TAB}'!R1:S1`)}`) && JSON.parse(post.body).values[0].join() === 'wrong_event,collector_event', J(calls))
-  reset(() => ({ values: [SELF_REVIEW_HEADER.map((h, i) => (i === 4 ? 'half_x' : h))] }))
-  let msg = ''; try { await verifySaveHeader() } catch (e) { msg = e.message }
-  ok('any other header still fails loudly and nothing is written', /header mismatch/i.test(msg) && !calls.some(c => c.method === 'POST'), msg)
+  let G = strictGoogle([SELF_REVIEW_HEADER])
+  await withGoogle(G, () => verifySaveHeader())
+  ok('a 19-column header passes with exactly ONE request, a read, and no write', G.log.length === 1 && G.log[0].method === 'GET' && G.log[0].ok)
+  G = strictGoogle([SELF_REVIEW_HEADER_LEGACY])
+  await withGoogle(G, () => verifySaveHeader())
+  ok('the legacy 17-column header: read, then PUT (not POST), then READ BACK, and every request was accepted by the strict Google', G.log.map(c => c.method).join() === 'GET,PUT,GET' && G.log.every(c => c.ok), G.log.map(c => `${c.method}${c.ok ? '' : '!'}`).join())
+  ok('...and the header IS the 19 columns afterwards', J(G.tab[0]) === J(SELF_REVIEW_HEADER))
+  const put = G.log[1]
+  ok('the migration PUT: exact URL, JSON content type, and exactly the two new names', put.url === `${VALUES}${ENC_TAB}!R1%3AS1?valueInputOption=RAW` && put.contentType === 'application/json' && J(put.body) === '{"values":[["wrong_event","collector_event"]]}', put.url)
+  ok('the first read and the read-back are the same A1:S1 request', G.log[0].url === `${VALUES}${ENC_TAB}!A1%3AS1` && G.log[2].url === G.log[0].url)
+  // the old bug, against the strict Google: a POST to that URL is rejected exactly as Google rejects it
+  const probe = strictGoogle([SELF_REVIEW_HEADER_LEGACY])
+  const r = await probe.fetch(`${VALUES}${ENC_TAB}!R1%3AS1?valueInputOption=RAW`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{"values":[["a","b"]]}' })
+  ok('SELF-CHECK of the fake: a POST to that plain range gets HTTP 400 with the HTML "Page not found" page (the 7.12.31/32 failure)', r.status === 400 && /Page not found/.test(await r.text()))
+  // an update that "succeeds" but does not change the header: nothing may be appended after it
+  G = strictGoogle([SELF_REVIEW_HEADER_LEGACY], { ignoreWrites: true })
+  let m = ''; try { await withGoogle(G, () => verifySaveHeader()) } catch (e) { m = e.message }
+  ok('a PUT that is accepted but leaves the header unchanged is caught by the read-back and reported', /Could not add the two new header columns \(wrong_event, collector_event\)/.test(m) && /still reads/.test(m), m)
+  G = strictGoogle([SELF_REVIEW_HEADER_LEGACY], { failPut: 403 }); m = ''
+  try { await withGoogle(G, () => verifySaveHeader()) } catch (e) { m = e.message }
+  ok('a refused PUT says what it was doing, the HTTP status, the tab and Google\'s words', /Could not add the two new header columns/.test(m) && /HTTP 403/.test(m) && /writing to the "Collector Self Review" tab/.test(m) && /does not have permission/.test(m), m)
+  G = strictGoogle([SELF_REVIEW_HEADER.map((h, i) => (i === 4 ? 'half_x' : h))]); m = ''
+  try { await withGoogle(G, () => verifySaveHeader()) } catch (e) { m = e.message }
+  ok('any other header still fails loudly and nothing is written', /header mismatch/i.test(m) && G.log.every(c => c.method === 'GET'), m)
+  G = strictGoogle([SELF_REVIEW_HEADER_LEGACY])
+  await withGoogle(G, async () => { await verifySaveHeader(); await appendSaveRows([['RUN1', 'x'], ['RUN1', 'y']]) })
+  ok('END TO END from the legacy header: migration then append, both accepted; 2 rows written; header ends 19 columns', G.log.every(c => c.ok) && G.tab.length === 3 && G.tab[0].length === 19 && G.log.map(c => c.method).join() === 'GET,PUT,GET,POST')
 }
+
+console.log('the exact request every save-path call sends (hard-coded strings, independent of the code)')
+{
+  const G = strictGoogle([SELF_REVIEW_HEADER])
+  await withGoogle(G, async () => { await verifySaveHeader(); await appendSaveRows([['R', 'x']]); await readHalfState('A-1', '1', '1H'); await savedRowsForRunId('R') })
+  const [header, append, strict, dup] = G.log
+  ok('header check: GET .../values/\'Collector%20Self%20Review\'!A1%3AS1', header.method === 'GET' && header.url === `${VALUES}${ENC_TAB}!A1%3AS1`, header.url)
+  ok('append: POST .../values/\'Collector%20Self%20Review\'!A1:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS (":append" NOT encoded), JSON body', append.method === 'POST' && append.url === `${VALUES}${ENC_TAB}!A1:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS` && append.contentType === 'application/json' && J(append.body) === '{"values":[["R","x"]]}', append.url)
+  ok('strict read: GET .../!A%3AS?valueRenderOption=UNFORMATTED_VALUE', strict.method === 'GET' && strict.url === `${VALUES}${ENC_TAB}!A%3AS?valueRenderOption=UNFORMATTED_VALUE`, strict.url)
+  ok('duplicate check: GET .../!A%3AA', dup.method === 'GET' && dup.url === `${VALUES}${ENC_TAB}!A%3AA`, dup.url)
+  ok('all four were accepted by the strict Google', G.log.every(c => c.ok))
+}
+
+console.log('the REST contract guard: a wrong method is refused BEFORE anything is sent')
+{
+  const throwsWith = (m, u, re) => { try { assertSheetsContract(m, u); return false } catch (e) { return re.test(e.message) } }
+  const plain = `${VALUES}${ENC_TAB}!R1%3AS1?valueInputOption=RAW`, app = `${VALUES}${ENC_TAB}!A1:append?valueInputOption=RAW`
+  ok('POST to a plain range is refused (the 7.12.31/32 bug)', throwsWith('POST', plain, /PUT to change a range/))
+  ok('PUT or GET to an ":append" URL is refused', throwsWith('PUT', app, /requires POST/) && throwsWith('GET', app, /requires POST/))
+  ok('the three valid pairs pass: GET range, PUT range, POST :append', ['GET', 'PUT'].every(m => { try { assertSheetsContract(m, plain); return true } catch { return false } }) && (() => { try { assertSheetsContract('POST', app); return true } catch { return false } })())
+  ok('a range with an encoded colon (A1%3AS1) is not mistaken for ":append"', (() => { try { assertSheetsContract('PUT', `${VALUES}${ENC_TAB}!A1%3AS1`); return true } catch { return false } })())
+  // the guard is WIRED INTO the code that sends requests: a wrong method never reaches fetch
+  { const real = globalThis.fetch; let sent = 0; globalThis.fetch = async () => { sent++; return { ok: true, status: 200, text: async () => '{}' } }
+    let m = ''; try { await sheetCall(plain, 'tok', 'POST', { values: [['a']] }) } catch (e) { m = e.message }
+    ok('sheetCall refuses a POST to a plain values range with an internal error, and NOTHING is sent', /Internal error: POST sent to a plain values range/.test(m) && sent === 0, m)
+    m = ''; try { await sheetCall(app, 'tok', 'PUT', { values: [['a']] }) } catch (e) { m = e.message }
+    ok('...and a PUT to ":append"', /Internal error: PUT sent to a values ":append" URL/.test(m) && sent === 0, m)
+    await sheetCall(plain, 'tok', 'PUT', { values: [['a']] }); await sheetCall(app, 'tok', 'POST', { values: [['a']] })
+    ok('...while the two valid requests ARE sent', sent === 2)
+    globalThis.fetch = real }
+  ok('URLs that are not a /values/{range} URL are not judged (values:batchUpdate, the spreadsheet itself)', (() => { try { assertSheetsContract('POST', `https://sheets.googleapis.com/v4/spreadsheets/${ID}/values:batchUpdate`); assertSheetsContract('POST', `https://sheets.googleapis.com/v4/spreadsheets/${ID}:batchUpdate`); assertSheetsContract('GET', `https://sheets.googleapis.com/v4/spreadsheets/${ID}?fields=sheets`); return true } catch { return false } })())
+}
+
 function J(x) { return JSON.stringify(x).slice(0, 300) }
 
 console.log('saving and the duplicate check')

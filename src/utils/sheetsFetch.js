@@ -35,6 +35,21 @@ export async function readReply(res) {
   try { return { data: JSON.parse(raw), raw } } catch { return { data: undefined, raw } }
 }
 
+/**
+ * The Sheets REST rules for a /values/ URL, checked BEFORE a request is sent, so a wrong method never reaches Google:
+ *   .../values/{range}          GET (values.get) or PUT (values.update). NEVER POST.
+ *   .../values/{range}:append   POST (values.append) only.
+ * (A POST to a plain range is what made the 17-to-19-column header migration fail with an HTML "Page not found" in 7.12.31/32.)
+ * URLs that are not a /values/{range} URL are not judged here.
+ */
+export function assertSheetsContract(method, url) {
+  const path = String(url).split('?')[0]
+  if (!/\/spreadsheets\/[^/]+\/values\/[^/]+$/.test(path)) return
+  const isAppend = /:append$/.test(path)
+  if (isAppend && method !== 'POST') throw new Error(`Internal error: ${method} sent to a values ":append" URL; Google requires POST (values.append).`)
+  if (!isAppend && method === 'POST') throw new Error('Internal error: POST sent to a plain values range; Google requires PUT to change a range (values.update), or POST only to a ":append" URL.')
+}
+
 /** The message for a reply that failed (not ok) or that was not JSON. */
 export function failureMessage(res, method, url, data, raw) {
   const what = `${verbFor(method, url)} ${describeTarget(url)}`
