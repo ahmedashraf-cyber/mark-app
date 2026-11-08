@@ -16,7 +16,7 @@ import { PEOPLE_SHEET_ID, PEOPLE_TAB_NAMES } from '../config/drillConfig'
 import { EDIT_LOG_TAB } from './sessionEdit'
 import { buildIdIndex, fetchRowsById, rowsToObjects } from './sheetIndex'
 import { scopeToCollector } from './myHalves'
-import { sameHr } from './hrCode'
+import { identityOf, matchOwner } from './ownerMatch'
 
 const BASE = 'https://sheets.googleapis.com/v4/spreadsheets'
 const enc = encodeURIComponent
@@ -91,7 +91,7 @@ export async function loadHalvesDataset({ me, canViewAny, onProgress = () => {} 
       ? { ok: true, list: [{ code: me.hrCode, name: me.name, role: me.role, email: me.email }] }   // a collector never reads the roster
       : ro.ok ? { ok: true, list: ro.v } : { ok: false, error: ro.error },
   }
-  if (!canViewAny) raw = scopeToCollector(raw, me.hrCode)     // before anything is stored
+  if (!canViewAny) raw = scopeToCollector(raw, me)     // before anything is stored; me = { email (the signed-in account's), hrCode }
   return {
     raw, loadedAt: new Date().toISOString(),
     // kept for the whole session of the screen; a Reload makes a new dataset and so a new, empty cache. `events.index` is
@@ -123,7 +123,7 @@ const readHeader = async (cache, tab) => (cache.headers[tab] ||= ((await readRan
  * session's events. Refuses a half that is not the viewer's own unless they may see any collector's.
  */
 export async function loadHalfDetail(row, { cache, me, canViewAny }) {
-  if (!canViewAny && !sameHr(row.collector_hr_code, me.hrCode)) throw new Error('You can only open your own halves.')
+  if (!canViewAny && !matchOwner(identityOf(me), { email: row.collector_email, hrCode: row.collector_hr_code }).match) throw new Error('You can only open your own halves.')
   const evHeader = await readHeader(cache, FIELD_TAB_EVENTS)
   const own = await fetchRowsById(fieldIo, FIELD_TAB_EVENTS, row.session_id, cache.events)
   const out = { ownEvents: rowsToObjects(evHeader, own), detail: null, modelEvents: null, run: null, warning: '' }

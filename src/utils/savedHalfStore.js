@@ -6,7 +6,7 @@
  */
 import { db } from '../firebase/config'
 import { collection, doc, getDoc, getDocs, query, where } from 'firebase/firestore'
-import { sameHr } from './drillAccess'
+import { firestoreOwnerAllows } from './ownerMatch'
 import { SavedHalfError } from './savedHalfSheet'
 
 const byTime = (a, b) => (a.videoTimeSec || 0) - (b.videoTimeSec || 0)
@@ -22,17 +22,21 @@ export async function fetchTotalEvents(sessionIds) {
 }
 
 /**
- * → { fsDoc, events }.  Refuses (SavedHalfError) if Firestore's session record names a DIFFERENT HR-code than the login's,
- * or if Firestore holds no events for the session.
+ * → { fsDoc, events }.  Refuses (SavedHalfError) if Firestore's session record contradicts who is opening it, or if Firestore
+ * holds no events for the session. The sheet row has ALREADY decided that this half is the person's (ownerMatch); this is a second
+ * look at Firestore's own copy of the owner, and it follows the same order:
+ *   - the record has a collectorEmail  -> it must equal the signed-in email (the HR-code is not consulted);
+ *   - no email, and the sheet matched by HR-code (matchedBy 'hr') -> the record's collectorHrCode must match theirs;
+ *   - no email, matched by email on the sheet row -> allowed (the record only carries the HR-code typed at the time).
+ * identity: { email, hrCode } from the signed-in account.
  */
-export async function loadSavedHalfData(sessionId, { hrCode }) {
+export async function loadSavedHalfData(sessionId, { identity, matchedBy }) {
   const [sd, ed] = await Promise.all([
     getDoc(doc(db, 'mark_field_sessions', sessionId)),
     getDocs(query(collection(db, 'mark_collected_events'), where('sessionId', '==', sessionId))),
   ])
   const fsDoc = sd.exists() ? sd.data() : null
-  if (fsDoc?.collectorHrCode && !sameHr(fsDoc.collectorHrCode, hrCode))
-    throw new SavedHalfError('forbidden', 'This half belongs to another collector.')
+  if (!firestoreOwnerAllows(fsDoc, identity, matchedBy)) throw new SavedHalfError('forbidden', 'This half belongs to another collector.')
   const events = ed.docs.map(d => ({ ...d.data(), _docId: d.id })).filter(e => e.sessionId === sessionId)
     .sort((a, b) => seqOf(a) - seqOf(b) || byTime(a, b))
   if (!events.length)

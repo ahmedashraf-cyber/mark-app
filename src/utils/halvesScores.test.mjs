@@ -247,4 +247,21 @@ console.log('speed')
   }
 }
 
+console.log('EMAIL FIRST: the roster person a half belongs to (names, roles and the HR-code filter)')
+{
+  const roster = [{ code: 'A-248', name: 'Mahmoud Reda', role: 'Offline Data Collector', email: 'mahmoud@x.com' }, { code: 'A-317', name: 'Ali Mohamed', role: 'Batch Supervisor', email: 'ali@x.com' }]
+  const mk = (id, code, email) => sess({ session_id: id, match_id: '1111111', half: '1H', collector_hr_code: code, collector_email: email })
+  const rs = rowsOf(raw({ roster, sessions: [mk('mis', 'A-317', 'mahmoud@x.com'), mk('legacy', 'A-317', ''), mk('gone', 'A-317', 'left@x.com'), mk('norm', 'A-317', ' ALI@x.com '), mk('nocode', '', 'mahmoud@x.com')] }))
+  const by = id => rs.find(r => r.session_id === id)
+  ok('a half that carries Ali\'s code but MAHMOUD\'s email shows under Mahmoud (name, role) and Mahmoud\'s code, NOT under the code holder', by('mis').collectorName === 'Mahmoud Reda' && by('mis').collectorRole === 'Offline Data Collector' && by('mis').collectorCode === 'A-248', J([by('mis').collectorName, by('mis').collectorCode]))
+  ok('a half with NO email falls back to its code: shown under Ali', by('legacy').collectorName === 'Ali Mohamed' && by('legacy').collectorCode === 'A-317')
+  ok('a half whose email is not in the roster is shown under NO ONE (never under the holder of its code), and keeps its own code', by('gone').collectorName === '' && by('gone').collectorRole === '' && by('gone').collectorCode === 'A-317')
+  ok('a normal half (email, spaces and case ignored) shows under its owner', by('norm').collectorName === 'Ali Mohamed')
+  ok('a half with an email but no code is still found by the email', by('nocode').collectorName === 'Mahmoud Reda' && by('nocode').collectorCode === 'A-248')
+  const F = f => applyFilters(rs, { ...EMPTY_FILTERS, ...f }).map(r => r.session_id).sort().join()
+  ok('the HR-code filter follows the PERSON: A-248 finds the mis-coded half and the code-less one, A-317 does not', F({ hrCodes: 'A-248' }) === 'mis,nocode', F({ hrCodes: 'A-248' }))
+  ok('...and A-317 finds Ali\'s, the legacy no-email one and the unknown-email one, but not Mahmoud\'s', F({ hrCodes: 'A-317' }) === 'gone,legacy,norm', F({ hrCodes: 'A-317' }))
+  ok('the free-text search still finds a mis-coded half by the code that is written on the row (so it can be cleaned up)', F({ q: 'a-317' }).split(',').includes('mis'))
+}
+
 console.log(`\n${pass} passed, ${fail} failed`); process.exit(fail ? 1 : 0)

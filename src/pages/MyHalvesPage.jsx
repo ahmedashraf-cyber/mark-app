@@ -17,7 +17,8 @@ import HalfDetail from '../components/HalfDetail'
 import { loadHalvesDataset, loadEventCounts } from '../utils/myHalvesSheet'
 import { buildSessionRows, averages, MODULES } from '../utils/halvesScores'
 import { HALF_COLUMNS, OWN_DEFAULT_COLUMNS, ANY_DEFAULT_COLUMNS, profileOf } from '../utils/myHalves'
-import { canonHr, sameHr } from '../utils/hrCode'
+import { canonHr } from '../utils/hrCode'
+import { identityOf, canIdentify, matchOwner } from '../utils/ownerMatch'
 
 const small = { fontSize: 10, color: 'var(--t-3)' }
 
@@ -44,11 +45,12 @@ function Profile({ rows }) {
 }
 
 export default function MyHalvesPage({ onBack }) {
-  const { caps, roleInfo } = useAuth()
+  const { caps, roleInfo, profile } = useAuth()
   const canAny = !!caps?.viewAnyHalves, canOwn = !!caps?.viewOwnHalves
-  const me = useMemo(() => ({ hrCode: String(roleInfo?.code || '').trim(), name: roleInfo?.name || '', role: roleInfo?.role || '', email: roleInfo?.email || '' }), [roleInfo])
+  // email is the SIGNED-IN account's (profile.email), never roleInfo.email: that is blank for the full-access account and offline
+  const me = useMemo(() => ({ hrCode: String(roleInfo?.code || '').trim(), name: roleInfo?.name || '', role: roleInfo?.role || '', email: profile?.email || '' }), [profile?.email, roleInfo])
   const allowed = canAny || canOwn
-  const hasCode = !!canonHr(me.hrCode)
+  const identified = canIdentify(identityOf(me))      // the signed-in account's email OR an HR-code is enough to find own halves
 
   const [load, setLoad] = useState({ status: 'loading', error: '' })
   const [ds, setDs] = useState(null)
@@ -72,7 +74,7 @@ export default function MyHalvesPage({ onBack }) {
         e => { if (current()) setCounts({ status: 'error', map: null, error: e?.message || String(e) }) })
     } catch (e) { if (current()) setLoad({ status: 'error', error: e?.message || String(e) }) }
   }, [me, canAny])
-  useEffect(() => { if (allowed && (canAny || hasCode)) reload() }, [allowed, canAny, hasCode, reload])
+  useEffect(() => { if (allowed && (canAny || identified)) reload() }, [allowed, canAny, identified, reload])
 
   const built = useMemo(() => {
     if (!ds) return null
@@ -81,8 +83,8 @@ export default function MyHalvesPage({ onBack }) {
     const email = new Map((ds.raw.roster?.list || []).map(p => [canonHr(p.code), p.email]))
     b.rows = b.rows.map(r => (r.collector_email ? r : { ...r, collector_email: email.get(canonHr(r.collector_hr_code)) || '' }))
     // belt and braces: a collector's list is filtered to their own once more here, so even a bug upstream cannot show another person's half
-    return canAny ? b : { ...b, rows: b.rows.filter(r => sameHr(r.collector_hr_code, me.hrCode) && !r.isModel) }
-  }, [ds, counts.map, canAny, me.hrCode])
+    return canAny ? b : { ...b, rows: b.rows.filter(r => matchOwner(identityOf(me), { email: r.collector_email, hrCode: r.collector_hr_code }).match && !r.isModel) }
+  }, [ds, counts.map, canAny, me])
   const eventsState = !ds || counts.status === 'loading' ? { status: 'loading' } : counts.status === 'ready' ? { status: 'ready' } : { status: 'error', error: counts.error }
 
   const shell = children => (
@@ -97,9 +99,9 @@ export default function MyHalvesPage({ onBack }) {
   )
 
   if (!allowed) return shell(<div data-testid="no-access" style={{ fontSize: 13, color: 'var(--t-3)' }}>Your role does not have access to this screen.</div>)
-  if (!canAny && !hasCode) return shell(
+  if (!canAny && !identified) return shell(
     <div data-testid="no-hr-code" style={{ fontSize: 13, color: 'var(--t-2)', lineHeight: 1.7, maxWidth: 560 }}>
-      Your HR-code could not be found from your sign-in, so there are no halves to show. It is never typed in here. Ask your Batch Manager to check your row in the roster.
+      Your account has no email or HR-code, so there are no halves to show. Neither is ever typed in here. Ask your Batch Manager to check your row in the roster.
     </div>)
 
   return shell(
