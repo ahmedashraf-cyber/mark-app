@@ -126,7 +126,10 @@ export function buildSessionRows(raw, eventCounts = null) {
   const models = new Set(sess.filter(o => o.is_model === '1' && ['', 'approved'].includes(lower(o.model_status))).map(o => `${o.match_id}|${toSheetHalf(o.half)}`))
 
   const rows = sess.map(o => {
-    const person = byCode.get(normCode(o.collector_hr_code)) || byMail.get(lower(o.collector_email)) || null
+    // WHO this half belongs to: by the row's email when it has one (the HR-code is then not consulted, so a half carrying someone
+    // else's code shows under its real owner), else by its HR-code. collectorCode is the PERSON's code, for the HR-code filter.
+    const rowEmail = lower(o.collector_email)
+    const person = (rowEmail ? byMail.get(rowEmail) : byCode.get(normCode(o.collector_hr_code))) || null
     const list = (runs.get(o.session_id) || []).map(r => ({ ...r, stale: isRunStale(r, edits.get(o.session_id)) }))
     const isModel = o.is_model === '1'
     const state = isModel ? 'model' : !scoresOk ? 'unknown' : !list.length ? 'not_compared' : list[0].stale ? 'stale' : 'compared'
@@ -135,7 +138,7 @@ export function buildSessionRows(raw, eventCounts = null) {
     return {
       ...o, rowNumber: o._row, key: o.session_id, isModel, half, halfRaw: o.half,
       savedAt, savedSort: o.collection_end_wall_iso || o.export_date || '',
-      collectorName: person?.name || '', collectorRole: person?.role || '',
+      collectorName: person?.name || '', collectorRole: person?.role || '', collectorCode: person ? person.code : o.collector_hr_code,
       hasModel: models.has(`${o.match_id}|${half}`),
       incomplete: o.collection_incomplete === '1',
       edited: (edits.get(o.session_id) || []).length > 0,
@@ -240,10 +243,10 @@ export function applyFilters(rows, f) {
   const q = lower(f.q), qc = canonHr(f.q), ids = words(f.matchIds), hrs = words(f.hrCodes).map(normCode), vid = lower(f.video)
   const scoreFiltersOn = [f.overallMin, f.overallMax, f.toMin, f.toMax, f.pressureMin, f.pressureMax].some(v => norm(v) !== '')
   return rows.filter(r => {
-    if (q && ![r.match_id, r.session_id, r.collector_hr_code, r.collectorName, r.collector_email].some(v => lower(v).includes(q))
-      && !(qc && canonHr(r.collector_hr_code).includes(qc))) return false
+    if (q && ![r.match_id, r.session_id, r.collector_hr_code, r.collectorCode, r.collectorName, r.collector_email].some(v => lower(v).includes(q))
+      && !(qc && (canonHr(r.collector_hr_code).includes(qc) || canonHr(r.collectorCode).includes(qc)))) return false
     if (ids.length && !ids.includes(r.match_id)) return false
-    if (hrs.length && !hrs.includes(normCode(r.collector_hr_code))) return false
+    if (hrs.length && !hrs.includes(normCode(r.collectorCode))) return false
     if (f.halves.length && !f.halves.includes(r.half)) return false
     if (f.parts.length && !f.parts.includes(r.part)) return false
     if (f.roles.length && !f.roles.includes(r.collectorRole)) return false

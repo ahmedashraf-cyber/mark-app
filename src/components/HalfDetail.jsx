@@ -15,7 +15,7 @@ import { buildDetailView, filterDetail, filterOptions, ownEventRows, runCards, c
 import { STATE_TEXT } from '../utils/halvesScores'
 import { msToReadable } from '../utils/fieldSheetSync'
 import { MODULE_LABELS } from '../utils/defectTypes'
-import { sameHr } from '../utils/hrCode'
+import { identityOf, matchOwner } from '../utils/ownerMatch'
 
 const mono = { fontFamily: 'JetBrains Mono,monospace' }
 const card = { background: 'var(--bg-2)', border: '1px solid var(--b-1)', borderRadius: 12, padding: 16, marginBottom: 12 }
@@ -29,7 +29,7 @@ export default function HalfDetail({ row, me, canViewAny, cache, onBack, onReloa
   const [videoReady, setVideoReady] = useState(false)
   const [seekRow, setSeekRow] = useState(null)
   const videoRef = useRef(null)
-  const own = sameHr(row.collector_hr_code, me.hrCode)
+  const own = matchOwner(identityOf(me), { email: row.collector_email, hrCode: row.collector_hr_code }).match
 
   const load = useCallback(async () => {
     setData({ status: 'loading' })

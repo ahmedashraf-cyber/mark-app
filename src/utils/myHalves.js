@@ -9,7 +9,7 @@
  *     the attribute VALUES are in field_events, one column per group, so they are looked up by exact time)
  *   - the filters, the cards, the collection details
  */
-import { sameHr } from './hrCode'
+import { identityOf, matchOwner, sameOwner } from './ownerMatch'
 import { attrSummary } from './eventAttrs'
 import { toSheetHalf, msToReadable } from './fieldSheetSync'
 import { COLUMNS, STATE_TEXT } from './halvesScores'
@@ -22,13 +22,15 @@ const num = v => { const t = norm(v); if (t === '') return null; const n = Numbe
 /**
  * Keep only this collector's sessions (never model answers), and the scores and edits that belong to those sessions.
  * Applied to what was read BEFORE it is stored anywhere, so another collector's rows never reach the screen's state.
- * Matching is by HR-code (hrCode.js), never by anything typed.
+ * Ownership is ownerMatch.js: the row's email must be the signed-in email; only a row with NO email falls back to the HR-code
+ * (hrCode.js). Never anything typed. `who` is { email, hrCode } (a bare HR-code string is still accepted).
  */
-export function scopeToCollector(raw, myHr) {
+export function scopeToCollector(raw, who) {
+  const me = typeof who === 'string' ? identityOf({ hrCode: who }) : identityOf(who || {})
   const header = (raw.sessions?.[0] || []).map(norm)
-  const ci = header.indexOf('collector_hr_code'), si = header.indexOf('session_id'), mi = header.indexOf('is_model')
+  const ci = header.indexOf('collector_hr_code'), ei = header.indexOf('collector_email'), si = header.indexOf('session_id'), mi = header.indexOf('is_model')
   const sessions = [raw.sessions?.[0] || [], ...(raw.sessions || []).slice(1).filter(r =>
-    ci >= 0 && sameHr(r?.[ci], myHr) && norm(r?.[mi]) !== '1')]
+    ci >= 0 && matchOwner(me, { email: ei >= 0 ? r?.[ei] : '', hrCode: r?.[ci] }).match && norm(r?.[mi]) !== '1')]
   const owned = new Set(sessions.slice(1).map(r => norm(r?.[si])).filter(Boolean))
   const keep = (src, col) => {
     if (!src || src.ok === false) return src
@@ -163,7 +165,8 @@ export function collectionDetails(row) {
 export function profileOf(rows) {
   if (!rows.length) return null
   const first = rows[0]
-  if (!rows.every(r => sameHr(r.collector_hr_code, first.collector_hr_code))) return null
+  const who = r => ({ email: r.collector_email, hrCode: r.collector_hr_code })
+  if (!rows.every(r => sameOwner(who(r), who(first)))) return null     // one person: the same email, or (a row without one) the same HR-code
   // a model answer this person recorded is shown in the list, but it is not one of their collected halves
   const halves = rows.filter(r => !r.isModel).length
   return { name: first.collectorName, role: first.collectorRole, hrCode: first.collector_hr_code, email: first.collector_email || rows.find(r => r.collector_email)?.collector_email || '', halves, modelAnswers: rows.length - halves }

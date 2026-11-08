@@ -3,6 +3,7 @@ import { buildSessionRows, parseRun, sortRows, scoreCell } from './halvesScores.
 import { SESSION_COLUMNS, EVENT_COLUMNS } from '../config/fieldConfig.js'
 import { SCORES_COLUMNS, DETAIL_COLUMNS } from '../config/comparisonConfig.js'
 import { EDIT_LOG_HEADER } from './sessionEdit.js'
+import { loadHalfDetail } from './myHalvesSheet.js'
 
 let pass = 0, fail = 0
 const ok = (n, c, d = '') => { c ? pass++ : fail++; console.log(`${c ? '  ✓' : '  ✗'} ${n}${!c && d ? '   [' + String(d).slice(0, 220) + ']' : ''}`) }
@@ -118,4 +119,39 @@ console.log('cards, details, profile')
   ok('a model answer the person recorded is not counted as one of their halves', profileOf([...rows, { collector_hr_code: 'A-1650', isModel: true }]).halves === 2 && profileOf([...rows, { collector_hr_code: 'A-1650', isModel: true }]).modelAnswers === 1)
   ok('no profile for a mixed list, or an empty one', profileOf([...rows, { collector_hr_code: 'B-2' }]) === null && profileOf([]) === null)
 }
+console.log('EMAIL FIRST: own halves by the signed-in email; the HR-code only for a row with no email')
+{
+  const mk = (id, code, email, o = {}) => sess({ session_id: id, match_id: '1', half: '1H', collector_hr_code: code, collector_email: email, ...o })
+  const raw = { sessions: [SESSION_COLUMNS,
+      mk('ok', 'A-248', 'm@x.com'), mk('miscoded', 'A-317', ' M@x.com '), mk('legacy', 'a-248', ''), mk('holds_my_code', 'A-248', 'other@x.com'),
+      mk('theirs', 'A-5', 'other@x.com'), mk('legacy_other', 'A-5', ''), mk('my_model', 'A-248', 'm@x.com', { is_model: '1', model_status: 'approved' })],
+    scores: { ok: true, values: [SCORES_COLUMNS, run({ run_id: 'r1', collector_session_id: 'miscoded', score: '70' }), run({ run_id: 'r2', collector_session_id: 'theirs', score: '50' })] },
+    edits: { ok: true, values: [EDIT_LOG_HEADER, edit({ session_id: 'miscoded', status: 'applied', field: 'half', timestamp_iso: '2026-10-30T00:00:00Z' }), edit({ session_id: 'theirs', status: 'applied', field: 'half', timestamp_iso: '2026-10-30T00:00:00Z' })] },
+    roster: { ok: true, list: [] } }
+  const ids = who => scopeToCollector(raw, who).sessions.slice(1).map(r => r[SI.session_id])
+  ok('by EMAIL: my own, the one that carries ANOTHER code (case and spaces in the email ignored), and my old no-email half by code; never my model answer', J(ids({ email: 'm@x.com', hrCode: 'A-248' })) === J(['ok', 'miscoded', 'legacy']), J(ids({ email: 'm@x.com', hrCode: 'A-248' })))
+  ok('the half that carries MY CODE but someone else\'s email is NOT mine', !ids({ email: 'm@x.com', hrCode: 'A-248' }).includes('holds_my_code'))
+  ok('another account that merely HOLDS my code gets only the rows with NO email (my old legacy half), nothing that has an email', J(ids({ email: 'new@x.com', hrCode: 'A-248' })) === J(['legacy']), J(ids({ email: 'new@x.com', hrCode: 'A-248' })))
+  ok('an account with only an email (no HR-code) gets its email rows, never a no-email row', J(ids({ email: 'm@x.com', hrCode: '' })) === J(['ok', 'miscoded']))
+  ok('no email and no code shows NOTHING', ids({ email: '', hrCode: '' }).length === 0 && ids(null).length === 0)
+  ok('a bare HR-code string (the old call) matches ONLY rows with no email: the code is not consulted when an email is present', J(ids('A-248')) === J(['legacy']), J(ids('A-248')))
+  const mine = scopeToCollector(raw, { email: 'm@x.com', hrCode: 'A-248' })
+  ok('scores and edits follow: only those of my kept sessions reach the screen', J(mine.scores.values.slice(1).map(r => r[CI.run_id])) === J(['r1']) && mine.edits.values.length === 2)
+  const row = (code, email) => ({ collector_hr_code: code, collector_email: email, collectorName: 'N', collectorRole: 'R', isModel: false })
+  ok('profile header: rows of ONE person with different (mis-typed) codes but the same email are one collector', profileOf([row('A-317', 'm@x.com'), row('A-043', 'M@x.com'), row('A-248', 'm@x.com')]) !== null)
+  ok('...two different emails are two people, even with the same code', profileOf([row('A-1', 'a@x.com'), row('A-1', 'b@x.com')]) === null)
+  ok('...a row without an email and a row with one count as one person if their codes are the same', profileOf([row('A-1', 'a@x.com'), row('a-1', '')]) !== null && profileOf([row('A-1', 'a@x.com'), row('A-2', '')]) === null)
+}
+
+console.log('the half DETAIL refuses a half that is not mine (before any read), email first')
+{
+  const half = (code, email) => ({ session_id: 'x', collector_hr_code: code, collector_email: email, state: 'not_compared' })
+  const refuses = async (row, me, canViewAny = false) => { try { await loadHalfDetail(row, { cache: { headers: {}, events: {}, detail: {} }, me, canViewAny }); return false } catch (e) { return /only open your own halves/.test(e.message) } }
+  ok('ANOTHER person\'s half is refused although it carries my HR-code', await refuses(half('A-317', 'mahmoud@x.com'), { email: 'ali@x.com', hrCode: 'A-317' }))
+  ok('a no-email half with a different code is refused', await refuses(half('A-5', ''), { email: 'ali@x.com', hrCode: 'A-317' }))
+  ok('an account with neither email nor code is refused everything', await refuses(half('A-317', 'ali@x.com'), { email: '', hrCode: '' }))
+  ok('my own half is NOT refused as "not yours" (it goes on to read, and fails on the missing sheet, a different error)', !(await refuses(half('A-043', 'Ali@x.com '), { email: 'ali@x.com', hrCode: 'A-317' })))
+  ok('a reviewer who may see everyone\'s halves is not refused', !(await refuses(half('A-317', 'mahmoud@x.com'), { email: 'boss@x.com', hrCode: '' }, true)))
+}
+
 console.log(`\n${pass} passed, ${fail} failed`); process.exit(fail ? 1 : 0)

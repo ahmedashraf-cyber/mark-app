@@ -62,5 +62,15 @@ export const MATCHED_BY_TEXT = { email: 'matched by email', hr: 'matched by HR-c
 /** Shown, not hidden, when neither an email nor an HR-code is known. */
 export const UNIDENTIFIED_NOTICE = 'Cannot look for your saved halves: this account has no email or HR-code. Ask a Batch Manager.'
 
+/**
+ * Do two rows belong to the same person? Both have an email -> the emails must be equal (the HR-codes are not consulted: one person
+ * may carry several mis-typed codes, and two people may share one). Otherwise -> the same non-empty HR-code.
+ */
+export function sameOwner(a, b) {
+  const ea = normEmail(a?.email), eb = normEmail(b?.email)
+  if (ea && eb) return ea === eb
+  return sameHr(a?.hrCode, b?.hrCode)
+}
+
 /** Which person a row belongs to, as one comparable string: the email when there is one, else the HR-code. */
 export const ownerKey = row => normEmail(row?.email) || (canonHr(row?.hrCode) ? `hr:${canonHr(row.hrCode)}` : '')
