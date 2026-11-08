@@ -40,6 +40,22 @@ export function matchOwner(identity, row) {
   return canonHr(me.hrCode) && sameHr(row?.hrCode, me.hrCode) ? { match: true, by: 'hr' } : { match: false, by: null }
 }
 
+/**
+ * The second look, at FIRESTORE's own copy of the owner (the session record Tag keeps). The sheet row has already decided the
+ * half is mine; this only refuses when Firestore's record CONTRADICTS me, in the same order as ownerMatch:
+ *   - the record has a collectorEmail                   -> it must equal my signed-in email (the HR-code is not consulted)
+ *   - no email, and the sheet matched me by HR-code     -> the record's collectorHrCode must be my code
+ *   - no email, and the sheet matched me by email       -> allowed: the record then carries only the code that was typed
+ * No record at all is allowed (the sheet decided).
+ */
+export function firestoreOwnerAllows(fsDoc, identity, matchedBy) {
+  if (!fsDoc) return true
+  const docEmail = normEmail(fsDoc.collectorEmail)
+  if (docEmail) return docEmail === normEmail(identity?.email)
+  if (matchedBy === 'hr' && String(fsDoc.collectorHrCode ?? '').trim()) return sameHr(fsDoc.collectorHrCode, identity?.hrCode)
+  return true
+}
+
 /** The text a list line shows. */
 export const MATCHED_BY_TEXT = { email: 'matched by email', hr: 'matched by HR-code' }
 

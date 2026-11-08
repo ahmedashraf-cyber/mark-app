@@ -26,6 +26,7 @@ import {
 import { CURRENT_VERSION } from '../hooks/useUpdateCheck'
 import { showToast } from './toast'
 import { assertWritable } from './writeGuard'
+import { identityOf, canIdentify, matchOwner } from './ownerMatch'
 
 const SHEETS_BASE = 'https://sheets.googleapis.com/v4/spreadsheets'
 
@@ -396,39 +397,48 @@ async function validateOrWriteHeader(token, tab, expectedHeaders) {
 }
 
 // ── "Have I already saved this half?" (asked on the Tag start screen, before Continue) ─────────────────────
-const normHr = v => String(v ?? '').replace(/\s+/g, '').toUpperCase()
 const SAVED_LOCAL = ['completed', 'pending_sheet_upload']
 
 /**
- * Pure. Is there already a saved session by THIS collector for this match and half?
- *   rows   field_sessions read as A:E, header first: A schema_version, B session_id, C match_id, D half, E collector_hr_code
+ * Pure. Is there already a saved session by THIS person for this match and half?  Ownership is ownerMatch.js: the row's email
+ * first, the HR-code only for a row with no email.
+ *   rows   field_sessions read as A:F, header first: A schema_version, B session_id, C match_id, D half, E collector_hr_code,
+ *          F collector_email
  *   local  this PC's saved sessions (FieldPage's local list): used when the sheet cannot be read, and also as a
  *          second source, since a session that is saved locally but still waiting to upload is not in the sheet yet
- * Returns { sessionId, source } or null.
+ *   identity { email, hrCode } of the signed-in account (profile.email, never roleInfo.email). `email` + `hrCode` as separate
+ *          arguments are accepted too.
+ * Returns { sessionId, source, matchedBy } or null.
  */
-export function findOwnHalfIn({ rows = [], local = [], matchId, half, hrCode }) {
-  const id = String(matchId ?? '').trim(), h = toSheetHalf(half), hr = normHr(hrCode)
-  if (!id || !h || !hr) return null
-  const hit = rows.slice(1).find(r =>
-    String(r?.[2] ?? '').trim() === id && toSheetHalf(r?.[3]) === h && normHr(r?.[4]) === hr)
-  if (hit) return { sessionId: String(hit[1] ?? ''), source: 'sheet' }
-  const mine = local.find(x => SAVED_LOCAL.includes(x?.status)
-    && String(x.matchId ?? '').trim() === id && toSheetHalf(x.half) === h && normHr(x.collectorHrCode) === hr)
-  return mine ? { sessionId: String(mine.sessionId ?? ''), source: 'local' } : null
+export function findOwnHalfIn({ rows = [], local = [], matchId, half, hrCode, email, identity }) {
+  const me = identityOf(identity || { email, hrCode })
+  const id = String(matchId ?? '').trim(), h = toSheetHalf(half)
+  if (!id || !h || !canIdentify(me)) return null
+  for (const r of rows.slice(1)) {
+    if (String(r?.[2] ?? '').trim() !== id || toSheetHalf(r?.[3]) !== h) continue
+    const m = matchOwner(me, { email: r?.[5], hrCode: r?.[4] })
+    if (m.match) return { sessionId: String(r[1] ?? ''), source: 'sheet', matchedBy: m.by }
+  }
+  for (const x of local) {
+    if (!SAVED_LOCAL.includes(x?.status) || String(x.matchId ?? '').trim() !== id || toSheetHalf(x.half) !== h) continue
+    const m = matchOwner(me, { email: x.collectorEmail, hrCode: x.collectorHrCode })
+    if (m.match) return { sessionId: String(x.sessionId ?? ''), source: 'local', matchedBy: m.by }
+  }
+  return null
 }
 
 /**
  * Reads the sheet and answers the question above.
- * → { found, sessionId?, source?, verified }   verified=false means the sheet could not be read (offline), so only
+ * → { found, sessionId?, source?, matchedBy?, verified }   verified=false means the sheet could not be read (offline), so only
  * this PC's own list was checked. Never throws: a failed check must not stop anyone collecting.
  */
-export async function findOwnSavedHalf({ matchId, half, hrCode, local = [] }) {
+export async function findOwnSavedHalf({ matchId, half, hrCode, email, identity, local = [] }) {
   let rows = [], verified = true
   try {
     const token = await getToken()
-    rows = await readRange(token, FIELD_TAB_SESSIONS, 'A:E')
+    rows = await readRange(token, FIELD_TAB_SESSIONS, 'A:F')
   } catch (e) { verified = false; console.warn('[MARK Field] own-half check (sheet unreadable):', e?.message || e) }
-  const hit = findOwnHalfIn({ rows, local, matchId, half, hrCode })
+  const hit = findOwnHalfIn({ rows, local, matchId, half, hrCode, email, identity })
   return hit ? { found: true, ...hit, verified } : { found: false, verified }
 }
 

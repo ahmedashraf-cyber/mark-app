@@ -1,5 +1,5 @@
 // ownerMatch.js: the one rule for "is this saved half mine?". SYNTHETIC identities only.
-import { matchOwner, identityOf, canIdentify, ownerKey, normEmail, MATCHED_BY_TEXT, UNIDENTIFIED_NOTICE } from './ownerMatch.js'
+import { matchOwner, identityOf, canIdentify, ownerKey, normEmail, firestoreOwnerAllows, MATCHED_BY_TEXT, UNIDENTIFIED_NOTICE } from './ownerMatch.js'
 
 let pass = 0, fail = 0
 const ok = (n, c, d = '') => { c ? pass++ : fail++; console.log(`${c ? '  ✓' : '  ✗'} ${n}${!c && d ? '   [' + String(d).slice(0, 200) + ']' : ''}`) }
@@ -35,6 +35,16 @@ ok('normEmail', normEmail('  A@B.C ') === 'a@b.c' && normEmail(null) === '')
 ok('ownerKey: the email when there is one, else the canonical code, else empty', ownerKey({ email: ' A@X.com ', hrCode: 'A-1' }) === 'a@x.com' && ownerKey({ email: '', hrCode: ' a-1' }) === 'hr:A-1' && ownerKey({ email: '', hrCode: '' }) === '')
 ok('two rows of one person with different (mis-typed) codes have the same key', ownerKey({ email: 'a@x.com', hrCode: 'A-317' }) === ownerKey({ email: 'A@x.com', hrCode: 'A-043' }))
 ok('the list-line texts and the unidentified notice are fixed strings', MATCHED_BY_TEXT.email === 'matched by email' && MATCHED_BY_TEXT.hr === 'matched by HR-code' && /no email or HR-code/.test(UNIDENTIFIED_NOTICE))
+
+console.log('\nthe Firestore copy of the owner: a second look that only refuses when it CONTRADICTS me')
+const me = { email: 'ali@x.com', hrCode: 'A-1' }
+ok('the record has my email: allowed, whatever code it carries', firestoreOwnerAllows({ collectorEmail: 'Ali@x.com ', collectorHrCode: 'A-999' }, me, 'email') === true)
+ok('the record has ANOTHER email: refused, even if its HR-code is mine', firestoreOwnerAllows({ collectorEmail: 'bob@x.com', collectorHrCode: 'A-1' }, me, 'email') === false && firestoreOwnerAllows({ collectorEmail: 'bob@x.com', collectorHrCode: 'A-1' }, me, 'hr') === false)
+ok('no email in the record, the sheet matched me by EMAIL: allowed although the record carries a different typed code (the legacy mis-typed code)', firestoreOwnerAllows({ collectorHrCode: 'A-317' }, me, 'email') === true)
+ok('no email in the record, the sheet matched me by HR-code: the record\'s code must be mine', firestoreOwnerAllows({ collectorHrCode: ' a-1 ' }, me, 'hr') === true && firestoreOwnerAllows({ collectorHrCode: 'A-2' }, me, 'hr') === false)
+ok('no record at all: allowed (the sheet row decided)', firestoreOwnerAllows(null, me, 'email') === true && firestoreOwnerAllows(undefined, me, 'hr') === true)
+ok('a record with neither email nor code: allowed', firestoreOwnerAllows({}, me, 'hr') === true)
+ok('a person with no email cannot pass a record that carries an email', firestoreOwnerAllows({ collectorEmail: 'ali@x.com' }, { email: '', hrCode: 'A-1' }, 'hr') === false)
 
 console.log(`\n${pass} passed, ${fail} failed`)
 process.exit(fail ? 1 : 0)

@@ -118,17 +118,33 @@ console.log('the lock FAILS CLOSED')
 }
 
 console.log('FINDING THE HALF')
-{ const S = makeSheet(); await saved(S, 'sA'); await saved(S, 'sB')
+{ const ME = { email: 'c@x.com', hrCode: 'C-77' }; const S = makeSheet(); await saved(S, 'sA'); await saved(S, 'sB')
   const mk = (sid, o) => { const r = SESSION_COLUMNS.map(() => ''); const set = (k, v) => { r[SESSION_COLUMNS.indexOf(k)] = v }; set('session_id', sid); set('match_id', '1454815'); set('half', '1H'); set('collector_hr_code', 'C-77'); set('is_model', '0'); Object.entries(o).forEach(([k, v]) => set(k, v)); return r }
   S.tabs.field_sessions.push(mk('other_collector', { collector_hr_code: 'C-99' }), mk('other_half', { half: '2H' }), mk('other_match', { match_id: '999' }), mk('model_one', { is_model: '1', collector_hr_code: 'C-77' }),
     mk('dashy', { collector_hr_code: 'c\u201377' }), mk('spaced', { collector_hr_code: ' C-77 ' }), mk('old_row_no_part', { half: '1HH', part: '' }))
-  const got = (await H.findSavedHalves({ matchId: '1454815', half: '1H', hrCode: 'C-77' })).map(h => h.sessionId).sort()
+  const got = (await H.findSavedHalves({ matchId: '1454815', half: '1H', identity: ME })).map(h => h.sessionId).sort()
   ok('7. only THIS collector\'s halves of THIS match and half: sA, sB, and the spelling variants (en dash + lower case, stray spaces, an old "1HH" row with no part)', J(got) === J(['dashy', 'old_row_no_part', 'sA', 'sB', 'spaced']), J(got))
   ok('   another collector\'s half is never offered; neither is another half, another match, or a model answer', !got.includes('other_collector') && !got.includes('other_half') && !got.includes('other_match') && !got.includes('model_one'))
-  ok('   a typed code that is not the login code finds nothing of the owner\'s', (await H.findSavedHalves({ matchId: '1454815', half: '1H', hrCode: 'C-99' })).map(h => h.sessionId).join() === 'other_collector')
-  ok('   no HR-code, no match, or no half: nothing', (await H.findSavedHalves({ matchId: '1454815', half: '1H', hrCode: '' })).length === 0 && (await H.findSavedHalves({ matchId: '', half: '1H', hrCode: 'C-77' })).length === 0)
+  ok('   ANOTHER account (other email, other code) finds nothing of the owner\'s, only the no-email row that carries its own code', (await H.findSavedHalves({ matchId: '1454815', half: '1H', identity: { email: 'other@x.com', hrCode: 'C-99' } })).map(h => h.sessionId).join() === 'other_collector')
+  ok('   no HR-code, no match, or no half: nothing', (await H.findSavedHalves({ matchId: '1454815', half: '1H', identity: { email: '', hrCode: '' } })).length === 0 && (await H.findSavedHalves({ matchId: '', half: '1H', identity: ME })).length === 0)
+  // ── EMAIL FIRST (ownerMatch.js) ──
+  S.tabs.field_sessions.push(mk('mis_coded', { collector_hr_code: 'C-1', collector_email: 'c@x.com' }), mk('someone_elses_email', { collector_hr_code: 'C-77', collector_email: 'z@x.com' }),
+    mk('model_mine', { is_model: '1', collector_hr_code: 'C-77', collector_email: 'c@x.com' }))
+  const by = async id => Object.fromEntries((await H.findSavedHalves({ matchId: '1454815', half: '1H', identity: id })).map(h => [h.sessionId, h.matchedBy]))
+  const mine = await by(ME)
+  ok('E1. my account email matches although the row\'s HR-code is a DIFFERENT code (C-1): it IS found, matched by email', mine.mis_coded === 'email', J(mine))
+  ok('E2. a row that carries MY HR-code but SOMEONE ELSE\'S email is NOT offered to me (the code is not consulted when an email is present)', !('someone_elses_email' in mine), J(mine))
+  ok('E3. and it IS offered to the account whose email is on it, matched by email, though its code is C-77 (mine)', (await by({ email: 'z@x.com', hrCode: 'C-5' })).someone_elses_email === 'email')
+  const other77 = await by({ email: 'new@x.com', hrCode: 'C-77' })
+  ok('E4. another account that merely has the same HR-code C-77 sees only the rows with NO email that carry C-77 (matched by HR-code), and none of the rows that have an email', !['sA', 'sB', 'mis_coded', 'someone_elses_email'].some(k => k in other77) && other77.spaced === 'hr' && other77.dashy === 'hr', J(other77))
+  ok('E5. a row with no email falls back to the HR-code: "spaced" and "dashy" are matched by HR-code for me', mine.spaced === 'hr' && mine.dashy === 'hr')
+  ok('E6. the collector login is unchanged: sA and sB (email and code both mine) are found, matched by email', mine.sA === 'email' && mine.sB === 'email')
+  ok('E7. a model answer is never offered, even with my email on it', !('model_mine' in mine) && !('model_one' in mine))
+  const boss = await by({ email: 'c@x.com', hrCode: '' })
+  ok('E8. the full-access / no-code account (only an email) finds ITS email rows and nothing matched by code', boss.sA === 'email' && boss.mis_coded === 'email' && !('spaced' in boss) && !('dashy' in boss), J(boss))
+  ok('E9. no email and no code: nothing, and no read-based guess', (await H.findSavedHalves({ matchId: '1454815', half: '1H', identity: { email: ' ', hrCode: '' } })).length === 0)
   S.tabs.field_sessions.push(S.tabs.field_sessions[1].slice())          // sA stored twice (the old Retry defect)
-  const again = await H.findSavedHalves({ matchId: '1454815', half: '1H', hrCode: 'C-77' }); const a = again.find(h => h.sessionId === 'sA')
+  const again = await H.findSavedHalves({ matchId: '1454815', half: '1H', identity: ME }); const a = again.find(h => h.sessionId === 'sA')
   ok('   a session stored twice is listed ONCE, flagged with its duplicate rows', again.filter(h => h.sessionId === 'sA').length === 1 && a.duplicateRows === 2 && a.rowNumbers.length === 2, J(a))
   const d = await H.describeSavedHalves(again); ok('   the list also gets the event count (column A of field_events) and the compared status', d.counts.get('sA') === 3 && d.runs instanceof Map && !d.countsError, J([...d.counts]))
 }

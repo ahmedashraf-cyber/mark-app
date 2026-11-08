@@ -34,6 +34,7 @@ import TaggedEventsList from '../components/TaggedEventsList'
 import { downloadFieldCsv, syncSessionToSheet, findOwnHalfIn } from '../utils/fieldSheetSync'
 import { findSavedHalves, describeSavedHalves, readComparedInfo, readScoreRuns, isComparedIn, readFingerprint, saveEditedHalf, SavedHalfError } from '../utils/savedHalfSheet'
 import { loadSavedHalfData, fetchTotalEvents } from '../utils/savedHalfStore'
+import { identityOf, canIdentify, matchOwner, MATCHED_BY_TEXT, UNIDENTIFIED_NOTICE } from '../utils/ownerMatch'
 import { buildReopenedSession, videoMismatch, describeHalfLine, makeSaveToken, contentHash, hasUnsavedEdits, UNSAVED_WARNING, PART_LABEL } from '../utils/savedHalf'
 import { rebuildFromEvents } from '../utils/tagRebuild'
 import { sameHr } from '../utils/drillAccess'
@@ -188,6 +189,9 @@ function EndStoppageItem({ open, onClick, viewOnly = false }) {
 
 export default function FieldPage({ session: initialSession, onDone, onBack, onOpenMyHalves }) {
   const { profile, role, caps, roleInfo } = useAuth()
+  // WHO is looking for saved halves: the signed-in email (profile.email, which is Firebase's email on every login path), plus the
+  // HR-code when there is one. NEVER roleInfo.email: that is blank for the full-access account and in the offline fallback.
+  const identity = useMemo(() => identityOf({ email: profile?.email, hrCode: roleInfo?.code }), [profile?.email, roleInfo?.code])
   // Gates the model-answer checkbox. Operators only: a model answer becomes the
   // reference every collector is scored against, so a collector must not be
   // able to record one. Previously any @hudl.com address could.
@@ -269,14 +273,17 @@ export default function FieldPage({ session: initialSession, onDone, onBack, onO
   useEffect(() => {
     setDupAck(false); setNewConfirm(false); setOpenErr('')
     if (methodConfirmed) return
-    const id = startMatchId.trim(), hr = String(roleInfo?.code || '').trim()
-    if (!id || !matchPart || !hr) { setDupCheck({ state:'idle' }); return }
+    const id = startMatchId.trim()
+    if (!id || !matchPart) { setDupCheck({ state:'idle' }); return }
+    // A person with only an email is still checked (their rows match by email). A person with neither an email nor an HR-code
+    // cannot be checked, and the screen SAYS so instead of staying silent.
+    if (!canIdentify(identity)) { setDupCheck({ state:'unidentified' }); return }
     let live = true
     setDupCheck({ state:'checking' })
     const t = setTimeout(async () => {
       const half = partToHalf(matchPart)
       let halves = [], sheetOk = true
-      try { halves = await findSavedHalves({ matchId:id, half, hrCode:hr }) }
+      try { halves = await findSavedHalves({ matchId:id, half, identity }) }
       catch (e) { sheetOk = false; console.warn('[MARK Field] saved-half check (sheet unreadable):', e?.message || e) }
       let info = null, fsCounts = new Map()
       if (halves.length) {
@@ -284,14 +291,14 @@ export default function FieldPage({ session: initialSession, onDone, onBack, onO
         fsCounts = await fetchTotalEvents(halves.map(h => h.sessionId))
       }
       // a half saved on this PC that has not reached the sheet yet cannot be reopened from the sheet: it keeps the old warning
-      const local = findOwnHalfIn({ rows: [], local: loadLocalSessions(), matchId:id, half, hrCode:hr })
+      const local = findOwnHalfIn({ rows: [], local: loadLocalSessions(), matchId:id, half, identity })
       if (!live) return
       if (halves.length) { setDupCheck({ state:'found', halves, info, fsCounts }); setSavedPick(p => halves.some(h => h.sessionId === p) ? p : halves[0].sessionId) }
       else if (local) setDupCheck({ state:'found', legacy:true, sessionId:local.sessionId })
       else setDupCheck({ state: sheetOk ? 'none' : 'unverified' })
     }, 600)
     return () => { live = false; clearTimeout(t) }
-  }, [startMatchId, matchPart, methodConfirmed])
+  }, [startMatchId, matchPart, methodConfirmed, identity])
 
   // Collectors need a model answer. People with model answer access never
   // need one — they may be creating the first. An unreachable sheet does not
@@ -517,13 +524,13 @@ export default function FieldPage({ session: initialSession, onDone, onBack, onO
     const hr = String(roleInfo?.code || '').trim()
     setOpenErr(''); setOpening(h.sessionId)
     try {
-      if (!sameHr(h.hrCode, hr)) throw new SavedHalfError('forbidden', 'This half belongs to another collector.')
-      const fresh = (await findSavedHalves({ matchId: h.matchId, half: h.half, hrCode: hr })).find(x => x.sessionId === h.sessionId)
+      if (!matchOwner(identity, { email: h.email, hrCode: h.hrCode }).match) throw new SavedHalfError('forbidden', 'This half belongs to another collector.')
+      const fresh = (await findSavedHalves({ matchId: h.matchId, half: h.half, identity })).find(x => x.sessionId === h.sessionId)
       if (!fresh) throw new SavedHalfError('missing', 'This half is no longer in the sheet.')
       const fingerprint = await readFingerprint(h.sessionId)
       let info = { compared: false, comparedAtIso: '' }, unchecked = ''
       try { info = await readComparedInfo(h.sessionId) } catch (e) { unchecked = e?.message || String(e) }   // may work locally; Save will refuse
-      const { fsDoc, events: saved } = await loadSavedHalfData(h.sessionId, { hrCode: hr })
+      const { fsDoc, events: saved } = await loadSavedHalfData(h.sessionId, { identity, matchedBy: fresh.matchedBy })
       const sess = buildReopenedSession({ half: fresh, fsDoc, profile, fingerprint, comparedAtIso: info.comparedAtIso })
       sess.totalEvents = saved.length
       const rb = rebuildFromEvents(saved)
@@ -542,7 +549,7 @@ export default function FieldPage({ session: initialSession, onDone, onBack, onO
       eventsRef.current = saved; setEvents(saved)
       sessionRef.current = sess; collStartRef.current = null
       setStartMatchId(String(fresh.matchId)); setMatchPart(String(sess.part)); setCollectionMethod(sess.collectionMethod)
-      setSaveMatchId(String(fresh.matchId)); setSaveHalf(fresh.half); setSaveHrCode(hr)
+      setSaveMatchId(String(fresh.matchId)); setSaveHalf(fresh.half); setSaveHrCode(hr || String(fresh.hrCode || ''))
       setSaveHomeTeam(sess.homeTeamName || ''); setSaveAwayTeam(sess.awayTeamName || ''); setIsModelAnswer(false)
       const r = { sessionId: h.sessionId, readOnly: info.compared, comparedAtIso: info.comparedAtIso, switched: false, fingerprint, baseline,
         unsavedEdits: info.compared && hasUnsavedEdits(baseline, saved),
@@ -2021,6 +2028,10 @@ export default function FieldPage({ session: initialSession, onDone, onBack, onO
                 fontSize:13, fontWeight:600, color:'var(--t-1)', lineHeight:1.5 }}>{line}</div>
             ) : null
           })()}
+          {dupCheck.state === 'unidentified' && (
+            <div data-testid="unidentified" style={{ margin:'0 0 14px', padding:'10px 12px', borderRadius:8, background:'rgba(255,159,10,0.1)', border:'1px solid rgba(255,159,10,0.35)', fontSize:12, color:'#FF9F0A', lineHeight:1.5 }}>
+              {UNIDENTIFIED_NOTICE}
+            </div>)}
           {dupCheck.state === 'found' && dupCheck.legacy && (
             <div data-testid="dup-half" style={{ margin:'0 0 14px', padding:'10px 12px', borderRadius:8,
               background:'rgba(255,159,10,0.1)', border:'1px solid rgba(255,159,10,0.4)', fontSize:12, lineHeight:1.5 }}>
@@ -2050,7 +2061,7 @@ export default function FieldPage({ session: initialSession, onDone, onBack, onO
                 {halves.map(h => (
                   <label key={h.sessionId} data-testid="saved-row" style={{ display:'flex', gap:8, alignItems:'flex-start', padding:'4px 0', cursor: halves.length > 1 ? 'pointer' : 'default', color:'var(--t-1)' }}>
                     {halves.length > 1 && <input type="radio" name="saved-pick" checked={sel.sessionId === h.sessionId} onChange={() => setSavedPick(h.sessionId)}/>}
-                    <span>{line(h)}{h.duplicateRows > 1 && <span style={{ color:'#FF9F0A' }}> · stored {h.duplicateRows} times in the sheet (it can be opened, but a save will be refused: ask a Batch Manager)</span>}</span>
+                    <span>{line(h)}<span data-testid="matched-by" style={{ color:'var(--t-3)' }}> · {MATCHED_BY_TEXT[h.matchedBy]}</span>{h.duplicateRows > 1 && <span style={{ color:'#FF9F0A' }}> · stored {h.duplicateRows} times in the sheet (it can be opened, but a save will be refused: ask a Batch Manager)</span>}</span>
                   </label>
                 ))}
                 {compared === null && (

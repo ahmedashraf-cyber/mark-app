@@ -20,7 +20,7 @@ import { getToken, tabIdsByName, buildEventRows, toSheetHalf } from './fieldShee
 import { FIELD_SHEET_ID, FIELD_TAB_SESSIONS, FIELD_TAB_EVENTS, SESSION_COLUMNS } from '../config/fieldConfig'
 import { TAB_SCORES, SCORES_COLUMNS } from '../config/comparisonConfig'
 import { EDIT_LOG_TAB, EDIT_LOG_HEADER } from './sessionEdit'
-import { sameHr } from './drillAccess'     // the HR-code rule: trim, no inner spaces, dash variants to '-', upper-case
+import { matchOwner, canIdentify } from './ownerMatch'   // who owns a saved half: the email first; the HR-code only for a row with no email
 import { assertWritable } from './writeGuard'
 import { MSG } from '../config/savedHalfConfig'
 
@@ -92,23 +92,27 @@ async function readSessionsTab(token) {
 }
 
 /**
- * This collector's saved sessions of one half. Match: match_id + half (1H 2H ET1 ET2 PEN, not Part: older rows have no part
- * column) + the HR-code, compared with the shared normaliser. Never a typed code. Model answers are not offered. A session
- * stored twice (the old Retry defect) is listed once, with duplicateRows > 1 so the screen can say so.
- * → [{ sessionId, rowNumbers, duplicateRows, exportDate, method, part, videoName, ... }] newest first
+ * This person's saved sessions of one half. Match: match_id + half (1H 2H ET1 ET2 PEN, not Part: older rows have no part
+ * column) + OWNERSHIP by ownerMatch.js: the row's collector_email must equal the signed-in email; only a row with NO email falls
+ * back to the HR-code (same normaliser as before). A row that has an email is never matched by its HR-code. Never a typed code.
+ * Model answers are not offered. A session stored twice (the old Retry defect) is listed once, with duplicateRows > 1.
+ * identity: { email, hrCode }, the email from the signed-in account (profile.email), never roleInfo.email.
+ * → [{ sessionId, matchedBy: 'email' | 'hr', rowNumbers, duplicateRows, exportDate, method, part, videoName, ... }] newest first
  */
-export async function findSavedHalves({ matchId, half, hrCode, token }) {
+export async function findSavedHalves({ matchId, half, identity, token }) {
   const tok = token || await getToken()
   const id = norm(matchId), h = toSheetHalf(half)
-  if (!id || !h || !norm(hrCode)) return []
+  if (!id || !h || !canIdentify(identity)) return []
   const { objs } = await readSessionsTab(tok)
   const by = new Map()
-  objs.filter(o => norm(o.match_id) === id && toSheetHalf(o.half) === h && sameHr(o.collector_hr_code, hrCode) && o.is_model !== '1')
+  objs.filter(o => norm(o.match_id) === id && toSheetHalf(o.half) === h && o.is_model !== '1')
     .forEach(o => { const k = o.session_id; if (!by.has(k)) by.set(k, []); by.get(k).push(o) })
   return [...by.values()].map(list => {
     const o = list[0]
+    const mine = matchOwner(identity, { email: o.collector_email, hrCode: o.collector_hr_code })
+    if (!mine.match) return null
     return {
-      sessionId: o.session_id, rowNumbers: list.map(x => x._row), duplicateRows: list.length,
+      sessionId: o.session_id, matchedBy: mine.by, rowNumbers: list.map(x => x._row), duplicateRows: list.length,
       exportDate: o.export_date, method: o.collection_method, part: o.part, videoName: o.video_filename,
       videoDurationMs: Number(o.video_duration_ms) || null, videoSizeBytes: Number(o.video_size_bytes) || null,
       matchId: o.match_id, half: toSheetHalf(o.half), hrCode: o.collector_hr_code, email: o.collector_email,
@@ -117,7 +121,7 @@ export async function findSavedHalves({ matchId, half, hrCode, token }) {
       elapsedMs: Number(o.collection_elapsed_raw_ms) || 0, eventsPerMin: o.collection_events_per_min,
       incomplete: o.collection_incomplete === 'TRUE' || o.collection_incomplete === 'true' || o.collection_incomplete === '1',
     }
-  }).sort((a, b) => String(b.endIso || b.exportDate).localeCompare(String(a.endIso || a.exportDate)))
+  }).filter(Boolean).sort((a, b) => String(b.endIso || b.exportDate).localeCompare(String(a.endIso || a.exportDate)))
 }
 
 /** Column A of field_events, once: → Map(session_id → number of event rows), plus each id's row numbers. */
