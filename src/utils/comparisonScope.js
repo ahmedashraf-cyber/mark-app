@@ -20,6 +20,24 @@
 import { computeScore } from '../config/comparisonConfig'
 import { MODULES_SPLIT } from './defectTypes'
 
+/**
+ * The line under the score card. Every figure is the SAME one the score uses: `shown` is what the cards display (the engine's
+ * result, or the result rescored for the Event filter), so "scored errors" is the number inside the percentage. The collector
+ * total is the whole session; when the model covers only some event types the split is shown, so a long collector list is not
+ * mistaken for extras.
+ */
+export function summaryLine(shown, result) {
+  const oos = result.outOfScopeCount || 0
+  const parts = [
+    `Model: ${shown.modelEventCount} events`,
+    `Collector: ${result.collectorEventCount} events${oos > 0 ? ` (${result.scopedCollectorEventCount} compared, ${oos} out of scope)` : ''}`,
+    `${shown.errorUnits} scored errors`,
+  ]
+  const ws = shown.verdictCounts?.wrong_side || 0
+  if (ws > 0) parts.push(`${ws} wrong side excluded from the score`)
+  return parts.join(' · ')
+}
+
 /** The Event filter's own rule: a row matches on either side's event. */
 export const rowMatchesEvents = (row, events) =>
   !events || !events.length ||

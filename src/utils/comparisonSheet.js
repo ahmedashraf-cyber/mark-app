@@ -94,7 +94,7 @@ async function validateOrWriteHeader(token, tab, expected) {
 }
 
 // ── Serialise a single run result to Sheet rows ────────────────────────────
-function buildScoreRow(runId, modelSess, collectorSess, result) {
+export function buildScoreRow(runId, modelSess, collectorSess, result) {
   const row = {
     run_id:                     runId,
     run_timestamp_iso:          new Date().toISOString(),
@@ -107,10 +107,10 @@ function buildScoreRow(runId, modelSess, collectorSess, result) {
     collector_session_id:       collectorSess.session_id,
     tolerance_config_version:   TOLERANCE_CONFIG_VERSION,
     algorithm_version:          ALGORITHM_VERSION,
-    scope_event_ids:            '',
+    scope_event_ids:            (result.scopeEventIds || []).join('|'),        // the model's scope; blank = the whole session
     total_model_events:         String(result.modelEventCount),
     total_collector_events:     String(result.collectorEventCount),
-    total_scoped_collector_events: String(result.collectorEventCount),
+    total_scoped_collector_events: String(result.scopedCollectorEventCount ?? result.collectorEventCount),   // what was actually compared
     correct:                    String(result.verdictCounts.correct           || 0),
     missing_event:              String(result.verdictCounts.missing_event     || 0),
     extra_event:                String(result.verdictCounts.extra_event       || 0),
