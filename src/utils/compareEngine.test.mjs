@@ -1,6 +1,6 @@
 // compareEngine.js: the matcher, the scope filter, the label and the scores row. SYNTHETIC collector events only (the model is the
 // public one compiled into the app); no real collector data is in this file.
-import { compare, solveAssignment, OUT_OF_TOLERANCE } from './compareEngine.js'
+import { compare, solveAssignment, assignmentWeights, OUT_OF_TOLERANCE } from './compareEngine.js'
 import { scoreRows, summaryLine } from './comparisonScope.js'
 import { buildScoreRow, findExistingRun } from './comparisonSheet.js'
 import { ALGORITHM_VERSION, DEFAULT_TOLERANCE_MS, SCORES_COLUMNS } from '../config/comparisonConfig.js'
@@ -186,6 +186,41 @@ console.log('\n7. THE SCORES ROW AND THE VERSION')
   const withScores = async (rows, fn) => { globalThis.fetch = async () => ({ ok: true, status: 200, json: async () => ({ values: [hdr, ...rows.map(r => hdr.map(h => r[h]))] }) }); try { return await fn() } finally { globalThis.fetch = realFetch } }
   ok('a run recorded under algorithm 7 does NOT block the same pair under 8 (so it can be re-run)', (await withScores([mk('7')], () => findExistingRun('M', 'C'))) === null)
   ok('...but a run under 8 does ("no changes detected" still protects identical re-runs)', (await withScores([mk('7'), mk('8')], () => findExistingRun('M', 'C')))?.algorithm_version === '8')
+}
+
+console.log('\n8. FULL-HALF SIZE: a model of 1,000+ events (the fixed weights were only right up to about 500)')
+{
+  const N = 1024        // a full half: well beyond the ~500 pairs the old fixed weights could handle
+  ok('the weights keep their ORDER at every size: all team nudges together stay below half a millisecond, CODE exceeds the whole time budget of any assignment, OUT exceeds any assignment of allowed pairs', [1, 2, 10, 218, 437, 500, 1000, 1200, 3000, 5000, 20000].every(k => { const w = assignmentWeights(k, T); return w.TEAM * k < 0.5 && w.TEAM > 0 && w.CODE > k * (T + 1) && w.OUT > k * (w.CODE + T + 1) && Number.isFinite(w.OUT) }), J([1, 1200, 20000].map(k => assignmentWeights(k, T))))
+  ok('the weights were NOT enough at the old fixed values: at 1,024 pairs the old team total (0.1 each) is 102 ms, and at 1,200 the old code penalty (1e6) is below the time budget (1200 x 2001)', 0.1 * N > 1 && 1e6 < N * (T + 1) && 1e6 < 1200 * (T + 1))
+  // (1) TEAM can never override TIME: a unique time-optimum, 1 ms cheaper, in which EVERY pair has the wrong team
+  const M1 = Array.from({ length: N }, (_, i) => ev('pass', 10000 + 1000 * i, i % 2 ? 'away' : 'home'))
+  const opp = t => (t === 'home' ? 'away' : 'home')
+  const ladder = handicap => { const c = [ev('pass', 10000 - 500 - handicap, M1[0].team)]; for (let j = 0; j <= N - 1; j++) c.push(ev('pass', 10000 + 1000 * j + 500, j <= N - 2 ? M1[j + 1].team : opp(M1[N - 1].team))); return c }
+  const r1 = run(M1, ladder(1)), d1 = r1.detailRows.reduce((x, r) => x + (+r.delta_ms || 0), 0)
+  ok(`${N} events, the time-optimum is unique and 1 ms cheaper but all ${N} of its pairs have the wrong team: the engine takes it (total ${500 * N} ms, not ${500 * N + 1}) and reports ${N} wrong_side`, d1 === 500 * N && r1.verdictCounts.wrong_side === N && r1.verdictCounts.correct === 0 && r1.verdictCounts.missing_event === 0 && r1.verdictCounts.extra_event === 1, J([d1, r1.verdictCounts.wrong_side, r1.verdictCounts.extra_event]))
+  // ...and team still does its one job: an EXACT tie in time goes to the assignment with fewer team mismatches
+  const r2 = run(M1, ladder(0)), d2 = r2.detailRows.reduce((x, r) => x + (+r.delta_ms || 0), 0)
+  ok(`with an EXACT tie in total time the team settles it: the same ladder with no handicap pairs every event with its own team (0 wrong_side, ${N} correct), at the same total time`, d2 === 500 * N && r2.verdictCounts.wrong_side === 0 && r2.verdictCounts.correct === N, J([d2, r2.verdictCounts.wrong_side, r2.verdictCounts.correct]))
+  // (2) SAME CODE FIRST at full-half size: one different-code event at the start would save 1.2 million ms of delta in the rest
+  const M3 = Array.from({ length: N }, (_, i) => ev('pass', 10000 + 1000 * i, 'home'))
+  const C3 = [ev('shot', 10000, 'home'), ...Array.from({ length: N }, (_, j) => ev('pass', 10000 + 1000 * j + 1000, 'home'))]
+  const r3 = run(M3, C3)
+  ok(`${N} events: a different-code event that would save ${N * 1000} ms of time elsewhere is NOT preferred to the same-code pairs (0 wrong_event, ${N} same-code pairs)`, r3.detailRows.filter(r => r.verdict === 'wrong_event').length === 0 && r3.detailRows.filter(r => r.model_event_code && r.collector_event_code === 'pass').length === N, J(r3.verdictCounts))
+  ok('...and the different-code event is simply an extra', r3.verdictCounts.extra_event === 1)
+  // (3) team flipped on EVERY collector event changes no pairing at 1,200 events
+  const spaced = Array.from({ length: N }, (_, i) => ev(['pass', 'shot', 'tackle'][i % 3], 20000 + 2400 * i, i % 2 ? 'home' : 'away'))
+  seed = 99; const near = spaced.map(m => ev(m.event_code, +m.video_time_ms + Math.round((rnd() * 2 - 1) * 500), m.team))
+  const flipped = near.map(c => ({ ...c, team: opp(c.team) }))
+  const pairs = r => J(r.detailRows.filter(x => x.model_video_time_ms).map(x => [x.model_video_time_ms, x.collector_video_time_ms]).sort())
+  const ra = run(spaced, near), rb = run(spaced, flipped)
+  ok(`flipping the team of every collector event changes NO pairing at ${N} events (same ${ra.detailRows.length} pairs), only the verdict: ${ra.verdictCounts.correct} correct becomes ${rb.verdictCounts.wrong_side} wrong_side`, pairs(ra) === pairs(rb) && ra.verdictCounts.correct === N && rb.verdictCounts.wrong_side === N, J([ra.verdictCounts.correct, rb.verdictCounts.wrong_side]))
+  // performance guard on a REALISTIC full half (events spread over 47 minutes, ~60% extra collector events of another type)
+  seed = 7; const span = 47 * 60000
+  const big = Array.from({ length: 2000 }, (_, i) => ev(['pass', 'shot', 'tackle'][i % 3], Math.round(i * span / 2000) + Math.round(rnd() * 500), i % 2 ? 'home' : 'away'))
+  const bigC = [...big.map(m => ev(m.event_code, +m.video_time_ms + Math.round((rnd() * 2 - 1) * 400), m.team)), ...Array.from({ length: 1200 }, () => ev('reception', Math.round(rnd() * span), 'home'))]
+  const t1 = Date.now(), rbig = run(big, bigC)
+  ok(`a realistic half of 2,000 model and 3,200 collector events matches every model event and takes ${Date.now() - t1} ms (limit 10 s; a regular chain with exact ties is the slow case, not real data)`, rbig.verdictCounts.correct + rbig.verdictCounts.wrong_side === 2000 && Date.now() - t1 < 10000, J([rbig.verdictCounts.correct, Date.now() - t1]))
 }
 
 console.log(`\n${pass} passed, ${fail} failed`)

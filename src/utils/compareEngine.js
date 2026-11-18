@@ -84,6 +84,31 @@ export function solveAssignment(cost) {
   return out
 }
 
+/**
+ * The three weights of the cost of a pair, scaled to the size of the problem so the ORDER of priorities holds at any size:
+ *
+ *   1. the number of pairs that can form        (a forbidden pair costs OUT: more than ANY assignment of allowed pairs)
+ *   2. the fewest different-code pairs          (a different code costs CODE: more than the whole time budget of ANY assignment)
+ *   3. the smallest total time difference       (the delta, in whole milliseconds)
+ *   4. team, only to settle an EXACT tie        (TEAM per mismatch: all of them together stay below half a millisecond)
+ *
+ * Fixed weights (CODE 1e6, TEAM 0.1) were only right up to about 500 pairs. Beyond that, 1,200 pairs each 1 s off add up to more
+ * than 1e6, so one different-code pair could be preferred to save time elsewhere; and 1,200 team mismatches at 0.1 add up to 120 ms,
+ * so a team could override a real time difference. Deltas are whole milliseconds, which is what lets the team weight sit below 1.
+ * (At several thousand pairs the team weight approaches the precision of a double and a tie may break either way. It still can
+ * never override time.)
+ *
+ * pairs: how many pairs can form at most (the smaller side); maxTolMs: the largest tolerance in play.
+ */
+export function assignmentWeights(pairs, maxTolMs) {
+  const k = Math.max(1, Math.floor(pairs) || 1)
+  const tol = Math.max(0, Number(maxTolMs) || 0)
+  const TEAM = 1 / (2 * (k + 1))
+  const CODE = 2 * k * (tol + 1)
+  const OUT = Math.max(OUT_OF_TOLERANCE, 100 * k * (CODE + tol + 1))
+  return { TEAM, CODE, OUT }
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 /** Does this event carry a usable time-from-half-start? */
 function hasHalfStart(ev) {
@@ -203,7 +228,9 @@ export function compare(sessA, eventsA, sessB, eventsB, config) {
   if (outOfScope.length) collEvents = collEvents.filter(e => scopeIds.includes(e.event_code))
 
   // ── Stage 3: Align (optimal assignment) ───────────────────────────────────
-  const OUT = OUT_OF_TOLERANCE      // finite on purpose: see solveAssignment
+  // Weights scaled to this problem's size (see assignmentWeights); OUT is finite on purpose: see solveAssignment
+  const W   = assignmentWeights(Math.min(modelEvents.length, collEvents.length), modelEvents.reduce((mx, e) => Math.max(mx, toleranceFor(e.event_code)), 0))
+  const OUT = W.OUT
 
   // ONE origin for both sides, decided once. Deciding per event — and never
   // checking the two agreed — is what collapsed whole runs to missing+extra.
@@ -226,15 +253,17 @@ export function compare(sessA, eventsA, sessB, eventsB, config) {
       const delta = Math.abs(mT.ms - cT.ms)
       if (delta > tol) return OUT
 
-      // Cost ordering matters. CODE_PENALTY exceeds the largest delta that can
-      // survive the tolerance gate, so a same-code candidate ALWAYS beats a
-      // different-code one however much closer the latter sits. Without that, a
-      // mis-coded event 50ms away would steal the pairing from the correct code
-      // 1.5s away and manufacture a missing+extra out of a clean match.
-      const CODE_PENALTY = 1e6
-      const codeCost = (cEv.event_code === mEv.event_code) ? 0 : CODE_PENALTY
-      // Team is only a 0.1 nudge, to settle two otherwise identical candidates.
-      const teamBonus = (mEv.team === cEv.team) ? 0 : 0.1
+      // Cost ordering matters. W.CODE exceeds the time budget of ANY assignment
+      // (not just the largest single delta), so a same-code candidate ALWAYS
+      // beats a different-code one however much closer, or however much total
+      // time, the latter saves. Without that, a mis-coded event 50ms away would
+      // steal the pairing from the correct code 1.5s away and manufacture a
+      // missing+extra out of a clean match.
+      const codeCost = (cEv.event_code === mEv.event_code) ? 0 : W.CODE
+      // Team only settles an EXACT tie in time: all the nudges together stay
+      // below half a millisecond (assignmentWeights), so it can never outweigh
+      // a real time difference, however many events there are.
+      const teamBonus = (mEv.team === cEv.team) ? 0 : W.TEAM
       return codeCost + delta + teamBonus
     })
   })
