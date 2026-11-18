@@ -89,18 +89,50 @@ export function collectorLabel(row) {
   return 'run ' + norm(row.run_id).slice(0, 8)
 }
 
+/** run_<epoch ms>_<random>: the moment a run was made. NaN when the id is not in that form. */
+const runStamp = id => { const m = /^run_(\d{9,})_/.exec(norm(id)); return m ? Number(m[1]) : NaN }
+
+/**
+ * ONE RUN PER COLLECTOR SESSION: the newest. A collector session that was compared more than once (a deliberate re-run after a
+ * model update or a matcher fix, or a second model for the same half) has several run_ids; counting them all would count that
+ * collector several times in the denominator and mix old and new errors in every pattern. The newest run replaces the older.
+ *   - "newest" is the time inside the run_id; when an id carries none, the later row in the sheet wins
+ *   - the key is collector_session_id, NOT the HR-code (codes are mis-typed and shared) and NOT the person: a collector who
+ *     collected the half twice has two sessions and keeps two runs
+ *   - a run with no collector_session_id stands alone
+ * Rows keep their order; only the older runs' rows are dropped.
+ */
+export function newestRunPerSession(rows) {
+  const runs = new Map()                                   // run_id -> { session, stamp, order }
+  rows.forEach(r => { if (!runs.has(r.run_id)) runs.set(r.run_id, { session: norm(r.collector_session_id), stamp: runStamp(r.run_id), order: runs.size }) })
+  const best = new Map()                                   // collector_session_id -> the run_id that wins so far
+  for (const [id, v] of runs) {
+    if (!v.session) continue
+    const cur = best.get(v.session)
+    if (cur === undefined) { best.set(v.session, id); continue }
+    const c = runs.get(cur)
+    const newer = Number.isFinite(v.stamp) && Number.isFinite(c.stamp)
+      ? (v.stamp > c.stamp || (v.stamp === c.stamp && v.order > c.order))
+      : v.order > c.order
+    if (newer) best.set(v.session, id)
+  }
+  const keep = new Set([...runs].filter(([id, v]) => !v.session || best.get(v.session) === id).map(([id]) => id))
+  return rows.filter(r => keep.has(r.run_id))
+}
+
 /**
  * Filter, group and count. Returns null when the match has no rows at all.
  *
  *   totalRuns — distinct run_id across ALL rows for this match+half, correct
- *               rows included, so a perfect run still counts in the denominator
+ *               rows included, so a perfect run still counts in the denominator.
+ *               Only the NEWEST run of each collector session counts (newestRunPerSession).
  *   groups    — one per (event_code, verdict, anchor time)
  *   collectors — run_id → label, for the filter dropdown
  */
 export function analyze(rows, matchId, half) {
   // match_id is stored as a STRING; compare as strings, never as numbers
   const mid = norm(matchId), h = normHalf(half)
-  const mine = rows.filter(r => norm(r.match_id) === mid && normHalf(r.half) === h)
+  const mine = newestRunPerSession(rows.filter(r => norm(r.match_id) === mid && normHalf(r.half) === h))
   if (!mine.length) return null
 
   // Build full run registry BEFORE any filtering so totalRuns is the true denominator
