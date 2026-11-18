@@ -71,6 +71,9 @@ export function solveAssignment(cost) {
         if (cur < minv[j]) { minv[j] = cur; way[j] = j0 }
         if (minv[j] < delta) { delta = minv[j]; j1 = j }
       }
+      // Cannot happen with finite costs (every row can always reach a free column when rows <= columns). If it ever did, spinning
+      // here would freeze the screen, so fail loudly instead.
+      if (j1 === 0) throw new Error('solveAssignment: no column reachable (a cost was not a finite number)')
       for (let j = 0; j <= K; j++) { if (used[j]) { u[p[j]] += delta; v[j] -= delta } else minv[j] -= delta }
       j0 = j1
     } while (p[j0] !== 0)

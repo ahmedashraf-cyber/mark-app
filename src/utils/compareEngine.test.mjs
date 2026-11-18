@@ -75,7 +75,9 @@ console.log('\n2. THE FINITE OUT-OF-TOLERANCE COST, on its own (not the orientat
   const odd = [[100, Infinity, NaN], [Infinity, 50, OUT_OF_TOLERANCE], [NaN, 70, 20]]
   let threw = false, ro = null; try { ro = allowed(odd, solveAssignment(odd)) } catch { threw = true }
   ok('Infinity and NaN entries are treated as forbidden: no crash, and they never come back as a pair', !threw && ro.f.every(([i, j]) => Number.isFinite(odd[i][j])), J(ro?.f))
-  const dec = [[2000, 1999], [1998, 5000]]
+  const onlyBad = [[Infinity, NaN, Infinity], [10, 20, 30], [NaN, NaN, NaN]]
+  let t2 = false, ob = null; try { ob = allowed(onlyBad, solveAssignment(onlyBad)) } catch { t2 = true }
+  ok('a row made ONLY of non-finite entries is clamped to forbidden: no crash, no hang, no pair for it, and the other row still gets its best partner', !t2 && ob.n === 1 && ob.f[0][0] === 1 && ob.f[0][1] === 0, J(ob))
   ok('at the engine level a collector event 2001 ms away is never paired, and one exactly 2000 ms away IS paired (as wrong_timestamp, the engine\'s own verdict for more than half the tolerance)', (() => { const a = run([ev('pressure_start', 10000)], [ev('pressure_start', 12000)]), b = run([ev('pressure_start', 10000)], [ev('pressure_start', 12001)]); return a.detailRows.length === 1 && a.verdictCounts.wrong_timestamp === 1 && a.verdictCounts.missing_event === 0 && b.verdictCounts.missing_event === 1 && b.verdictCounts.extra_event === 1 })())
 }
 
