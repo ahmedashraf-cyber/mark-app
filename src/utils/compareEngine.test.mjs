@@ -223,5 +223,42 @@ console.log('\n8. FULL-HALF SIZE: a model of 1,000+ events (the fixed weights we
   ok(`a realistic half of 2,000 model and 3,200 collector events matches every model event and takes ${Date.now() - t1} ms (limit 10 s; a regular chain with exact ties is the slow case, not real data)`, rbig.verdictCounts.correct + rbig.verdictCounts.wrong_side === 2000 && Date.now() - t1 < 10000, J([rbig.verdictCounts.correct, Date.now() - t1]))
 }
 
+console.log('\n9. THE SCOPE VALUES THAT ARE NOT EVENT CODES (real values from the sheet: "Duels", "All Events", "TagOnce", "Pressure start")')
+{
+  // A "Duels"-shaped half: the model tags 12 different event types (not just the four duel codes), the collector tags the same
+  // events a little off in time plus 6 events of types the model never tags (reception, out) and a half_start.
+  const CODES = ['tackle', 'leg_stretch_duel', 'positioning_duel', 'separation_duel', 'hold_up_duel', 'clearance', 'dribble', 'shield', 'pass_first_time', 'pass_recovery', 'pass_interception', 'pass']
+  const dm = Array.from({ length: 60 }, (_, i) => ev(CODES[i % CODES.length], 10000 + 4000 * i, i % 2 ? 'home' : 'away'))
+  const dc = [...dm.map(m => ev(m.event_code, +m.video_time_ms + 150, m.team)), ev('reception', 11000, 'home'), ev('reception', 19000, 'home'), ev('out', 27000, 'home'), ev('reception', 35000, 'away'), ev('out', 43000, 'away'), ev('reception', 51000, 'home'), ev('half_start', 5, 'home')]
+  const base = run(dm, dc, '')
+  for (const v of ['Duels', 'TagOnce', 'Tag Once']) {
+    const x = run(dm, dc, v)
+    ok(`scope "${v}": NOT a zero. Same pairing and score as no scope at all (${x.score}), 60 matched, nothing set aside, nothing missing`, x.score > 0 && x.score === base.score && J(x.verdictCounts) === J(base.verdictCounts) && x.outOfScopeCount === 0 && x.verdictCounts.missing_event === 0 && x.verdictCounts.correct + x.verdictCounts.wrong_side === 60, J([x.score, base.score, x.outOfScopeCount]))
+    ok(`scope "${v}": the page is told (scopeMode unresolved, a warning that names it); never silent`, x.scopeMode === 'unresolved' && x.scopeWarning.includes(v) && x.scopeWarning.includes('NOT applied'))
+  }
+  const all = run(dm, dc, 'All Events')
+  ok('scope "All Events": no filter, no warning, same result as blank', all.scopeMode === 'all' && all.scopeWarning === '' && all.score === base.score && all.outOfScopeCount === 0)
+  ok('a blank scope: no filter, no warning', base.scopeMode === 'all' && base.scopeWarning === '' && base.outOfScopeCount === 0)
+  // label -> code
+  const pm = [ev('pressure_start', 10000), ev('pressure_start', 20000)], pc = [ev('pressure_start', 10100), ev('pressure_end', 11200), ev('pressure_start', 20100), ev('pressure_end', 21200)]
+  const lab = run(pm, pc, 'Pressure start')
+  ok('scope "Pressure start" (a label): normalised to pressure_start, the two pressure_end events are set aside, score 100, no warning', lab.scopeMode === 'codes' && J(lab.scopeEventIds) === J(['pressure_start']) && lab.outOfScopeCount === 2 && lab.score === 100 && lab.scopeWarning === '', J([lab.scopeMode, lab.scopeEventIds, lab.outOfScopeCount, lab.score]))
+  ok('...and it is the same result as the code spelled out', J(run(pm, pc, 'pressure_start').verdictCounts) === J(lab.verdictCounts) && run(pm, pc, 'pressure_start').score === lab.score)
+  // an unknown word never zeroes a score and never hides an error
+  const unk = run(pm, pc, 'pressure_start|banana')
+  ok('an unknown part in a list: no filter at all (the pressure_end events are compared, so they are extras), and a warning', unk.scopeMode === 'unresolved' && unk.outOfScopeCount === 0 && unk.verdictCounts.extra_event === 2 && /banana/.test(unk.scopeWarning))
+  // every real value, identical collector and model: never a zero from the scope
+  const same = [ev('pass', 10000), ev('tackle', 20000), ev('shot', 30000)]
+  ok('for EVERY real value, a collector identical to the model scores 100, never 0 (Duels, TagOnce, All Events, "", Pressure start with a matching model)', ['Duels', 'TagOnce', 'All Events', '', 'duels', 'DUELS'].every(v => run(same, same.map(e => ({ ...e })), v).score === 100), J(['Duels', 'TagOnce', 'All Events', '', 'duels'].map(v => run(same, same.map(e => ({ ...e })), v).score)))
+  // the safeguard: a type the model itself tags is never out of scope, whatever the declared scope says
+  const sg = run([ev('pass', 10000), ev('shot', 20000)], [ev('pass', 10100), ev('shot', 20100), ev('reception', 30000)], 'pass')
+  ok('SAFEGUARD: a declared scope "pass" on a model that also tags a shot does not set the collector\'s shot aside (it pairs, nothing missing); only the reception is set aside', sg.verdictCounts.missing_event === 0 && sg.verdictCounts.correct === 2 && sg.outOfScopeCount === 1 && sg.outOfScope[0].event_code === 'reception', J([sg.verdictCounts, sg.outOfScopeCount]))
+  ok('nothing the model itself tags is ever listed as out of scope (60 Duels events, 12 types)', dc.every(c => !run(dm, dc, 'pass').outOfScope.some(o => dm.some(m => m.event_code === o.event_code))))
+  // the scores row
+  const asObj = arr => Object.fromEntries(SCORES_COLUMNS.map((c, i) => [c, arr[i]]))
+  const rowD = asObj(buildScoreRow('r', { session_id: 'M', scope_event_ids: 'Duels' }, { session_id: 'C' }, run(dm, dc, 'Duels'))), rowL = asObj(buildScoreRow('r', { session_id: 'M' }, { session_id: 'C' }, lab))
+  ok('the scores row records only what was really applied: blank for "Duels" (no filter), "pressure_start" for the label', rowD.scope_event_ids === '' && rowD.total_scoped_collector_events === rowD.total_collector_events && rowL.scope_event_ids === 'pressure_start', J([rowD.scope_event_ids, rowL.scope_event_ids]))
+}
+
 console.log(`\n${pass} passed, ${fail} failed`)
 process.exit(fail ? 1 : 0)

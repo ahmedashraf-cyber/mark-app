@@ -13,7 +13,7 @@
  *   - Agreement: any two sessions
  *
  * Algorithm: optimal assignment (Jonker-Volgenant, embedded below — no external dependency, keeps bundle clean).
- * Scope: collector events whose event_code is NOT in the model's scope_event_ids take no part in matching or scoring.
+ * Scope: when the model's scope_event_ids resolves to real event types, collector events of other types take no part in matching or scoring.
  *
  * Alignment key: time_from_half_start_ms when both sessions have it;
  *                falls back to video_time_ms.
@@ -24,6 +24,7 @@
 
 import { toleranceFor, ERROR_VERDICTS, countErrors, computeScore } from '../config/comparisonConfig'
 import { classifyEventModuleSplit, MODULES_SPLIT } from './defectTypes'
+import { resolveScope } from './scopeResolve'
 
 // ── Optimal assignment ────────────────────────────────────────────────────────
 // Shortest-augmenting-path assignment with row/column potentials (Jonker-Volgenant / "Hungarian"). Two rules that the first
@@ -218,14 +219,20 @@ export function compare(sessA, eventsA, sessB, eventsB, config) {
   let   collEvents    = isAModel ? [...eventsB] : [...eventsA]
 
   // ── Scope ─────────────────────────────────────────────────────────────────
-  // A model covers some event types (scope_event_ids, pipe-separated; blank = everything). A collector event of any OTHER type
-  // is outside what the model can be compared on: it is not matched, so it cannot steal a pairing or be paired as a
-  // wrong_event, and it is not an extra, so it costs nothing. It is returned separately (outOfScope) for the page to list; it
-  // never becomes a detail row, so nothing new reaches the sheet.
+  // A model can cover some event TYPES. The sheet's scope value is not always a list of types ("Duels", "TagOnce", a label such as
+  // "Pressure start"): resolveScope turns it into a filter ONLY when every part of it is a real event type, otherwise there is NO
+  // filter and a warning for the page. A collector event of a type outside a real filter is not matched (so it cannot steal a pairing
+  // or be paired as a wrong_event) and is not an extra (so it costs nothing); it is returned in outOfScope for the page and never
+  // becomes a detail row, so nothing new reaches the sheet.
+  // One safeguard on top: a type the MODEL itself contains is never out of scope, whatever the declared scope says. Without it a
+  // scope that omits a type the model really tags would call every collector event of that type out of scope and every model
+  // event of it missing.
   const allCollectorEventCount = collEvents.length
-  const scopeIds = String(modelSess.scope_event_ids ?? '').split(/[|,;]/).map(x => x.trim()).filter(Boolean)
-  const outOfScope = scopeIds.length ? collEvents.filter(e => !scopeIds.includes(e.event_code)) : []
-  if (outOfScope.length) collEvents = collEvents.filter(e => scopeIds.includes(e.event_code))
+  const scope = resolveScope(modelSess.scope_event_ids)
+  const scopeIds = scope.mode === 'codes' ? scope.codes : []
+  const inScope = new Set([...scopeIds, ...modelEvents.map(e => e.event_code)])
+  const outOfScope = scope.mode === 'codes' ? collEvents.filter(e => !inScope.has(e.event_code)) : []
+  if (outOfScope.length) collEvents = collEvents.filter(e => inScope.has(e.event_code))
 
   // ── Stage 3: Align (optimal assignment) ───────────────────────────────────
   // Weights scaled to this problem's size (see assignmentWeights); OUT is finite on purpose: see solveAssignment
@@ -530,6 +537,8 @@ export function compare(sessA, eventsA, sessB, eventsB, config) {
     collectorEventCount: allCollectorEventCount,          // everything the collector tagged
     scopedCollectorEventCount: collEvents.length,         // only what was compared (the model's scope)
     scopeEventIds: scopeIds,
+    scopeMode: scope.mode,                                // 'all' | 'codes' | 'unresolved'
+    scopeWarning: scope.warning,                          // shown on the page when the scope could not be applied
     outOfScope,                                           // not scored, not written to the sheet
     outOfScopeCount: outOfScope.length,
   }

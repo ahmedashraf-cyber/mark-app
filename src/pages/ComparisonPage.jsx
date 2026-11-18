@@ -727,6 +727,13 @@ export default function ComparisonPage({ onBack }) {
               <div style={{ marginTop:12, fontSize:10, color:'var(--t-3)' }}>
                 {summaryLine(shown, result)}
               </div>
+              {result.scopeWarning && (
+                // The model's scope could not be turned into a filter: say so. Never a silent zero, never a silent no-op.
+                <div data-testid="scope-warning" style={{ marginTop:8, fontSize:11, lineHeight:1.5, color:'#FFD60A', padding:'6px 10px',
+                  borderRadius:6, background:'rgba(255,214,10,0.08)', border:'1px solid rgba(255,214,10,0.30)' }}>
+                  ⚠ {result.scopeWarning}
+                </div>
+              )}
               {(result.outOfScopeCount || 0) > 0 && (
                 // Not scored, not matched, not written to the sheet: shown here so nothing the collector tagged is hidden.
                 <details data-testid="out-of-scope" style={{ marginTop:8, fontSize:11, color:'var(--t-2)' }}>
