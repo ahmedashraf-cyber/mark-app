@@ -97,6 +97,11 @@ console.log('\nthe hand-off to Comparison')
   ok('returnFocus: the match to filter to and the row to put in view; none when there is no match id', J(returnFocus(p)) === J({ matchId: '1458560', key: 'C2' }) && returnFocus({ matchId: '' }) === null && returnFocus(null) === null)
 }
 
+{
+  const r = byId(build({ sessions: [model('MA', '8', '1H', { model_version: '1' }), model('MB', '8', '1H', { model_version: '3' }), coll('C8', '8', '1H', 'A-8')] })).C8
+  ok('with TWO candidates the preset carries the model the user CHOSE, not the first one (MB version 3 when the second is picked, MA when the first is)', makePreset(r, r.modelCandidates[1]).modelSessionId === 'MB' && makePreset(r, r.modelCandidates[1]).modelVersion === '3' && makePreset(r, r.modelCandidates[0]).modelSessionId === 'MA')
+}
+
 console.log('\nnothing that can come back empty throws')
 {
   const bad = [null, undefined, {}, { isModel: false }, { session_id: 'x', match_id: '1', half: '1H' }, { session_id: 'x', match_id: '1', half: '1H', modelCandidates: null }, { session_id: 'x', match_id: '1', half: '1H', modelCandidates: [{}], run: {} }]
