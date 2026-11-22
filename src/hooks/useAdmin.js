@@ -131,6 +131,11 @@ export function capabilities(role, overrides) {
     // Defaults: every collector and the six operator roles see their own; only the six operator roles see anyone's.
     viewOwnHalves: operator || collector,
     viewAnyHalves: operator,
+    // Halves page: a "Compare" / "Recompare" button on each collector half that opens Comparison pre-filled and runs it (it never
+    // writes). OFF for EVERY role until a Batch Manager switches it on in Role Access: the sheet's column does nothing unless this
+    // key exists here, and a missing column or a blank cell leaves it off. It only means something together with `comparison`
+    // (the button opens Comparison), so callers ask canCompareHalves() in utils/halvesCompare.js, never this key alone.
+    halvesCompare: false,
     hrCodeLogin: collector,          // collectors only, by default
     // Insights (Common Mistakes). Its default is the role's COMPARISON value —
     // see the override step below, which makes it follow Comparison exactly.
