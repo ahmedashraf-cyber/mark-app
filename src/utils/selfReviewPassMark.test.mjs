@@ -36,7 +36,7 @@ const actor = { email: 'manager@example.com', hrCode: '', bootstrapAdmin: false 
 const refused = async (p, code) => { try { await p; return false } catch (e) { return e instanceof PassMarkError && (!code || e.code === code) } }
 
 console.log('the permission keys exist and default correctly')
-ok('both keys are in the Role Access matrix, appended last', PERMISSIONS.slice(-2).map(p => p.key).join() === 'selfReviewDashboard,selfReviewPassMark')
+ok('both keys are in the Role Access matrix, appended after the older columns (halvesCompare was appended after them later)', PERMISSIONS.slice(-3).map(p => p.key).join() === 'selfReviewDashboard,selfReviewPassMark,halvesCompare')
 ok('every role may see the dashboard by default (the role decides the scope, not this key)', ['Batch Manager', 'Batch Supervisor', 'Batch Coordinator', 'Offline Quality Reviewer', 'Offline Quality Team Leader', 'Training Supporter', 'Offline Data Collector', 'Offline Data Collector (Part)'].every(r => capabilities(r).selfReviewDashboard === true))
 ok('only the Batch Manager may edit the pass mark by default', capabilities('Batch Manager').selfReviewPassMark === true && ['Batch Supervisor', 'Batch Coordinator', 'Offline Quality Reviewer', 'Offline Quality Team Leader', 'Training Supporter', 'Offline Data Collector', 'Offline Data Collector (Part)'].every(r => capabilities(r).selfReviewPassMark === false))
 ok('an unknown role gets neither', capabilities('Nobody').selfReviewDashboard === false && capabilities('Nobody').selfReviewPassMark === false && capabilities(null).selfReviewPassMark === false)
