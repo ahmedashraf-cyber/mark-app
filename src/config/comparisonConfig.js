@@ -17,7 +17,10 @@ export const TOLERANCE_CONFIG_VERSION = '2'
 // This MUST be bumped whenever alignment changes, or the duplicate-run guard
 // (which keys on it) shows an old run scored by different rules instead of
 // re-scoring, and the sheet cannot distinguish the two.
-export const ALGORITHM_VERSION        = '7'  // Hungarian, team-agnostic alignment
+// 8: the assignment solver puts the SMALLER side on the rows and uses a finite cost for out-of-tolerance pairs (7 mis-paired and
+//    dropped events whenever the collector had more events than the model); collector events outside the model's
+//    scope_event_ids are neither matched nor scored. Runs scored under 7 are unchanged history; a pair can be re-run under 8.
+export const ALGORITHM_VERSION        = '8'  // optimal assignment (smaller side on rows), team-agnostic alignment, model scope
 
 // ── Per-event-type tolerance in milliseconds ──────────────────────────────────
 // Events not listed use DEFAULT_TOLERANCE_MS.

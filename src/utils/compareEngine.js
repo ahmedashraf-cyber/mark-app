@@ -12,8 +12,8 @@
  *   - Consensus: two collector sessions (no model)
  *   - Agreement: any two sessions
  *
- * Algorithm: Hungarian optimal assignment (Jonker-Volgenant via munkres-js
- * polyfill embedded below — no external dependency, keeps bundle clean).
+ * Algorithm: optimal assignment (Jonker-Volgenant, embedded below — no external dependency, keeps bundle clean).
+ * Scope: when the model's scope_event_ids resolves to real event types, collector events of other types take no part in matching or scoring.
  *
  * Alignment key: time_from_half_start_ms when both sessions have it;
  *                falls back to video_time_ms.
@@ -24,82 +24,90 @@
 
 import { toleranceFor, ERROR_VERDICTS, countErrors, computeScore } from '../config/comparisonConfig'
 import { classifyEventModuleSplit, MODULES_SPLIT } from './defectTypes'
+import { resolveScope } from './scopeResolve'
 
-// ── Optimal assignment (Jonker-Volgenant / shortest augmenting path) ─────────
-// Handles non-square cost matrices (more rows than cols or vice versa).
-// Returns array of [rowIdx, colIdx] pairs — only finite-cost assignments.
-// Unmatched rows/cols are simply omitted from the result.
-function hungarian(costMatrix) {
-  const numRows = costMatrix.length
-  if (numRows === 0) return []
-  const numCols = costMatrix[0].length
-  if (numCols === 0) return []
+// ── Optimal assignment ────────────────────────────────────────────────────────
+// Shortest-augmenting-path assignment with row/column potentials (Jonker-Volgenant / "Hungarian"). Two rules that the first
+// version of this routine broke, and that every result here depends on:
+//
+//   1. THE SMALLER SIDE GOES ON THE ROWS. The algorithm gives every row a column, so it needs rows <= columns. The old code
+//      transposed in the OPPOSITE direction (it put the larger side on the rows), so whenever the collector had more events
+//      than the model (extras, or events of types the model does not cover) the surplus rows could not be placed and the
+//      augmentation step displaced correct pairs: a model event came out "missing" and its same-code partner "extra", with
+//      the damage starting where the rows outnumbered the columns. A pair of equal size was the only case that worked.
+//
+//   2. A FORBIDDEN PAIR (outside the tolerance) HAS A LARGE BUT FINITE COST, OUT_OF_TOLERANCE. It used to be 1e15, which the
+//      routine also used as its own "infinity", so those entries leaked into the potentials, swamped the millisecond
+//      differences that decide a pairing, and triggered an early exit. OUT_OF_TOLERANCE only has to exceed the cost of ANY
+//      assignment of allowed pairs; the caller drops every pair that reaches it.
+//
+// cost: n x m matrix of FINITE numbers (a non-finite entry is treated as forbidden).
+// Returns [rowIndex, colIndex] pairs of the original matrix, one per element of the smaller side (forbidden pairs included:
+// the caller filters them).
+export const OUT_OF_TOLERANCE = 1e12
 
-  const INF = 1e15
+export function solveAssignment(cost) {
+  const n = cost.length
+  if (n === 0) return []
+  const m = cost[0].length
+  if (m === 0) return []
+  const flip = n > m                                                   // smaller side on the rows
+  const at = flip ? (i, j) => cost[j][i] : (i, j) => cost[i][j]
+  const R = flip ? m : n, K = flip ? n : m                             // R <= K
+  const finite = x => (Number.isFinite(x) ? x : OUT_OF_TOLERANCE)
 
-  // Work on the transpose if more cols than rows (algorithm works on rows ≥ cols)
-  const transposed = numCols > numRows
-  const C    = transposed ? costMatrix[0].map((_, j) => costMatrix.map(r => r[j])) : costMatrix
-  const rows = transposed ? numCols : numRows
-  const cols = transposed ? numRows : numCols
-
-  // u[i] = row potentials (1-indexed), v[j] = col potentials (1-indexed)
-  const u    = new Array(rows + 1).fill(0)
-  const v    = new Array(cols + 1).fill(0)
-  const rowOf= new Array(cols + 1).fill(0)  // rowOf[j] = row assigned to col j (1-indexed, 0=unassigned)
-  const colOf= new Array(rows + 1).fill(0)  // colOf[i] = col assigned to row i (1-indexed, 0=unassigned)
-
-  for (let i = 1; i <= rows; i++) {
-    rowOf[0] = i
+  const u = new Array(R + 1).fill(0), v = new Array(K + 1).fill(0)
+  const p = new Array(K + 1).fill(0), way = new Array(K + 1).fill(0)   // p[j] = row assigned to column j (1-based, 0 = free)
+  for (let i = 1; i <= R; i++) {
+    p[0] = i
     let j0 = 0
-    const dist = new Array(cols + 1).fill(INF)
-    const prev = new Array(cols + 1).fill(-1)
-    const done = new Array(cols + 1).fill(false)
-
+    const minv = new Array(K + 1).fill(Infinity), used = new Array(K + 1).fill(false)
     do {
-      done[j0] = true
-      const i0 = rowOf[j0]
-      let delta = INF, j1 = -1
-      for (let j = 1; j <= cols; j++) {
-        if (!done[j]) {
-          // safe access: i0 is always a valid row index (1..rows) because rowOf is seeded with i
-          const cost = (i0 >= 1 && i0 <= rows && j >= 1 && j <= cols)
-            ? (C[i0-1][j-1] ?? INF) : INF
-          const cur = cost - u[i0] - v[j]
-          if (cur < dist[j]) { dist[j] = cur; prev[j] = j0 }
-          if (dist[j] < delta) { delta = dist[j]; j1 = j }
-        }
+      used[j0] = true
+      const i0 = p[j0]
+      let delta = Infinity, j1 = 0
+      for (let j = 1; j <= K; j++) {
+        if (used[j]) continue
+        const cur = finite(at(i0 - 1, j - 1)) - u[i0] - v[j]
+        if (cur < minv[j]) { minv[j] = cur; way[j] = j0 }
+        if (minv[j] < delta) { delta = minv[j]; j1 = j }
       }
-      if (j1 === -1 || delta >= INF) break  // no finite augmenting path
-      for (let j = 0; j <= cols; j++) {
-        if (done[j]) { u[rowOf[j]] += delta; v[j] -= delta }
-        else dist[j] -= delta
-      }
+      // Cannot happen with finite costs (every row can always reach a free column when rows <= columns). If it ever did, spinning
+      // here would freeze the screen, so fail loudly instead.
+      if (j1 === 0) throw new Error('solveAssignment: no column reachable (a cost was not a finite number)')
+      for (let j = 0; j <= K; j++) { if (used[j]) { u[p[j]] += delta; v[j] -= delta } else minv[j] -= delta }
       j0 = j1
-    } while (rowOf[j0] !== 0)
-
-    // Augment along the path
-    let j = j0
-    while (j !== 0 && prev[j] !== -1) {
-      rowOf[j] = rowOf[prev[j]]
-      colOf[rowOf[j]] = j
-      j = prev[j]
-    }
+    } while (p[j0] !== 0)
+    do { const j1 = way[j0]; p[j0] = p[j1]; j0 = j1 } while (j0)       // augment along the path (always ends in a free column)
   }
+  const out = []
+  for (let j = 1; j <= K; j++) if (p[j] !== 0) out.push(flip ? [j - 1, p[j] - 1] : [p[j] - 1, j - 1])
+  return out
+}
 
-  // Collect finite-cost assignments
-  const result = []
-  for (let j = 1; j <= cols; j++) {
-    if (rowOf[j] === 0) continue
-    const ri = rowOf[j] - 1  // 0-indexed row
-    const ci = j - 1          // 0-indexed col
-    if (transposed) {
-      if (costMatrix[ci]?.[ri] < INF) result.push([ci, ri])
-    } else {
-      if (costMatrix[ri]?.[ci] < INF) result.push([ri, ci])
-    }
-  }
-  return result
+/**
+ * The three weights of the cost of a pair, scaled to the size of the problem so the ORDER of priorities holds at any size:
+ *
+ *   1. the number of pairs that can form        (a forbidden pair costs OUT: more than ANY assignment of allowed pairs)
+ *   2. the fewest different-code pairs          (a different code costs CODE: more than the whole time budget of ANY assignment)
+ *   3. the smallest total time difference       (the delta, in whole milliseconds)
+ *   4. team, only to settle an EXACT tie        (TEAM per mismatch: all of them together stay below half a millisecond)
+ *
+ * Fixed weights (CODE 1e6, TEAM 0.1) were only right up to about 500 pairs. Beyond that, 1,200 pairs each 1 s off add up to more
+ * than 1e6, so one different-code pair could be preferred to save time elsewhere; and 1,200 team mismatches at 0.1 add up to 120 ms,
+ * so a team could override a real time difference. Deltas are whole milliseconds, which is what lets the team weight sit below 1.
+ * (At several thousand pairs the team weight approaches the precision of a double and a tie may break either way. It still can
+ * never override time.)
+ *
+ * pairs: how many pairs can form at most (the smaller side); maxTolMs: the largest tolerance in play.
+ */
+export function assignmentWeights(pairs, maxTolMs) {
+  const k = Math.max(1, Math.floor(pairs) || 1)
+  const tol = Math.max(0, Number(maxTolMs) || 0)
+  const TEAM = 1 / (2 * (k + 1))
+  const CODE = 2 * k * (tol + 1)
+  const OUT = Math.max(OUT_OF_TOLERANCE, 100 * k * (CODE + tol + 1))
+  return { TEAM, CODE, OUT }
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -210,8 +218,26 @@ export function compare(sessA, eventsA, sessB, eventsB, config) {
   let   modelEvents   = isAModel ? [...eventsA] : [...eventsB]
   let   collEvents    = isAModel ? [...eventsB] : [...eventsA]
 
-  // ── Stage 3: Align (Hungarian optimal assignment) ─────────────────────────
-  const INF = 1e15
+  // ── Scope ─────────────────────────────────────────────────────────────────
+  // A model can cover some event TYPES. The sheet's scope value is not always a list of types ("Duels", "TagOnce", a label such as
+  // "Pressure start"): resolveScope turns it into a filter ONLY when every part of it is a real event type, otherwise there is NO
+  // filter and a warning for the page. A collector event of a type outside a real filter is not matched (so it cannot steal a pairing
+  // or be paired as a wrong_event) and is not an extra (so it costs nothing); it is returned in outOfScope for the page and never
+  // becomes a detail row, so nothing new reaches the sheet.
+  // One safeguard on top: a type the MODEL itself contains is never out of scope, whatever the declared scope says. Without it a
+  // scope that omits a type the model really tags would call every collector event of that type out of scope and every model
+  // event of it missing.
+  const allCollectorEventCount = collEvents.length
+  const scope = resolveScope(modelSess.scope_event_ids)
+  const scopeIds = scope.mode === 'codes' ? scope.codes : []
+  const inScope = new Set([...scopeIds, ...modelEvents.map(e => e.event_code)])
+  const outOfScope = scope.mode === 'codes' ? collEvents.filter(e => !inScope.has(e.event_code)) : []
+  if (outOfScope.length) collEvents = collEvents.filter(e => inScope.has(e.event_code))
+
+  // ── Stage 3: Align (optimal assignment) ───────────────────────────────────
+  // Weights scaled to this problem's size (see assignmentWeights); OUT is finite on purpose: see solveAssignment
+  const W   = assignmentWeights(Math.min(modelEvents.length, collEvents.length), modelEvents.reduce((mx, e) => Math.max(mx, toleranceFor(e.event_code)), 0))
+  const OUT = W.OUT
 
   // ONE origin for both sides, decided once. Deciding per event — and never
   // checking the two agreed — is what collapsed whole runs to missing+extra.
@@ -232,27 +258,29 @@ export function compare(sessA, eventsA, sessB, eventsB, config) {
       // missing plus one extra.
       const cT    = alignTime(cEv)
       const delta = Math.abs(mT.ms - cT.ms)
-      if (delta > tol) return INF
+      if (delta > tol) return OUT
 
-      // Cost ordering matters. CODE_PENALTY exceeds the largest delta that can
-      // survive the tolerance gate, so a same-code candidate ALWAYS beats a
-      // different-code one however much closer the latter sits. Without that, a
-      // mis-coded event 50ms away would steal the pairing from the correct code
-      // 1.5s away and manufacture a missing+extra out of a clean match.
-      const CODE_PENALTY = 1e6
-      const codeCost = (cEv.event_code === mEv.event_code) ? 0 : CODE_PENALTY
-      // Team is only a 0.1 nudge, to settle two otherwise identical candidates.
-      const teamBonus = (mEv.team === cEv.team) ? 0 : 0.1
+      // Cost ordering matters. W.CODE exceeds the time budget of ANY assignment
+      // (not just the largest single delta), so a same-code candidate ALWAYS
+      // beats a different-code one however much closer, or however much total
+      // time, the latter saves. Without that, a mis-coded event 50ms away would
+      // steal the pairing from the correct code 1.5s away and manufacture a
+      // missing+extra out of a clean match.
+      const codeCost = (cEv.event_code === mEv.event_code) ? 0 : W.CODE
+      // Team only settles an EXACT tie in time: all the nudges together stay
+      // below half a millisecond (assignmentWeights), so it can never outweigh
+      // a real time difference, however many events there are.
+      const teamBonus = (mEv.team === cEv.team) ? 0 : W.TEAM
       return codeCost + delta + teamBonus
     })
   })
 
   const assignments = modelEvents.length > 0 && collEvents.length > 0
-    ? hungarian(costs)
+    ? solveAssignment(costs)
     : []
 
-  // Filter out infinite-cost assignments (outside tolerance)
-  const validPairs = assignments.filter(([mi, ci]) => costs[mi]?.[ci] < INF)
+  // Drop every pair that was only forced together (outside the tolerance)
+  const validPairs = assignments.filter(([mi, ci]) => costs[mi]?.[ci] < OUT)
 
   const matchedModelIdxs     = new Set(validPairs.map(([mi]) => mi))
   const matchedCollectorIdxs = new Set(validPairs.map(([,ci]) => ci))
@@ -506,6 +534,12 @@ export function compare(sessA, eventsA, sessB, eventsB, config) {
     moduleStats,
     videoMatchStatus: videoMatchStatus(modelSess, collectorSess),
     modelEventCount:     modelEvents.length,
-    collectorEventCount: collEvents.length,
+    collectorEventCount: allCollectorEventCount,          // everything the collector tagged
+    scopedCollectorEventCount: collEvents.length,         // only what was compared (the model's scope)
+    scopeEventIds: scopeIds,
+    scopeMode: scope.mode,                                // 'all' | 'codes' | 'unresolved'
+    scopeWarning: scope.warning,                          // shown on the page when the scope could not be applied
+    outOfScope,                                           // not scored, not written to the sheet
+    outOfScopeCount: outOfScope.length,
   }
 }

@@ -21,7 +21,7 @@ import { useAuth } from '../hooks/useAuth.jsx'
 import { compare } from '../utils/compareEngine'
 import { MODULES_SPLIT, MODULE_LABELS } from '../utils/defectTypes'
 import MultiFilter from '../components/MultiFilter'
-import { scoreRows, rowMatchesEvents } from '../utils/comparisonScope'
+import { scoreRows, rowMatchesEvents, summaryLine } from '../utils/comparisonScope'
 import { writeComparisonResults, findExistingRun } from '../utils/comparisonSheet'
 import { FIELD_SHEET_ID } from '../config/fieldConfig'
 import { CURRENT_VERSION } from '../hooks/useUpdateCheck'
@@ -725,12 +725,29 @@ export default function ComparisonPage({ onBack }) {
               </div>
 
               <div style={{ marginTop:12, fontSize:10, color:'var(--t-3)' }}>
-                Model: {shown.modelEventCount} events ·
-                Collector: {result.collectorEventCount} events ·
-                {result.errorUnits} scored errors
-                {(vc.wrong_side || 0) > 0 &&
-                  ` · ${vc.wrong_side} wrong side excluded from the score`}
+                {summaryLine(shown, result)}
               </div>
+              {result.scopeWarning && (
+                // The model's scope could not be turned into a filter: say so. Never a silent zero, never a silent no-op.
+                <div data-testid="scope-warning" style={{ marginTop:8, fontSize:11, lineHeight:1.5, color:'#FFD60A', padding:'6px 10px',
+                  borderRadius:6, background:'rgba(255,214,10,0.08)', border:'1px solid rgba(255,214,10,0.30)' }}>
+                  ⚠ {result.scopeWarning}
+                </div>
+              )}
+              {(result.outOfScopeCount || 0) > 0 && (
+                // Not scored, not matched, not written to the sheet: shown here so nothing the collector tagged is hidden.
+                <details data-testid="out-of-scope" style={{ marginTop:8, fontSize:11, color:'var(--t-2)' }}>
+                  <summary style={{ cursor:'pointer' }}>
+                    {result.outOfScopeCount} collector event{result.outOfScopeCount === 1 ? '' : 's'} out of scope (not scored): the model covers {(result.scopeEventIds || []).join(', ')}
+                  </summary>
+                  <div style={{ maxHeight:180, overflowY:'auto', marginTop:6, fontFamily:'JetBrains Mono,monospace', fontSize:10, lineHeight:1.6 }}>
+                    {result.outOfScope.slice(0, 500).map((e, i) => (
+                      <div key={i}>{msToReadable(e.video_time_ms)} · {e.event_code}{e.team ? ` · ${e.team}` : ''}</div>
+                    ))}
+                    {result.outOfScope.length > 500 && <div>…and {result.outOfScope.length - 500} more</div>}
+                  </div>
+                </details>
+              )}
             </div>
 
             {/* ── Module breakdown ─────────────────────────────────────────
