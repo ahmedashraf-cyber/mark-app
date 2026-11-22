@@ -26,6 +26,8 @@ import { writeComparisonResults, findExistingRun } from '../utils/comparisonShee
 import { FIELD_SHEET_ID } from '../config/fieldConfig'
 import { CURRENT_VERSION } from '../hooks/useUpdateCheck'
 import { msToReadable } from '../utils/fieldSheetSync'
+import { ALGORITHM_VERSION } from '../config/comparisonConfig'
+import { isValidPreset, MSG as COMPARE_MSG } from '../utils/halvesCompare'
 
 const SHEETS_BASE = `https://sheets.googleapis.com/v4/spreadsheets/${FIELD_SHEET_ID}`
 
@@ -78,13 +80,21 @@ const selStyle = {
   maxWidth:150,
 }
 
-export default function ComparisonPage({ onBack }) {
+/**
+ * preset (optional)  a half sent here by the Halves page's Compare button: { collectorSessionId, modelSessionId, matchId, half, collectorCode,
+ * stored, fromHalves }. It pre-fills "Run by session ID" with those EXACT sessions and runs the comparison once, in memory, without the
+ * video dialog. It never writes: the user reviews the result and presses "Write Results to Sheet" themselves, and the duplicate rule is
+ * the same as for any run. Without a preset this page is exactly what it was.
+ */
+export default function ComparisonPage({ onBack, preset = null }) {
   const { profile } = useAuth()
+  const presetOk = isValidPreset(preset)
+  const autoRan = useRef(false)
 
   const [matchId,      setMatchId]      = useState('')
   const [half,         setHalf]         = useState('')
   const [hrCode,       setHrCode]       = useState('')
-  const [error,        setError]        = useState('')
+  const [error,        setError]        = useState(preset && !presetOk ? COMPARE_MSG.badPreset : '')
   const [loading,      setLoading]      = useState(false)
   const [loadingMsg,   setLoadingMsg]   = useState('')
 
@@ -97,9 +107,9 @@ export default function ComparisonPage({ onBack }) {
   // opens and the previous file is unloaded — the next comparison may be a
   // different match entirely.
   // Run by session ID — bypasses the match/half/HR-code lookup entirely.
-  const [bySessionId, setBySessionId] = useState(false)
-  const [modelSessionIdInput, setModelSessionIdInput] = useState('')
-  const [collSessionIdInput,  setCollSessionIdInput]  = useState('')
+  const [bySessionId, setBySessionId] = useState(!!preset)
+  const [modelSessionIdInput, setModelSessionIdInput] = useState(presetOk ? preset.modelSessionId : '')
+  const [collSessionIdInput,  setCollSessionIdInput]  = useState(presetOk ? preset.collectorSessionId : '')
   const [videoUrl,  setVideoUrl]  = useState('')
   const [videoName, setVideoName] = useState('')
   // Remembered so "Reopen video" needs no second file picker.
@@ -300,7 +310,26 @@ export default function ComparisonPage({ onBack }) {
   const anyShape = useMemo(
     () => (result?.detailRows || []).some(r => r.model_shape), [result])
 
-  async function handleRun() {
+  // A preset runs once, on arrival (the states above already hold its session ids). It is not a button press, so it skips the video dialog.
+  useEffect(() => {
+    if (preset && presetOk && !autoRan.current) { autoRan.current = true; handleRun({ skipVideo: true }) }
+  }, [])
+
+  // Load a video after a pre-filled run (the run itself did not open the file dialog).
+  async function chooseVideoAfterRun() {
+    try {
+      setVideoNote('')
+      const path = await invoke('pick_video_file')
+      if (!path) { setVideoNote('No video chosen. Results are unaffected.'); return }
+      const url = await invoke('get_video_url', { path })
+      const name = String(path).split(/[/\\]/).pop()
+      setVideoUrl(url); setVideoName(name); setVideoPath(path)
+      await openVideoWindow(url, name, result?.videoMatchStatus)
+    } catch (e) { setVideoNote('Could not open that video: ' + (e?.message || e)) }
+  }
+
+  async function handleRun(opts) {
+    const skipVideo = opts?.skipVideo === true       // a click passes the event here, which has no such field
     setError(''); setResult(null); setWritten(false)
     setFEvents([]); setFVerdicts([]); setFModules([])
     if (bySessionId) {
@@ -319,7 +348,9 @@ export default function ComparisonPage({ onBack }) {
     // a new run closes the old pop-out and forgets the old file
     await closeVideoWindow()
     setVideoUrl(''); setVideoName(''); setVideoPath(''); setVideoNote('')
-    try {
+    if (skipVideo) {
+      setVideoNote('No video loaded: press "Choose video…" to load one. Results are unaffected.')
+    } else try {
       setLoadingMsg('Choose the match video…')
       const path = await invoke('pick_video_file')
       if (path) {
@@ -483,7 +514,7 @@ export default function ComparisonPage({ onBack }) {
         padding:'0 16px', gap:12 }}>
         <button onClick={onBack} style={{ background:'none', border:'none',
           color:'var(--t-3)', cursor:'pointer', fontSize:11, padding:'4px 8px', borderRadius:6 }}>
-          ← Back
+          {preset?.fromHalves ? '← Back to Halves' : '← Back'}
         </button>
         <div style={{ width:1, height:20, background:'var(--b-1)' }}/>
         <div style={{ fontFamily:'JetBrains Mono,monospace', fontSize:9, fontWeight:800,
@@ -639,11 +670,35 @@ export default function ComparisonPage({ onBack }) {
           </button>
         </div>
 
+        {/* A comparison opened from the Halves page: what is stored for this half, and what this run says. Nothing has been written. */}
+        {preset && presetOk && (
+          <div data-testid="preset-banner" style={{ background:'rgba(232,89,12,0.07)', border:'1px solid rgba(232,89,12,0.28)', borderRadius:7,
+            padding:'9px 12px', marginBottom:12, fontSize:11, color:'var(--t-2)', lineHeight:1.7 }}>
+            <div><b>Opened from Halves</b> · match {preset.matchId} {preset.half}{preset.collectorCode ? ` · collector ${preset.collectorCode}` : ''}{preset.collectorName ? ` (${preset.collectorName})` : ''}</div>
+            <div data-testid="stored-run">
+              {preset.stored
+                ? <>Stored result: <b>{preset.stored.score === null || preset.stored.score === undefined ? 'no score' : `${preset.stored.score}%`}</b> · algorithm <b>{preset.stored.recorded ? preset.stored.algorithm : 'not recorded'}</b> (current {ALGORITHM_VERSION}) · run {preset.stored.runId || '?'}{preset.stored.at ? ` · ${preset.stored.at.replace('T', ' ').slice(0, 16)}` : ''}{preset.stored.stale ? ' · stale: the match or half was edited after it' : ''}</>
+                : <>No stored run for this half.</>}
+            </div>
+            {loading && <div data-testid="preset-running">Running the comparison…</div>}
+            {result && (
+              <div data-testid="this-run">
+                This run: <b>{result.score}%</b> · algorithm <b>{ALGORITHM_VERSION}</b>.{' '}
+                {preset.stored && preset.stored.current
+                  ? 'The stored result already used the current algorithm, so pressing Write Results will say it is already in the sheet.'
+                  : 'Nothing has been written. Review it, then press "Write Results to Sheet" if you want it recorded.'}
+              </div>)}
+          </div>
+        )}
+
         {/* Results */}
         {videoNote && (
           <div style={{ background:'rgba(255,214,10,0.07)', border:'1px solid rgba(255,214,10,0.25)',
             borderRadius:7, padding:'9px 12px', marginBottom:12, fontSize:11, color:'var(--t-2)' }}>
             {videoNote}
+            {preset && result && !videoUrl && (
+              <button data-testid="choose-video" onClick={chooseVideoAfterRun} className="btn-orange" style={{ marginLeft:10, padding:'4px 11px', fontSize:11 }}>Choose video…</button>
+            )}
           </div>
         )}
 
