@@ -19,6 +19,7 @@ import { buildSessionRows, averages, MODULES } from '../utils/halvesScores'
 import { HALF_COLUMNS, OWN_DEFAULT_COLUMNS, ANY_DEFAULT_COLUMNS, profileOf } from '../utils/myHalves'
 import { canonHr } from '../utils/hrCode'
 import { identityOf, canIdentify, matchOwner } from '../utils/ownerMatch'
+import { canCompareHalves, compareAction, makePreset, isValidPreset, candidateLabel, MSG as COMPARE_MSG } from '../utils/halvesCompare'
 
 const small = { fontSize: 10, color: 'var(--t-3)' }
 
@@ -44,9 +45,25 @@ function Profile({ rows }) {
   )
 }
 
-export default function MyHalvesPage({ onBack }) {
+/**
+ * onCompareHalf    (preset) => void. Present only when the app can open Comparison from here; without it there is no Compare button.
+ * initialFocus     { matchId, key } coming back from Comparison: the list opens filtered to that match with that half's row in view.
+ */
+export default function MyHalvesPage({ onBack, onCompareHalf, initialFocus }) {
   const { caps, roleInfo, profile } = useAuth()
   const canAny = !!caps?.viewAnyHalves, canOwn = !!caps?.viewOwnHalves
+  // The Compare / Recompare button: halvesCompare AND comparison (it opens Comparison), for the halves of ANY collector only.
+  const canCompare = canAny && canCompareHalves(caps) && typeof onCompareHalf === 'function'
+  const [pick, setPick] = useState(null)               // { row, candidates }: more than one model answer, the user chooses; nothing is guessed
+  const [compareNote, setCompareNote] = useState('')
+  const startFilters = useMemo(() => (initialFocus?.matchId ? { matchIds: String(initialFocus.matchId) } : null), [])   // first mount only
+  // A role that may open Comparison but has no halvesCompare value in role_access (the column does not exist yet, or its cell is blank)
+  // simply has no button. Say so once in the log, so "why is there no button" has an answer.
+  useEffect(() => {
+    if (!canAny || !caps?.comparison || caps?.halvesCompare) return
+    const o = roleInfo?.accessOverrides
+    if (!o || !('halvesCompare' in o)) console.warn(`[MARK halves] Compare buttons are OFF: role_access has no halvesCompare value for "${roleInfo?.role || '?'}" (the column is missing, or its cell is blank${o ? '' : ', or there is no row for this role'}). A Batch Manager can switch it on under Admin, Role Access.`)
+  }, [canAny, caps?.comparison, caps?.halvesCompare, roleInfo])
   // email is the SIGNED-IN account's (profile.email), never roleInfo.email: that is blank for the full-access account and offline
   const me = useMemo(() => ({ hrCode: String(roleInfo?.code || '').trim(), name: roleInfo?.name || '', role: roleInfo?.role || '', email: profile?.email || '' }), [profile?.email, roleInfo])
   const allowed = canAny || canOwn
@@ -87,6 +104,28 @@ export default function MyHalvesPage({ onBack }) {
   }, [ds, counts.map, canAny, me])
   const eventsState = !ds || counts.status === 'loading' ? { status: 'loading' } : counts.status === 'ready' ? { status: 'ready' } : { status: 'error', error: counts.error }
 
+  // ── Compare / Recompare ──────────────────────────────────────────────────────────────────────────────────
+  const goCompare = (row, model) => {
+    const preset = makePreset(row, model)
+    if (!isValidPreset(preset)) { setCompareNote(COMPARE_MSG.badPreset); return }
+    setCompareNote(''); setPick(null); onCompareHalf(preset)
+  }
+  const startCompare = row => {
+    const a = compareAction(row, caps)
+    if (!a.show || a.disabled) { if (a.reason) setCompareNote(a.reason); return }
+    if (a.candidates.length === 1) goCompare(row, a.candidates[0])
+    else setPick({ row, candidates: a.candidates })            // several approved models: the user picks
+  }
+  const renderCompare = row => {
+    const a = compareAction(row, caps)
+    if (!a.show) return null
+    return (
+      <button data-testid="compare-btn" data-label={a.label} disabled={a.disabled} aria-disabled={a.disabled} title={a.disabled ? a.reason : a.hint}
+        onClick={e => { e.stopPropagation(); startCompare(row) }}
+        style={{ padding: '5px 11px', fontSize: 11, background: a.disabled ? 'transparent' : 'rgba(232,89,12,0.12)', border: `1px solid ${a.disabled ? 'var(--b-1)' : 'rgba(232,89,12,0.5)'}`,
+          borderRadius: 6, color: a.disabled ? 'var(--t-3)' : '#E8590C', cursor: a.disabled ? 'not-allowed' : 'pointer', opacity: a.disabled ? 0.6 : 1 }}>{a.label}</button>)
+  }
+
   const shell = children => (
     <div style={{ height: '100vh', display: 'flex', flexDirection: 'column', background: 'var(--bg)', overflow: 'hidden' }}>
       <div style={{ background: 'var(--bg-2)', borderBottom: '1px solid var(--b-1)', padding: '0 20px', height: 52, display: 'flex', alignItems: 'center', gap: 12, flexShrink: 0 }}>
@@ -106,6 +145,23 @@ export default function MyHalvesPage({ onBack }) {
 
   return shell(
     <>
+      {compareNote && (
+        <div data-testid="compare-note" style={{ fontSize: 12, padding: '8px 12px', marginBottom: 10, borderRadius: 8, color: '#FF9F0A', border: '1px solid rgba(255,159,10,0.3)', background: 'rgba(255,159,10,0.08)' }}>
+          {compareNote} <button onClick={() => setCompareNote('')} style={{ marginLeft: 8, background: 'none', border: 'none', color: 'var(--t-3)', cursor: 'pointer', fontSize: 11 }}>Dismiss</button>
+        </div>)}
+      {pick && (
+        <div data-testid="model-picker" role="dialog" style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', zIndex: 50, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <div style={{ background: 'var(--bg-2)', border: '1px solid var(--b-1)', borderRadius: 12, padding: 18, width: 520, maxWidth: '92vw' }}>
+            <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 4 }}>Which model answer?</div>
+            <div style={{ fontSize: 11, color: 'var(--t-3)', marginBottom: 12, lineHeight: 1.6 }}>
+              Match {pick.row.match_id} · {pick.row.half} has {pick.candidates.length} approved model answers. Choose the one to compare this half with. Nothing is written.</div>
+            {pick.candidates.map(c => (
+              <button key={c.sessionId} data-testid="pick-model" data-session={c.sessionId} onClick={() => goCompare(pick.row, c)}
+                style={{ display: 'block', width: '100%', textAlign: 'left', marginBottom: 6, padding: '8px 10px', fontSize: 11, background: 'var(--bg-3)', border: '1px solid var(--b-1)', borderRadius: 8, color: 'var(--t-1)', cursor: 'pointer', fontFamily: 'JetBrains Mono,monospace' }}>
+                {candidateLabel(c)}</button>))}
+            <div style={{ textAlign: 'right', marginTop: 8 }}><button data-testid="pick-cancel" onClick={() => setPick(null)} style={{ padding: '5px 12px', fontSize: 11, background: 'transparent', border: '1px solid var(--b-1)', borderRadius: 6, color: 'var(--t-2)', cursor: 'pointer' }}>Cancel</button></div>
+          </div>
+        </div>)}
       {load.status === 'loading' && (
         <div data-testid="halves-loading" style={{ fontSize: 12, color: 'var(--t-3)', padding: '18px 0', lineHeight: 1.9 }}>
           Reading the sheets…
@@ -130,6 +186,7 @@ export default function MyHalvesPage({ onBack }) {
               reloading={load.status === 'reloading'} onReload={reload} onOpen={setOpen}
               columns={HALF_COLUMNS} defaultColumns={canAny ? ANY_DEFAULT_COLUMNS : OWN_DEFAULT_COLUMNS} colsKey={canAny ? 'mark_halves_cols_any' : 'mark_halves_cols_own'}
               actionLabel="Open" canExport={canAny} hide={canAny ? [] : ['hr', 'roles', 'types']} noun="halves"
+              renderAction={canCompare ? renderCompare : null} initialFilters={startFilters} focusKey={initialFocus?.key || null}
               above={rows => <Profile rows={rows}/>}/>
           </div>
           {open && <HalfDetail row={open} me={me} canViewAny={canAny} cache={ds.cache} onBack={() => setOpen(null)} onReload={reload}/>}

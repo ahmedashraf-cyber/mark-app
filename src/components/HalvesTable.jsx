@@ -12,7 +12,7 @@
  * nothing. Filtering, sorting and paging happen on those rows, so no keystroke ever triggers a sheet read.
  * Clicking a row hands it to `onOpen`: the existing Edit panel (owned by AdminPage) does the rest.
  */
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import MultiFilter from './MultiFilter'
 import {
   COLUMNS, DEFAULT_COLUMNS, EMPTY_FILTERS, applyFilters, activeFilterCount, sortRows, averages, scoreCell, countCell,
@@ -105,10 +105,15 @@ const Range = ({ name, min, max, onMin, onMax, ...p }) => (
  *   hide          filter ids to leave out: 'hr', 'roles', 'types'
  *   noun          what a row is called in the counts
  *   above         (filteredRows) => node, shown under the filters (the profile header)
+ *   renderAction  (row) => node, an extra button beside the row button (the Halves page's Compare / Recompare); null = none
+ *   initialFilters  filters that are already set when the table first shows (e.g. { matchIds: '1458560' })
+ *   focusKey      a row key to scroll into view and highlight once (coming back from Comparison)
  */
 export default function SessionsTable({ rows, notes, eventsState, loadedAt, reloading, onReload, onOpen, editingKey,
-  columns = COLUMNS, defaultColumns = DEFAULT_COLUMNS, colsKey = COLS_KEY, actionLabel = 'Edit', canExport = true, hide = [], noun = 'sessions', above = null }) {
-  const [f, setF] = useState(EMPTY_FILTERS)
+  columns = COLUMNS, defaultColumns = DEFAULT_COLUMNS, colsKey = COLS_KEY, actionLabel = 'Edit', canExport = true, hide = [], noun = 'sessions', above = null, renderAction = null, initialFilters = null, focusKey = null }) {
+  const [f, setF] = useState(() => ({ ...EMPTY_FILTERS, ...(initialFilters || {}) }))
+  const tableRef = useRef(null)
+  const [hi, setHi] = useState(focusKey || null)                 // the row to highlight for a few seconds
   const set = patch => setF(x => ({ ...x, ...patch }))
   const [sortKey, setSortKey] = useState('saved')
   const [sortDir, setSortDir] = useState('desc')            // newest first by default
@@ -132,6 +137,14 @@ export default function SessionsTable({ rows, notes, eventsState, loadedAt, relo
   const cols = columns.filter(c => visible.includes(c.key))
   const badgeIn = visible.includes('overall') ? 'overall' : 'status'
   const nActive = activeFilterCount(f)
+  // coming back from Comparison: bring that half's row into view, then let the highlight fade
+  useEffect(() => {
+    if (!focusKey) return undefined
+    const tr = [...(tableRef.current?.querySelectorAll('tr[data-key]') || [])].find(x => x.getAttribute('data-key') === focusKey)
+    if (tr && typeof tr.scrollIntoView === 'function') tr.scrollIntoView({ block: 'center' })
+    const t = setTimeout(() => setHi(null), 4000)
+    return () => clearTimeout(t)
+  }, [focusKey, rows])
   const toggleRuns = key => setOpen(s => { const n = new Set(s); n.has(key) ? n.delete(key) : n.add(key); return n })
   const sortBy = key => { if (key === sortKey) setSortDir(d => (d === 'asc' ? 'desc' : 'asc')); else { setSortKey(key); setSortDir(key === 'saved' || key === 'events' || columns.find(c => c.key === key)?.label.match(/Overall|^[A-D]$|TO|Pressure|Events/) ? 'desc' : 'asc') } }
 
@@ -230,15 +243,15 @@ export default function SessionsTable({ rows, notes, eventsState, loadedAt, relo
         <div data-testid="empty-reason" style={{ ...warn, color: 'var(--t-2)', borderColor: 'var(--b-1)', background: 'transparent' }}>
           None of the {rows.length} {noun} match these filters. <button style={btn} onClick={() => setF(EMPTY_FILTERS)}>Clear all filters</button></div>
       ) : (
-        <div style={{ overflowX: 'auto' }}>
+        <div style={{ overflowX: 'auto' }} ref={tableRef}>
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
             <thead><tr>
               {cols.map(c => <th key={c.key} data-testid={`th-${c.key}`} style={th} onClick={() => sortBy(c.key)}>{c.label}{sortKey === c.key ? (sortDir === 'asc' ? ' ▲' : ' ▼') : ''}</th>)}
-              {actionLabel && <th style={{ ...th, cursor: 'default' }}/>}
+              {(actionLabel || renderAction) && <th style={{ ...th, cursor: 'default' }}/>}
             </tr></thead>
             <tbody>
               {pageRows.map(r => (
-                <FragmentRow key={r.key} r={r} cols={cols} badgeIn={badgeIn} expanded={open.has(r.key)} onBadge={toggleRuns} onOpen={onOpen} editing={editingKey === r.key} actionLabel={actionLabel}/>
+                <FragmentRow key={r.key} r={r} cols={cols} badgeIn={badgeIn} expanded={open.has(r.key)} onBadge={toggleRuns} onOpen={onOpen} highlight={hi === r.key} extra={renderAction ? renderAction(r) : null} editing={editingKey === r.key} actionLabel={actionLabel}/>
               ))}
             </tbody>
           </table>
@@ -261,13 +274,16 @@ export default function SessionsTable({ rows, notes, eventsState, loadedAt, relo
   )
 }
 
-function FragmentRow({ r, cols, badgeIn, expanded, onBadge, onOpen, editing, actionLabel }) {
+function FragmentRow({ r, cols, badgeIn, expanded, onBadge, onOpen, editing, actionLabel, extra = null, highlight = false }) {
   return (
     <>
       <tr data-testid="session-row" data-key={r.key} onClick={() => onOpen(r)}
-        style={{ cursor: 'pointer', background: editing ? 'rgba(232,89,12,0.10)' : 'transparent' }}>
+        style={{ cursor: 'pointer', background: editing ? 'rgba(232,89,12,0.10)' : highlight ? 'rgba(232,89,12,0.18)' : 'transparent' }}>
         {cols.map(c => <td key={c.key} style={td}><Cell col={c} row={r} badgeIn={badgeIn} onBadge={onBadge} expanded={expanded}/></td>)}
-        {actionLabel && <td style={td}><button style={btn} onClick={e => { e.stopPropagation(); onOpen(r) }}>{actionLabel}</button></td>}
+        {(actionLabel || extra) && <td style={td}>
+          {actionLabel && <button style={btn} onClick={e => { e.stopPropagation(); onOpen(r) }}>{actionLabel}</button>}
+          {extra && <span style={{ marginLeft: actionLabel ? 6 : 0 }}>{extra}</span>}
+        </td>}
       </tr>
       {expanded && (
         <tr data-testid="runs-list"><td colSpan={cols.length + 1} style={{ ...td, background: 'var(--bg-3)', whiteSpace: 'normal' }}>

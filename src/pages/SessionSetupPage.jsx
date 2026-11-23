@@ -151,7 +151,7 @@ async function fetchMatchesFromSheet() {
   return result
 }
 
-export default function SessionSetupPage({ onSessionStart, lastResult, onShowHistory, onWatchSession, onSelfReviewDirty, openMyHalves = false, onMyHalvesOpened }) {
+export default function SessionSetupPage({ onSessionStart, lastResult, onShowHistory, onWatchSession, onSelfReviewDirty, openMyHalves = false, onMyHalvesOpened, onCompareHalf, halvesFocus = null }) {
   // Runtime version — read from Tauri's bundle at startup so the header always
   // matches the OS window title.  Falls back to the build-time constant outside
   // Tauri (dev server, tests).
@@ -216,6 +216,7 @@ export default function SessionSetupPage({ onSessionStart, lastResult, onShowHis
   const [showInsights,    setShowInsights]    = useState(false)
   const [showSelfReview,     setShowSelfReview]     = useState(false)
   const [showMyHalves,       setShowMyHalves]       = useState(!!openMyHalves)   // true when Tag sent the user here
+  const [halvesFocusNow] = useState(halvesFocus)                                    // coming back from Comparison: the match to filter to and the row to show (kept for this visit)
   useEffect(() => { if (openMyHalves) onMyHalvesOpened?.() }, [])                 // the request is used up: coming back later shows the launcher
   const [selfReviewDirty,    setSelfReviewDirty]    = useState(false)
 
@@ -466,7 +467,7 @@ export default function SessionSetupPage({ onSessionStart, lastResult, onShowHis
     />
   )
 
-  if (showMyHalves) return <MyHalvesPage onBack={() => setShowMyHalves(false)}/>
+  if (showMyHalves) return <MyHalvesPage onBack={() => setShowMyHalves(false)} onCompareHalf={onCompareHalf} initialFocus={halvesFocusNow}/>
 
   if (showInsights) return (
     <InsightsPage role={role} onBack={() => setShowInsights(false)} roleInfo={roleInfo}/>

@@ -58,6 +58,7 @@ export function parseRun(o, order) {
   const at = norm(o.run_timestamp_iso)
   return {
     runId: norm(o.run_id), at, atMs: Date.parse(at), order,
+    algorithmVersion: norm(o.algorithm_version), toleranceVersion: norm(o.tolerance_config_version),   // what the run was scored under ('' = the run did not record it)
     modelSessionId: norm(o.model_session_id), collectorSessionId: norm(o.collector_session_id),
     overall: num(o.score),
     totalModel: num(o.total_model_events), totalCollector: num(o.total_collector_events),
@@ -123,7 +124,16 @@ export function buildSessionRows(raw, eventCounts = null) {
 
   const sess = toObjects(raw.sessions || []).filter(o => o.session_id)
   // a model answer exists for a match+half when a model session is approved (blank counts), the same rule Tag uses
-  const models = new Set(sess.filter(o => o.is_model === '1' && ['', 'approved'].includes(lower(o.model_status))).map(o => `${o.match_id}|${toSheetHalf(o.half)}`))
+  const modelRows = sess.filter(o => o.is_model === '1' && ['', 'approved'].includes(lower(o.model_status)))
+  const models = new Set(modelRows.map(o => `${o.match_id}|${toSheetHalf(o.half)}`))
+  // ...and WHICH ones. The Compare button needs the actual session ids: none disables it, one is used, several make the user choose.
+  const modelsBy = new Map()
+  modelRows.forEach(o => {
+    const k = `${o.match_id}|${toSheetHalf(o.half)}`
+    if (!modelsBy.has(k)) modelsBy.set(k, [])
+    modelsBy.get(k).push({ sessionId: o.session_id, modelVersion: norm(o.model_version), modelStatus: norm(o.model_status), source: norm(o.model_source),
+      savedAt: o.export_date || (o.collection_end_wall_iso || '').slice(0, 10), rowNumber: o._row })
+  })
 
   const rows = sess.map(o => {
     // WHO this half belongs to: by the row's email when it has one (the HR-code is then not consulted, so a half carrying someone
@@ -140,6 +150,7 @@ export function buildSessionRows(raw, eventCounts = null) {
       savedAt, savedSort: o.collection_end_wall_iso || o.export_date || '',
       collectorName: person?.name || '', collectorRole: person?.role || '', collectorCode: person ? person.code : o.collector_hr_code,
       hasModel: models.has(`${o.match_id}|${half}`),
+      modelCandidates: modelsBy.get(`${o.match_id}|${half}`) || [],
       incomplete: o.collection_incomplete === '1',
       edited: (edits.get(o.session_id) || []).length > 0,
       events: eventCounts ? (eventCounts.get(o.session_id) ?? 0) : null,

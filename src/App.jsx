@@ -10,6 +10,7 @@ import { myHalvesOpener } from './utils/myHalvesNav'
 import ReviewPage from './pages/ReviewPage'
 import FieldPage from './pages/FieldPage'
 import ComparisonPage from './pages/ComparisonPage'
+import { canCompareHalves, isValidPreset, returnFocus } from './utils/halvesCompare'
 import DrillPage from './pages/DrillPage'
 import VideoWindow from './components/VideoWindow'
 import SessionHistoryPage from './pages/SessionHistoryPage'
@@ -178,6 +179,18 @@ function AppInner() {
   const [updateDismissed, setUpdateDismissed] = useState(false)
   const [selfReviewDirty, setSelfReviewDirty] = useState(false)
   const [openMyHalves, setOpenMyHalves] = useState(false)   // Tag's "See its errors in My halves": leave Tag, land on My halves
+  const [comparePreset, setComparePreset] = useState(null)   // a half sent to Comparison from the Halves page's Compare button
+  const [halvesFocus, setHalvesFocus] = useState(null)       // ...and where Halves reopens afterwards: { matchId, key }
+  // Halves -> Comparison. Re-checked HERE as well as on the page: the permission, Comparison's own route guard (isInternal), and a usable preset.
+  const openCompareFromHalves = preset => {
+    if (!canCompareHalves(caps) || !isInternal || !isValidPreset(preset)) return
+    setComparePreset(preset); setSession({ mode: 'comparison', sessionId: null })
+  }
+  // Comparison -> back. A comparison opened from Halves returns to Halves (which re-reads the sheets, so a newly written score is there); any other returns to the launcher as before.
+  const leaveComparison = () => {
+    if (comparePreset?.fromHalves) { setHalvesFocus(returnFocus(comparePreset)); setOpenMyHalves(true) }
+    setComparePreset(null); setSession(null)
+  }
 
   // Returns true when there is unsaved work in any mode.
   // Called by UpdateBanner before auto-installing so the user can cancel.
@@ -370,7 +383,7 @@ function AppInner() {
           <DrillPage onBack={() => setSession(null)} />
         ) : session?.mode === 'comparison' ? (
           !isInternal ? (setSession(null), null) :
-          <ComparisonPage onBack={() => setSession(null)} />
+          <ComparisonPage onBack={leaveComparison} preset={comparePreset} />
         ) : session ? (
           // Scout mode (ReviewPage) — guard external users
           !isInternal ? (setSession(null), null) :
@@ -385,13 +398,15 @@ function AppInner() {
           <SessionHistoryPage onBack={() => { setShowHistory(false); setHistorySession(null) }} initialSession={historySession} />
         ) : (
           <SessionSetupPage
-            onSessionStart={(s) => setSession(s)}
+            onSessionStart={(s) => { setComparePreset(null); setSession(s) }}
             lastResult={lastResult}
             onShowHistory={(session) => { setHistorySession(session || null); setShowHistory(true) }}
             onWatchSession={(s) => setObservingSession(s)}
             onSelfReviewDirty={setSelfReviewDirty}
             openMyHalves={openMyHalves}
-            onMyHalvesOpened={() => setOpenMyHalves(false)}
+            onMyHalvesOpened={() => { setOpenMyHalves(false); setHalvesFocus(null) }}
+            halvesFocus={halvesFocus}
+            onCompareHalf={canCompareHalves(caps) ? openCompareFromHalves : undefined}
           />
         )}
       </PageTransition>

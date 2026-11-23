@@ -331,6 +331,7 @@ export const PERMISSIONS = [
   { key:'viewAnyHalves',    label:'My halves (any collector)' },
   { key:'selfReviewDashboard', label:'Self-Review dashboard' },
   { key:'selfReviewPassMark',  label:'Self-Review pass mark (edit)' },
+  { key:'halvesCompare',       label:'Halves: Compare button' },
 ]
 
 export const ACCESS_HEADER = ['role', ...PERMISSIONS.map(p => p.key)]
